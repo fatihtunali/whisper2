@@ -2,7 +2,13 @@ import Foundation
 import CryptoKit
 
 /// Canonical message signing
-/// MUST match server implementation exactly for signature verification
+/// MUST match server implementation in crypto.ts exactly!
+///
+/// Server signs: Ed25519_Sign(SHA256(canonicalBytes), privateKey)
+/// So we must:
+/// 1. Build canonical string
+/// 2. Hash it with SHA256
+/// 3. Sign the hash with Ed25519
 
 enum CanonicalSigning {
 
@@ -13,7 +19,15 @@ enum CanonicalSigning {
     // MARK: - Build Canonical String
 
     /// Build canonical string for direct message signing
-    /// Format: v1\nmessageType\nmessageId\nfrom\nto\ntimestamp\nnonceB64\nciphertextB64\n
+    /// Format (MUST match server crypto.ts buildCanonicalBytes):
+    /// v1\n
+    /// messageType\n
+    /// messageId\n
+    /// from\n
+    /// toOrGroupId\n
+    /// timestamp\n
+    /// nonceB64\n
+    /// ciphertextB64\n
     static func buildCanonicalString(
         messageType: String,
         messageId: String,
@@ -50,7 +64,7 @@ enum CanonicalSigning {
             messageType: messageType,
             messageId: messageId,
             from: from,
-            to: groupId, // Use groupId as "to" field
+            to: groupId, // Use groupId as "toOrGroupId" field
             timestamp: timestamp,
             nonceB64: nonceB64,
             ciphertextB64: ciphertextB64
@@ -60,6 +74,8 @@ enum CanonicalSigning {
     // MARK: - Sign Canonical
 
     /// Sign a message with canonical format
+    /// CRITICAL: We must hash the canonical bytes with SHA256 before signing!
+    /// Server does: Ed25519_Sign(SHA256(canonicalBytes), privateKey)
     static func signCanonical(
         messageType: String,
         messageId: String,
@@ -84,7 +100,11 @@ enum CanonicalSigning {
             throw CryptoError.signatureFailed
         }
 
-        return try Signatures.sign(message: canonicalData, privateKey: privateKey)
+        // CRITICAL: Hash with SHA256 first (to match server)
+        let hash = SHA256.hash(data: canonicalData)
+        let hashData = Data(hash)
+
+        return try Signatures.sign(message: hashData, privateKey: privateKey)
     }
 
     /// Sign and return base64-encoded signature
@@ -114,6 +134,7 @@ enum CanonicalSigning {
     // MARK: - Verify Canonical
 
     /// Verify a canonically signed message
+    /// CRITICAL: We must hash the canonical bytes with SHA256 before verifying!
     static func verifyCanonical(
         signature: Data,
         messageType: String,
@@ -139,7 +160,11 @@ enum CanonicalSigning {
             return false
         }
 
-        return Signatures.verify(signature: signature, message: canonicalData, publicKey: publicKey)
+        // CRITICAL: Hash with SHA256 first (to match server)
+        let hash = SHA256.hash(data: canonicalData)
+        let hashData = Data(hash)
+
+        return Signatures.verify(signature: signature, message: hashData, publicKey: publicKey)
     }
 
     /// Verify base64-encoded signature
@@ -176,8 +201,12 @@ enum CanonicalSigning {
     // MARK: - Challenge Signing (for auth)
 
     /// Sign a registration challenge
+    /// Server expects: Ed25519_Sign(SHA256(challengeBytes), privateKey)
     static func signChallenge(_ challengeBytes: Data, privateKey: Data) throws -> Data {
-        return try Signatures.sign(message: challengeBytes, privateKey: privateKey)
+        // Hash with SHA256 first
+        let hash = SHA256.hash(data: challengeBytes)
+        let hashData = Data(hash)
+        return try Signatures.sign(message: hashData, privateKey: privateKey)
     }
 
     /// Sign base64-encoded challenge
@@ -187,5 +216,17 @@ enum CanonicalSigning {
         }
         let signature = try signChallenge(challengeData, privateKey: privateKey)
         return signature.base64EncodedString()
+    }
+
+    /// Verify a challenge signature
+    static func verifyChallengeSignature(
+        signature: Data,
+        challenge: Data,
+        publicKey: Data
+    ) -> Bool {
+        // Hash with SHA256 first
+        let hash = SHA256.hash(data: challenge)
+        let hashData = Data(hash)
+        return Signatures.verify(signature: signature, message: hashData, publicKey: publicKey)
     }
 }

@@ -230,7 +230,7 @@ extension WSRouter {
     func registerDefaultHandlers(
         onMessage: @escaping (MessageReceivedPayload) async -> Void,
         onDelivery: @escaping (MessageDeliveredPayload) async -> Void,
-        onGroupEvent: @escaping (GroupUpdatedPayload) async -> Void,
+        onGroupEvent: @escaping (GroupEventPayload) async -> Void,
         onCallIncoming: @escaping (CallIncomingPayload) async -> Void,
         onTyping: @escaping (TypingNotificationPayload) async -> Void,
         onPresence: @escaping (PresenceUpdatePayload) async -> Void
@@ -240,12 +240,13 @@ extension WSRouter {
             await onMessage(payload)
         }
 
-        register(type: Constants.MessageType.deliveryReceipt) { (payload: MessageDeliveredPayload, _) in
+        // Delivery notifications (message_delivered, not delivery_receipt which is what CLIENT sends)
+        register(type: Constants.MessageType.messageDelivered) { (payload: MessageDeliveredPayload, _) in
             await onDelivery(payload)
         }
 
-        // Groups
-        register(type: Constants.MessageType.groupUpdated) { (payload: GroupUpdatedPayload, _) in
+        // Groups - server sends group_event for all group changes
+        register(type: Constants.MessageType.groupEvent) { (payload: GroupEventPayload, _) in
             await onGroupEvent(payload)
         }
 
@@ -255,11 +256,11 @@ extension WSRouter {
         }
 
         // Presence
-        register(type: "typing_notification") { (payload: TypingNotificationPayload, _) in
+        register(type: Constants.MessageType.typingNotification) { (payload: TypingNotificationPayload, _) in
             await onTyping(payload)
         }
 
-        register(type: "presence_update") { (payload: PresenceUpdatePayload, _) in
+        register(type: Constants.MessageType.presenceUpdate) { (payload: PresenceUpdatePayload, _) in
             await onPresence(payload)
         }
     }

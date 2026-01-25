@@ -47,17 +47,22 @@ enum Constants {
         static let secretKeyLength = 32
         static let signatureLength = 64
         static let seedLength = 32
+        static let bip39SeedLength = 64  // Full BIP39 seed is 64 bytes
+        static let challengeSize = 32
 
-        // HKDF info strings (must match server)
+        // HKDF parameters (MUST match across all platforms for recovery)
+        static let hkdfSalt = "whisper"
         static let encryptionDomain = "whisper/enc"
         static let signingDomain = "whisper/sign"
         static let contactsDomain = "whisper/contacts"
 
-        // WhisperID prefix
-        static let whisperIdPrefix = "WH2-"
+        // WhisperID prefix and format (must match server)
+        // Format: WSP-XXXX-XXXX-XXXX (Base32: A-Z, 2-7)
+        static let whisperIdPrefix = "WSP-"
+        static let whisperIdBase32Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
     }
 
-    // MARK: - Message Types
+    // MARK: - Message Types (must match server protocol.ts MessageTypes)
     enum MessageType {
         // Auth
         static let registerBegin = "register_begin"
@@ -65,22 +70,24 @@ enum Constants {
         static let registerProof = "register_proof"
         static let registerAck = "register_ack"
         static let sessionRefresh = "session_refresh"
+        static let sessionRefreshAck = "session_refresh_ack"
         static let logout = "logout"
         static let updateTokens = "update_tokens"
 
         // Messaging
         static let sendMessage = "send_message"
+        static let messageAccepted = "message_accepted"
         static let messageReceived = "message_received"
         static let deliveryReceipt = "delivery_receipt"
+        static let messageDelivered = "message_delivered"
         static let fetchPending = "fetch_pending"
         static let pendingMessages = "pending_messages"
 
         // Groups
         static let groupCreate = "group_create"
+        static let groupEvent = "group_event"  // Server sends this for all group changes
         static let groupUpdate = "group_update"
         static let groupSendMessage = "group_send_message"
-        static let groupCreated = "group_created"
-        static let groupUpdated = "group_updated"
 
         // Calls
         static let getTurnCredentials = "get_turn_credentials"
@@ -92,27 +99,29 @@ enum Constants {
         static let callIceCandidate = "call_ice_candidate"
         static let callEnd = "call_end"
 
+        // Presence & Typing
+        static let presenceUpdate = "presence_update"
+        static let typing = "typing"
+        static let typingNotification = "typing_notification"
+
         // System
         static let ping = "ping"
         static let pong = "pong"
         static let error = "error"
-        static let ack = "ack"
         static let forceLogout = "force_logout"
     }
 
-    // MARK: - Error Codes (match server)
+    // MARK: - Error Codes (must match server protocol.ts ErrorCode)
     enum ErrorCode {
+        static let notRegistered = "NOT_REGISTERED"
+        static let authFailed = "AUTH_FAILED"
         static let invalidPayload = "INVALID_PAYLOAD"
-        static let unauthorized = "UNAUTHORIZED"
-        static let notFound = "NOT_FOUND"
+        static let invalidTimestamp = "INVALID_TIMESTAMP"
         static let rateLimited = "RATE_LIMITED"
-        static let serverError = "SERVER_ERROR"
-        static let invalidSignature = "INVALID_SIGNATURE"
-        static let invalidChallenge = "INVALID_CHALLENGE"
-        static let sessionExpired = "SESSION_EXPIRED"
-        static let deviceKicked = "DEVICE_KICKED"
-        static let callNotFound = "CALL_NOT_FOUND"
-        static let callNotParty = "NOT_CALL_PARTY"
+        static let userBanned = "USER_BANNED"
+        static let notFound = "NOT_FOUND"
+        static let forbidden = "FORBIDDEN"
+        static let internalError = "INTERNAL_ERROR"
     }
 
     // MARK: - Timeouts

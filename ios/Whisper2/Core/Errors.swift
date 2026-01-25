@@ -27,6 +27,7 @@ enum CryptoError: WhisperError {
     case invalidNonce
     case invalidBase64
     case invalidKeyLength
+    case invalidWhisperId
 
     var code: String {
         switch self {
@@ -42,6 +43,7 @@ enum CryptoError: WhisperError {
         case .invalidNonce: return "CRYPTO_INVALID_NONCE"
         case .invalidBase64: return "CRYPTO_INVALID_BASE64"
         case .invalidKeyLength: return "CRYPTO_INVALID_KEY_LENGTH"
+        case .invalidWhisperId: return "CRYPTO_INVALID_WHISPER_ID"
         }
     }
 
@@ -59,6 +61,7 @@ enum CryptoError: WhisperError {
         case .invalidNonce: return "Invalid nonce"
         case .invalidBase64: return "Invalid base64 encoding"
         case .invalidKeyLength: return "Invalid key length"
+        case .invalidWhisperId: return "Invalid WhisperID format"
         }
     }
 }

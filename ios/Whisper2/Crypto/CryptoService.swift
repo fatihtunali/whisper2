@@ -1,8 +1,9 @@
 import Foundation
-import CryptoKit
+import CryptoKit  // Still needed for SHA256 in CanonicalSigning
 
 /// Main crypto service - single authority for all cryptographic operations
 /// Thread-safe singleton
+/// Uses TweetNaCl for Box/SecretBox/Sign operations (server-compatible)
 
 @MainActor
 final class CryptoService: ObservableObject {
@@ -45,6 +46,8 @@ final class CryptoService: ObservableObject {
     }
 
     /// Initialize from mnemonic (new account or recovery)
+    /// NOTE: WhisperID is NOT generated here - it comes from server during registration
+    /// After successful registration, call setWhisperId() with the server-provided value
     func initializeFromMnemonic(_ mnemonic: String) async throws {
         // Validate mnemonic
         guard KeyDerivation.isValidMnemonic(mnemonic) else {
@@ -58,25 +61,32 @@ final class CryptoService: ObservableObject {
         let encKP = try NaClBox.keyPairFromSeed(derivedKeys.encryptionSeed)
         let signKP = try Signatures.keyPairFromSeed(derivedKeys.signingSeed)
 
-        // Generate WhisperID
-        let wid = KeyDerivation.whisperIdFromSigningKey(signKP.publicKey)
-
-        // Store in keychain
+        // Store keys in keychain (but NOT whisperId - that comes from server)
         try KeychainService.shared.setData(encKP.privateKey, forKey: Constants.StorageKey.encPrivateKey)
         try KeychainService.shared.setData(encKP.publicKey, forKey: Constants.StorageKey.encPublicKey)
         try KeychainService.shared.setData(signKP.privateKey, forKey: Constants.StorageKey.signPrivateKey)
         try KeychainService.shared.setData(signKP.publicKey, forKey: Constants.StorageKey.signPublicKey)
         try KeychainService.shared.setData(derivedKeys.contactsKey, forKey: Constants.StorageKey.contactsKey)
-        try KeychainService.shared.setString(wid, forKey: Constants.StorageKey.whisperId)
 
         // Set in-memory
         self.encryptionKeyPair = encKP
         self.signingKeyPair = signKP
         self.contactsKey = derivedKeys.contactsKey
-        self.whisperId = wid
+        // whisperId will be set later via setWhisperId() after server registration
         self.isInitialized = true
 
-        logger.info("CryptoService initialized from mnemonic, whisperId: \(wid)", category: .crypto)
+        logger.info("CryptoService initialized from mnemonic (awaiting whisperId from server)", category: .crypto)
+    }
+
+    /// Set WhisperID after receiving from server
+    /// Called after successful registration or recovery
+    func setWhisperId(_ whisperId: String) throws {
+        guard WhisperID.isValid(whisperId) else {
+            throw CryptoError.invalidWhisperId
+        }
+        self.whisperId = whisperId
+        try KeychainService.shared.setString(whisperId, forKey: Constants.StorageKey.whisperId)
+        logger.info("WhisperID set: \(whisperId)", category: .crypto)
     }
 
     /// Generate new mnemonic

@@ -409,12 +409,44 @@ struct GroupCreatePayload: VersionedPayload {
     }
 }
 
-/// Group created acknowledgment
-struct GroupCreatedPayload: Codable {
+/// Group create acknowledgment (sent via group_event)
+struct GroupCreateAckPayload: Codable {
     let groupId: String
     let title: String
     let memberIds: [String]
     let createdAt: Int64
+}
+
+/// Group member info
+struct GroupMember: Codable {
+    let whisperId: String
+    let role: String  // "owner", "admin", "member"
+    let joinedAt: Int64
+    var removedAt: Int64?
+}
+
+/// Group info in group_event
+struct GroupInfo: Codable {
+    let groupId: String
+    let title: String
+    let ownerId: String
+    let createdAt: Int64
+    let updatedAt: Int64
+    let members: [GroupMember]
+}
+
+/// Group event payload (server sends this for all group changes)
+/// Event types: "created", "updated", "member_added", "member_removed"
+struct GroupEventPayload: Codable {
+    let event: String  // "created", "updated", "member_added", "member_removed"
+    let group: GroupInfo
+    var affectedMembers: [String]?
+}
+
+/// Role change entry for group update (owner only)
+struct RoleChange: Codable {
+    let whisperId: String
+    let role: String  // "admin" or "member"
 }
 
 /// Update group request
@@ -423,33 +455,28 @@ struct GroupUpdatePayload: VersionedPayload {
     let cryptoVersion: Int
     let sessionToken: String
     let groupId: String
+    var title: String?
     var addMembers: [String]?
     var removeMembers: [String]?
-    var title: String?
+    var roleChanges: [RoleChange]?  // owner only
 
     init(
         sessionToken: String,
         groupId: String,
+        title: String? = nil,
         addMembers: [String]? = nil,
         removeMembers: [String]? = nil,
-        title: String? = nil
+        roleChanges: [RoleChange]? = nil
     ) {
         self.protocolVersion = Protocol.version
         self.cryptoVersion = Protocol.cryptoVersion
         self.sessionToken = sessionToken
         self.groupId = groupId
+        self.title = title
         self.addMembers = addMembers
         self.removeMembers = removeMembers
-        self.title = title
+        self.roleChanges = roleChanges
     }
-}
-
-/// Group updated notification
-struct GroupUpdatedPayload: Codable {
-    let groupId: String
-    var title: String?
-    var memberIds: [String]?
-    let updatedAt: Int64
 }
 
 /// Send group message (one per member, encrypted for each)

@@ -46,38 +46,67 @@ final class AuthService {
 
     /// Register a new identity or recover an existing one
     /// - Parameters:
-    ///   - mnemonic: Optional BIP39 mnemonic for recovery. If nil, generates new keys.
+    ///   - mnemonic: Optional BIP39 mnemonic for recovery. If nil, generates new mnemonic.
     ///   - ws: Active WebSocket connection
     /// - Returns: Registration result with whisperId and session
+    @MainActor
     func register(mnemonic: String?, ws: WebSocketConnection) async throws -> RegistrationResult {
         self.wsConnection = ws
 
-        // Step 1: Generate or derive keys
-        let keys: CryptoKeys
-        if let mnemonic = mnemonic {
-            // Recovery: derive keys from mnemonic
-            keys = try CryptoService.shared.deriveKeys(from: mnemonic)
-            logger.info("Derived keys from mnemonic for recovery", category: .auth)
+        let crypto = CryptoService.shared
+
+        // Step 1: Initialize CryptoService with mnemonic
+        let actualMnemonic: String
+        if let provided = mnemonic {
+            // Recovery: use provided mnemonic
+            actualMnemonic = provided
+            logger.info("Using provided mnemonic for recovery", category: .auth)
         } else {
-            // New registration: generate fresh keys
-            keys = try CryptoService.shared.generateKeys()
-            logger.info("Generated new keys for registration", category: .auth)
+            // New registration: generate new mnemonic
+            actualMnemonic = crypto.generateMnemonic()
+            logger.info("Generated new mnemonic for registration", category: .auth)
         }
+
+        // Initialize crypto service (derives keys from mnemonic)
+        try await crypto.initializeFromMnemonic(actualMnemonic)
+
+        // Get keys for registration payload
+        guard let encPublicKey = crypto.encryptionPublicKey,
+              let signPublicKey = crypto.signingPublicKey,
+              let encPrivateKey = keychain.getData(Constants.StorageKey.encPrivateKey),
+              let signPrivateKey = keychain.getData(Constants.StorageKey.signPrivateKey),
+              let contactsKey = keychain.getData(Constants.StorageKey.contactsKey) else {
+            throw AuthError.registrationFailed(reason: "Failed to initialize keys")
+        }
+
+        let keys = CryptoKeys(
+            encPrivateKey: encPrivateKey,
+            encPublicKey: encPublicKey,
+            signPrivateKey: signPrivateKey,
+            signPublicKey: signPublicKey,
+            contactsKey: contactsKey,
+            mnemonic: actualMnemonic
+        )
 
         // Step 2: Get or create device ID
         let deviceId = getOrCreateDeviceId()
 
-        // Step 3: Determine if this is a recovery (check if we have existing whisperId)
+        // Step 3: Determine if this is a recovery (check if we have existing whisperId stored)
         let existingWhisperId = keychain.whisperId
         let isRecovery = mnemonic != nil && existingWhisperId != nil
 
         // Step 4: Start registration flow
-        return try await performRegistration(
+        let result = try await performRegistration(
             keys: keys,
             deviceId: deviceId,
             whisperId: isRecovery ? existingWhisperId : nil,
             ws: ws
         )
+
+        // Step 5: Store the server-provided WhisperID
+        try crypto.setWhisperId(result.whisperId)
+
+        return result
     }
 
     /// Handle force_logout message from server (device kicked)
@@ -204,12 +233,11 @@ final class AuthService {
     // MARK: - Step 2: Sign Challenge
 
     private func signChallenge(challengeBytes: Data, signPrivateKey: Data) throws -> Data {
-        // Hash the challenge bytes with SHA256
-        let hash = SHA256.hash(data: challengeBytes)
-        let hashData = Data(hash)
-
-        // Sign the hash with Ed25519
-        let signature = try CryptoService.shared.sign(message: hashData, privateKey: signPrivateKey)
+        // Use CanonicalSigning.signChallenge which:
+        // 1. Hashes the challenge bytes with SHA256
+        // 2. Signs the hash with Ed25519
+        // This MUST match server's verifyChallengeSignature in crypto.ts
+        let signature = try CanonicalSigning.signChallenge(challengeBytes, privateKey: signPrivateKey)
 
         logger.debug("Signed challenge", category: .auth)
 
@@ -368,9 +396,9 @@ extension Notification.Name {
     static let authSessionExpired = Notification.Name("whisper2.auth.sessionExpired")
 }
 
-// MARK: - CryptoKeys (placeholder - to be defined in CryptoService)
+// MARK: - CryptoKeys
 
-/// Cryptographic key material
+/// Cryptographic key material for registration
 struct CryptoKeys {
     let encPrivateKey: Data
     let encPublicKey: Data
@@ -378,32 +406,4 @@ struct CryptoKeys {
     let signPublicKey: Data
     let contactsKey: Data
     let mnemonic: String?
-}
-
-// MARK: - CryptoService Protocol (placeholder)
-
-/// Crypto service for key generation and signing
-/// To be implemented in the Crypto module
-class CryptoService {
-    static let shared = CryptoService()
-
-    private init() {}
-
-    /// Generate fresh cryptographic keys
-    func generateKeys() throws -> CryptoKeys {
-        // Placeholder - actual implementation in Crypto module
-        fatalError("CryptoService.generateKeys() not implemented")
-    }
-
-    /// Derive keys from BIP39 mnemonic
-    func deriveKeys(from mnemonic: String) throws -> CryptoKeys {
-        // Placeholder - actual implementation in Crypto module
-        fatalError("CryptoService.deriveKeys(from:) not implemented")
-    }
-
-    /// Sign a message with Ed25519
-    func sign(message: Data, privateKey: Data) throws -> Data {
-        // Placeholder - actual implementation in Crypto module
-        fatalError("CryptoService.sign(message:privateKey:) not implemented")
-    }
 }

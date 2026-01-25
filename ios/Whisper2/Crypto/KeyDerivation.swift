@@ -6,23 +6,10 @@ import CryptoKit
 
 enum KeyDerivation {
 
-    // MARK: - BIP39 Word List (first 100 words for demo - full list needed)
-    private static let wordList: [String] = [
-        "abandon", "ability", "able", "about", "above", "absent", "absorb", "abstract",
-        "absurd", "abuse", "access", "accident", "account", "accuse", "achieve", "acid",
-        "acoustic", "acquire", "across", "act", "action", "actor", "actress", "actual",
-        "adapt", "add", "addict", "address", "adjust", "admit", "adult", "advance",
-        "advice", "aerobic", "affair", "afford", "afraid", "again", "age", "agent",
-        "agree", "ahead", "aim", "air", "airport", "aisle", "alarm", "album",
-        "alcohol", "alert", "alien", "all", "alley", "allow", "almost", "alone",
-        "alpha", "already", "also", "alter", "always", "amateur", "amazing", "among",
-        "amount", "amused", "analyst", "anchor", "ancient", "anger", "angle", "angry",
-        "animal", "ankle", "announce", "annual", "another", "answer", "antenna", "antique",
-        "anxiety", "any", "apart", "apology", "appear", "apple", "approve", "april",
-        "arch", "arctic", "area", "arena", "argue", "arm", "armed", "armor",
-        "army", "around", "arrange", "arrest"
-        // Full BIP39 word list (2048 words) should be loaded from resource
-    ]
+    // MARK: - BIP39 Word List
+    /// Full 2048-word BIP39 English word list
+    /// Loaded from BIP39WordList.swift
+    private static var wordList: [String] { BIP39WordList.english }
 
     // MARK: - Generate Mnemonic
 
@@ -62,12 +49,36 @@ enum KeyDerivation {
         return words.joined(separator: " ")
     }
 
+    // MARK: - Mnemonic Normalization
+
+    /// Normalize mnemonic for BIP39 compatibility
+    /// - Trim leading/trailing whitespace
+    /// - Collapse multiple spaces to single space
+    /// - Apply NFKD Unicode normalization
+    /// This prevents "same words, different bytes" issues (e.g., Turkish keyboard)
+    private static func normalizeMnemonic(_ mnemonic: String) -> String {
+        let trimmed = mnemonic.trimmingCharacters(in: .whitespacesAndNewlines)
+        let collapsed = trimmed.components(separatedBy: .whitespaces)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        return collapsed.decomposedStringWithCompatibilityMapping  // NFKD
+    }
+
+    /// Normalize passphrase for BIP39 compatibility
+    private static func normalizePassphrase(_ passphrase: String) -> String {
+        return passphrase.decomposedStringWithCompatibilityMapping  // NFKD (no space collapse for passphrase)
+    }
+
     // MARK: - Mnemonic to Seed
 
     /// Convert mnemonic to 64-byte seed using PBKDF2
+    /// BIP39: PBKDF2-HMAC-SHA512, salt = "mnemonic" + passphrase, 2048 iterations
     static func seedFromMnemonic(_ mnemonic: String, passphrase: String = "") throws -> Data {
-        let mnemonicData = mnemonic.decomposedStringWithCompatibilityMapping.data(using: .utf8)!
-        let salt = ("mnemonic" + passphrase).decomposedStringWithCompatibilityMapping.data(using: .utf8)!
+        let normalizedMnemonic = normalizeMnemonic(mnemonic)
+        let normalizedPassphrase = normalizePassphrase(passphrase)
+
+        let mnemonicData = normalizedMnemonic.data(using: .utf8)!
+        let salt = ("mnemonic" + normalizedPassphrase).data(using: .utf8)!
 
         // PBKDF2-HMAC-SHA512 with 2048 iterations
         var derivedKey = [UInt8](repeating: 0, count: 64)
@@ -99,13 +110,24 @@ enum KeyDerivation {
     // MARK: - HKDF Key Derivation
 
     /// Derive domain-specific key using HKDF-SHA256
+    /// CRITICAL: Uses full 64-byte BIP39 seed + "whisper" salt for cross-platform recovery
+    /// - Parameters:
+    ///   - seed: Full 64-byte BIP39 seed (NOT truncated)
+    ///   - info: Domain string ("whisper/enc", "whisper/sign", "whisper/contacts")
+    ///   - length: Output key length (default 32 bytes)
     static func deriveKey(from seed: Data, info: String, length: Int = 32) -> Data {
-        let infoData = info.data(using: .utf8)!
-        let key = SymmetricKey(data: seed.prefix(32))
+        precondition(seed.count == Constants.Crypto.bip39SeedLength,
+                     "BIP39 seed must be \(Constants.Crypto.bip39SeedLength) bytes")
 
-        // HKDF expand
+        let salt = Constants.Crypto.hkdfSalt.data(using: .utf8)!
+        let infoData = info.data(using: .utf8)!
+
+        // Use FULL 64-byte seed as input key material
+        let ikm = SymmetricKey(data: seed)
+
         let hkdf = HKDF<SHA256>.deriveKey(
-            inputKeyMaterial: key,
+            inputKeyMaterial: ikm,
+            salt: salt,
             info: infoData,
             outputByteCount: length
         )
@@ -132,21 +154,20 @@ enum KeyDerivation {
         )
     }
 
-    // MARK: - WhisperID Generation
-
-    /// Generate WhisperID from signing public key
-    /// Format: WH2-{first 16 chars of hex(sha256(signPublicKey))}
-    static func whisperIdFromSigningKey(_ publicKey: Data) -> String {
-        let hash = SHA256.hash(data: publicKey)
-        let hex = hash.prefix(8).map { String(format: "%02x", $0) }.joined()
-        return "\(Constants.Crypto.whisperIdPrefix)\(hex)"
-    }
+    // MARK: - WhisperID
+    //
+    // NOTE: WhisperIDs are generated SERVER-SIDE, not client-side!
+    // Server generates random WSP-XXXX-XXXX-XXXX during registration
+    // Client receives WhisperID in register_ack and stores it
+    // Do NOT generate WhisperIDs locally - they come from server
 
     // MARK: - Validation
 
     /// Validate mnemonic phrase
+    /// Uses normalized input to match seedFromMnemonic behavior
     static func isValidMnemonic(_ mnemonic: String) -> Bool {
-        let words = mnemonic.lowercased().split(separator: " ").map(String.init)
+        let normalized = normalizeMnemonic(mnemonic)
+        let words = normalized.lowercased().split(separator: " ").map(String.init)
         guard words.count == 12 || words.count == 24 else { return false }
         return words.allSatisfy { wordList.contains($0) }
     }

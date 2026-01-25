@@ -32,7 +32,7 @@ This document explains how to create and configure the Xcode project for Whisper
 
 ### Option 2: Using Swift Package (Recommended)
 
-Create `Package.swift` at `ios/Whisper2/`:
+The `Package.swift` is already at `ios/Whisper2/`:
 
 ```swift
 // swift-tools-version:5.9
@@ -47,22 +47,35 @@ let package = Package(
         .library(name: "Whisper2", targets: ["Whisper2"])
     ],
     dependencies: [
-        // Add dependencies here
+        // TweetNaCl - Pure Swift NaCl implementation (server-compatible crypto)
+        .package(url: "https://github.com/nicklockwood/TweetNaClx.git", from: "1.0.0"),
     ],
     targets: [
         .target(
             name: "Whisper2",
-            dependencies: [],
-            path: "Whisper2"
+            dependencies: [
+                .product(name: "TweetNaClx", package: "TweetNaClx"),
+            ],
+            path: ".",
+            exclude: ["Tests", "Whisper2.xcodeproj", "Info.plist", "Whisper2.entitlements"]
         ),
         .testTarget(
             name: "Whisper2Tests",
             dependencies: ["Whisper2"],
-            path: "Whisper2Tests"
+            path: "Tests"
         )
     ]
 )
 ```
+
+### Adding TweetNaCl via Xcode (Alternative)
+
+If not using Package.swift, add TweetNaCl directly in Xcode:
+
+1. File > Add Package Dependencies
+2. Enter URL: `https://github.com/nicklockwood/TweetNaClx.git`
+3. Select version: 1.0.0 or later
+4. Add to target: Whisper2
 
 ## Project Configuration
 
