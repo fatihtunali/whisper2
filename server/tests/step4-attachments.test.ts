@@ -62,32 +62,30 @@ function generateNonce(): string {
   return nonce.toString('base64');
 }
 
-function signMessage(
-  signSecretKey: Buffer,
-  data: {
-    messageType: string;
-    messageId: string;
-    from: string;
-    toOrGroupId: string;
-    timestamp: number;
-    nonce: string;
-    ciphertext: string;
+function buildCanonical(parts: Record<string, string | number | undefined>): string {
+  // Format: v1\nmessageType\nmessageId\nfrom\ntoOrGroupId\ntimestamp\nnonce\nciphertext\n
+  const order = ['messageType', 'messageId', 'from', 'toOrGroupId', 'timestamp', 'nonce', 'ciphertext'];
+  let result = 'v1\n';
+  for (const key of order) {
+    if (parts[key] !== undefined) {
+      result += String(parts[key]) + '\n';
+    }
   }
+  return result;
+}
+
+function signCanonical(
+  signSecretKey: Buffer,
+  parts: Record<string, string | number | undefined>
 ): string {
-  const payload = JSON.stringify([
-    data.messageType,
-    data.messageId,
-    data.from,
-    data.toOrGroupId,
-    data.timestamp,
-    data.nonce,
-    data.ciphertext,
-  ]);
+  const canonical = buildCanonical(parts);
+  const canonicalBytes = Buffer.from(canonical, 'utf8');
 
-  const payloadBytes = Buffer.from(payload, 'utf-8');
+  // Hash the canonical bytes (SHA256)
   const hash = Buffer.alloc(sodium.crypto_hash_sha256_BYTES);
-  sodium.crypto_hash_sha256(hash, payloadBytes);
+  sodium.crypto_hash_sha256(hash, canonicalBytes);
 
+  // Sign the hash
   const signature = Buffer.alloc(sodium.crypto_sign_BYTES);
   sodium.crypto_sign_detached(signature, hash, signSecretKey);
   return signature.toString('base64');
@@ -625,7 +623,7 @@ async function test6_SendMessageWithAttachmentGrantsAccess(): Promise<boolean> {
     const fileNonce = generateNonce();
     const fileKeyBoxNonce = generateNonce();
 
-    const sig = signMessage(clientA.keys!.signSecretKey, {
+    const sig = signCanonical(clientA.keys!.signSecretKey, {
       messageType: 'send_message',
       messageId,
       from: clientA.whisperId!,
@@ -731,7 +729,7 @@ async function test7_BCanDownloadAfterReceivingReference(): Promise<boolean> {
     const fileNonce = generateNonce();
     const fileKeyBoxNonce = generateNonce();
 
-    const sig = signMessage(clientA.keys!.signSecretKey, {
+    const sig = signCanonical(clientA.keys!.signSecretKey, {
       messageType: 'send_message',
       messageId,
       from: clientA.whisperId!,
@@ -831,7 +829,7 @@ async function test8_DownloadUrlFetchWorks(): Promise<boolean> {
     const nonce = generateNonce();
     const ciphertext = Buffer.from('test').toString('base64');
 
-    const sig = signMessage(clientA.keys!.signSecretKey, {
+    const sig = signCanonical(clientA.keys!.signSecretKey, {
       messageType: 'send_message',
       messageId,
       from: clientA.whisperId!,
