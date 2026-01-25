@@ -383,8 +383,15 @@ async function test2_CreateGroupRejectsMaxMembers(): Promise<boolean> {
     client = await createClient();
     await registerClient(client);
 
-    // Try to create with 51 fake members (will fail on first validation)
-    const fakeMembers = Array.from({ length: 51 }, (_, i) => `WSP-FAKE-FAKE-FAK${i.toString().padStart(1, '0')}`);
+    // Try to create with 51 fake members (valid pattern but exceed MAX_GROUP_MEMBERS)
+    // Pattern requires [A-Z2-7] only, so we use letters and valid digits
+    const fakeMembers = Array.from({ length: 51 }, (_, i) => {
+      // Generate unique 4-char segments using only valid chars (A-Z, 2-7)
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+      const idx1 = i % chars.length;
+      const idx2 = Math.floor(i / chars.length) % chars.length;
+      return `WSP-TEST-FA${chars[idx1]}${chars[idx2]}-TEST`;
+    });
 
     const resp = await sendAndWait(client, {
       type: 'group_create',

@@ -49,7 +49,7 @@ export const groupCreateSchema = {
         pattern: whisperIdPattern,
       },
       minItems: 0,
-      maxItems: 49, // Max 50 total including creator
+      // Note: MAX_GROUP_MEMBERS enforced at service level to provide better error messages
     },
   },
   required: ['protocolVersion', 'cryptoVersion', 'sessionToken', 'title', 'memberIds'],
