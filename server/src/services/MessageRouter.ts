@@ -114,16 +114,40 @@ export class MessageRouter {
       };
     }
 
-    // 3. Validate nonce format
+    // 3. Validate nonce format (must be exactly 24 bytes base64)
     if (!isValidNonce(nonce)) {
-      logger.warn({ messageId }, 'Invalid nonce format');
+      logger.warn({ messageId }, 'Invalid nonce format (must be 24 bytes)');
       return {
         success: false,
         error: {
           code: 'INVALID_PAYLOAD',
-          message: 'Invalid nonce format',
+          message: 'Invalid nonce format (must be 24 bytes)',
         },
       };
+    }
+
+    // 3b. Validate attachment nonces if present
+    if (payload.attachment) {
+      if (!isValidNonce(payload.attachment.fileNonce)) {
+        logger.warn({ messageId }, 'Invalid attachment fileNonce (must be 24 bytes)');
+        return {
+          success: false,
+          error: {
+            code: 'INVALID_PAYLOAD',
+            message: 'Invalid attachment fileNonce (must be 24 bytes)',
+          },
+        };
+      }
+      if (!isValidNonce(payload.attachment.fileKeyBox.nonce)) {
+        logger.warn({ messageId }, 'Invalid attachment fileKeyBox.nonce (must be 24 bytes)');
+        return {
+          success: false,
+          error: {
+            code: 'INVALID_PAYLOAD',
+            message: 'Invalid attachment fileKeyBox.nonce (must be 24 bytes)',
+          },
+        };
+      }
     }
 
     // 4. Get sender's signPublicKey from DB
@@ -188,6 +212,7 @@ export class MessageRouter {
     await this.markProcessed(from, messageId);
 
     // 9. Build message_received payload for recipient
+    // Omit optional fields when not present (cleaner cross-platform decoding)
     const messageReceived: MessageReceivedPayload = {
       messageId,
       from,
@@ -197,10 +222,18 @@ export class MessageRouter {
       nonce,
       ciphertext,
       sig,
-      replyTo: payload.replyTo,
-      reactions: payload.reactions,
-      attachment: payload.attachment,
     };
+
+    // Only include optional fields when present (not null/undefined)
+    if (payload.replyTo) {
+      messageReceived.replyTo = payload.replyTo;
+    }
+    if (payload.reactions && Object.keys(payload.reactions).length > 0) {
+      messageReceived.reactions = payload.reactions;
+    }
+    if (payload.attachment) {
+      messageReceived.attachment = payload.attachment;
+    }
 
     // 10. Try to route to online recipient
     const delivered = connectionManager.sendToUser(to, {

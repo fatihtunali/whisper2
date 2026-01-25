@@ -172,11 +172,20 @@ export function verifyChallengeSignature(
  * Validates timestamp is within ±10 minutes of server time.
  * Server accepts timestamps within TIMESTAMP_SKEW_MS of serverTime.
  * Outside window → reject with INVALID_TIMESTAMP
+ *
+ * Also rejects:
+ * - 0 or negative timestamps (invalid)
+ * - NaN or non-finite values
  */
 export function isTimestampValid(
   timestamp: number,
   serverTime: number = Date.now()
 ): boolean {
+  // Reject invalid values: 0, negative, NaN, Infinity
+  if (!Number.isFinite(timestamp) || timestamp <= 0) {
+    return false;
+  }
+
   const diff = Math.abs(timestamp - serverTime);
   return diff <= TIMESTAMP_SKEW_MS;
 }

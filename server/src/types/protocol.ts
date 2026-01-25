@@ -165,9 +165,9 @@ export interface SendMessagePayload extends VersionedPayload {
   nonce: string; // base64(24 bytes)
   ciphertext: string; // base64
   sig: string; // base64
-  replyTo?: string; // uuid
-  reactions?: Record<string, string[]>; // emoji -> whisperId[]
-  attachment?: AttachmentPointer | null;
+  replyTo?: string; // uuid - omit if not present
+  reactions?: Record<string, string[]>; // emoji -> whisperId[] - omit if empty
+  attachment?: AttachmentPointer; // omit if not present
 }
 
 // Message accepted ACK (Section 4.1)
@@ -177,6 +177,8 @@ export interface MessageAcceptedPayload {
 }
 
 // Message received (Section 4.2)
+// Optional fields are OMITTED when not present (not sent as null)
+// This simplifies cross-platform decoding (Swift, Kotlin, TS)
 export interface MessageReceivedPayload {
   messageId: string;
   from: string;
@@ -186,9 +188,9 @@ export interface MessageReceivedPayload {
   nonce: string;
   ciphertext: string;
   sig: string;
-  replyTo?: string;
-  reactions?: Record<string, string[]>;
-  attachment?: AttachmentPointer | null;
+  replyTo?: string; // omit if not present
+  reactions?: Record<string, string[]>; // omit if empty
+  attachment?: AttachmentPointer; // omit if not present
 }
 
 // Delivery receipt (Section 4.3)
