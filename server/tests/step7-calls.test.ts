@@ -466,6 +466,17 @@ async function test4_callRinging() {
   const ringingCiphertext = Buffer.from('ringing_ack').toString('base64');
   const ringingTimestamp = Date.now();
 
+  // Generate proper signature format (even though not verified for ringing)
+  const ringSig = signCanonical(callee.keys.signSecretKey, {
+    messageType: 'call_ringing',
+    messageId: callId,
+    from: callee.whisperId,
+    toOrGroupId: caller.whisperId,
+    timestamp: ringingTimestamp,
+    nonce: ringingNonce,
+    ciphertext: ringingCiphertext,
+  });
+
   const ringMsg = {
     type: 'call_ringing',
     requestId: uuidv4(),
@@ -479,7 +490,7 @@ async function test4_callRinging() {
       timestamp: ringingTimestamp,
       nonce: ringingNonce,
       ciphertext: ringingCiphertext,
-      sig: 'dummy_sig', // Not verified for ringing
+      sig: ringSig,
     },
   };
 
@@ -795,6 +806,16 @@ async function test7_callEnd() {
   const endCiphertext = Buffer.from('end').toString('base64');
   const endTimestamp = Date.now();
 
+  const endSig = signCanonical(callee.keys.signSecretKey, {
+    messageType: 'call_end',
+    messageId: callId,
+    from: callee.whisperId,
+    toOrGroupId: caller.whisperId,
+    timestamp: endTimestamp,
+    nonce: endNonce,
+    ciphertext: endCiphertext,
+  });
+
   callee.ws.send(JSON.stringify({
     type: 'call_end',
     payload: {
@@ -807,7 +828,7 @@ async function test7_callEnd() {
       timestamp: endTimestamp,
       nonce: endNonce,
       ciphertext: endCiphertext,
-      sig: 'dummy', // Not verified for call_end
+      sig: endSig,
       reason: 'declined',
     },
   }));
@@ -1067,8 +1088,7 @@ async function test12_rateLimits() {
   }
 
   // Send 15 call_initiate requests rapidly (limit is 10/60s)
-  let rateLimited = false;
-
+  // call_initiate doesn't return ACK, only error on failure
   for (let i = 0; i < 15; i++) {
     const callId = uuidv4();
     const nonce = generateNonce();
@@ -1103,18 +1123,23 @@ async function test12_rateLimits() {
       },
     };
 
-    const resp = await sendAndWait(caller, msg, undefined, 2000);
-    if (resp.type === 'error' && resp.payload.code === 'RATE_LIMITED') {
-      rateLimited = true;
-      console.log(`  Rate limited after ${i + 1} requests`);
-      break;
-    }
+    caller.ws.send(JSON.stringify(msg));
+    await sleep(50); // Small delay between requests
   }
+
+  // Wait for any error responses
+  await sleep(500);
+
+  // Check for rate limit error in pending messages
+  const rateLimitErrors = caller.pendingMessages.filter(
+    m => m.type === 'error' && m.payload?.code === 'RATE_LIMITED'
+  );
 
   caller.ws.close();
   callee.ws.close();
 
-  if (rateLimited) {
+  if (rateLimitErrors.length > 0) {
+    console.log(`  Rate limited after some requests (got ${rateLimitErrors.length} RATE_LIMITED errors)`);
     console.log('  PASSED');
     return true;
   }
