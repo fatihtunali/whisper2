@@ -8,8 +8,8 @@
     "start": "node dist/index.js",
     "dev": "ts-node-dev --respawn src/index.ts",
     "migrate": "node dist/db/migrate.js",
-    "test:step2": "npx ts-node tests/step2-messaging.test.ts",
-    "test:step3": "npx ts-node tests/step3-contacts-backup.test.ts",
+    "test:step2": "npx ts-node --transpile-only tests/step2-messaging.test.ts",
+    "test:step3": "npx ts-node --transpile-only tests/step3-contacts-backup.test.ts",
     "test": "npm run test:step2 && npm run test:step3"
   },
   "dependencies": {
