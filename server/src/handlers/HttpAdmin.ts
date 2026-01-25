@@ -475,10 +475,9 @@ export function createHttpRouter(): Router {
         return;
       }
 
-      // Validate ciphertext is valid base64
-      try {
-        Buffer.from(ciphertext, 'base64');
-      } catch {
+      // Validate ciphertext is valid base64 (strict check)
+      const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
+      if (!base64Regex.test(ciphertext) || ciphertext.length % 4 !== 0) {
         res.status(400).json({
           error: 'INVALID_PAYLOAD',
           message: 'Invalid base64 ciphertext',
