@@ -70,6 +70,31 @@ export interface FetchResult {
 const PENDING_LIMIT_DEFAULT = 50;
 const DEDUP_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days
 
+// Payload size limits (before base64 expansion memory spikes)
+const MAX_CIPHERTEXT_B64_LEN = 100_000; // ~75KB decoded
+const MAX_OBJECT_KEY_LEN = 255;
+const MAX_CONTENT_TYPE_LEN = 100;
+
+// Allowed content types for attachments
+const ALLOWED_CONTENT_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+  'image/heic',
+  'video/mp4',
+  'video/quicktime',
+  'audio/aac',
+  'audio/m4a',
+  'audio/mpeg',
+  'audio/ogg',
+  'application/pdf',
+  'application/octet-stream',
+]);
+
+// Object key allowed characters (prevent path traversal)
+const OBJECT_KEY_PATTERN = /^[a-zA-Z0-9_\-./]+$/;
+
 // =============================================================================
 // MESSAGE ROUTER SERVICE
 // =============================================================================
@@ -126,9 +151,90 @@ export class MessageRouter {
       };
     }
 
-    // 3b. Validate attachment nonces if present
+    // 3a. Validate ciphertext size (prevent memory spikes)
+    if (ciphertext.length > MAX_CIPHERTEXT_B64_LEN) {
+      logger.warn({ messageId, length: ciphertext.length }, 'Ciphertext too large');
+      return {
+        success: false,
+        error: {
+          code: 'INVALID_PAYLOAD',
+          message: `Ciphertext exceeds maximum size (${MAX_CIPHERTEXT_B64_LEN} base64 chars)`,
+        },
+      };
+    }
+
+    // 3b. Validate attachment if present
     if (payload.attachment) {
-      if (!isValidNonce(payload.attachment.fileNonce)) {
+      const att = payload.attachment;
+
+      // Validate objectKey: non-empty, safe characters, no path traversal
+      if (!att.objectKey || att.objectKey.length === 0 || att.objectKey.length > MAX_OBJECT_KEY_LEN) {
+        logger.warn({ messageId }, 'Invalid attachment objectKey length');
+        return {
+          success: false,
+          error: {
+            code: 'INVALID_PAYLOAD',
+            message: 'Invalid attachment objectKey',
+          },
+        };
+      }
+      if (!OBJECT_KEY_PATTERN.test(att.objectKey)) {
+        logger.warn({ messageId, objectKey: att.objectKey }, 'Invalid attachment objectKey characters');
+        return {
+          success: false,
+          error: {
+            code: 'INVALID_PAYLOAD',
+            message: 'Invalid attachment objectKey format',
+          },
+        };
+      }
+      if (att.objectKey.includes('..')) {
+        logger.warn({ messageId }, 'Path traversal attempt in objectKey');
+        return {
+          success: false,
+          error: {
+            code: 'INVALID_PAYLOAD',
+            message: 'Invalid attachment objectKey',
+          },
+        };
+      }
+
+      // Validate contentType
+      if (!att.contentType || att.contentType.length > MAX_CONTENT_TYPE_LEN) {
+        logger.warn({ messageId }, 'Invalid attachment contentType');
+        return {
+          success: false,
+          error: {
+            code: 'INVALID_PAYLOAD',
+            message: 'Invalid attachment contentType',
+          },
+        };
+      }
+      if (!ALLOWED_CONTENT_TYPES.has(att.contentType)) {
+        logger.warn({ messageId, contentType: att.contentType }, 'Disallowed attachment contentType');
+        return {
+          success: false,
+          error: {
+            code: 'INVALID_PAYLOAD',
+            message: 'Unsupported attachment contentType',
+          },
+        };
+      }
+
+      // Validate ciphertextSize is positive
+      if (!Number.isFinite(att.ciphertextSize) || att.ciphertextSize <= 0) {
+        logger.warn({ messageId }, 'Invalid attachment ciphertextSize');
+        return {
+          success: false,
+          error: {
+            code: 'INVALID_PAYLOAD',
+            message: 'Invalid attachment ciphertextSize',
+          },
+        };
+      }
+
+      // Validate attachment nonces (must be exactly 24 bytes)
+      if (!isValidNonce(att.fileNonce)) {
         logger.warn({ messageId }, 'Invalid attachment fileNonce (must be 24 bytes)');
         return {
           success: false,
@@ -138,7 +244,7 @@ export class MessageRouter {
           },
         };
       }
-      if (!isValidNonce(payload.attachment.fileKeyBox.nonce)) {
+      if (!att.fileKeyBox || !isValidNonce(att.fileKeyBox.nonce)) {
         logger.warn({ messageId }, 'Invalid attachment fileKeyBox.nonce (must be 24 bytes)');
         return {
           success: false,

@@ -284,13 +284,41 @@ export function isValidWhisperId(whisperId: string): boolean {
 
 /**
  * Validates that a string is valid base64 with expected length.
+ * Checks:
+ * - String is non-empty
+ * - Valid base64 characters only (A-Z, a-z, 0-9, +, /, =)
+ * - Proper padding
+ * - Decodes to expected byte length
  */
 export function isValidBase64(
   value: string,
   expectedBytes?: number
 ): boolean {
+  // Must be a non-empty string
+  if (typeof value !== 'string' || value.length === 0) {
+    return false;
+  }
+
+  // Check valid base64 characters and padding
+  // Standard base64: [A-Za-z0-9+/] with = padding
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(value)) {
+    return false;
+  }
+
+  // Check length is multiple of 4 (proper padding)
+  if (value.length % 4 !== 0) {
+    return false;
+  }
+
   try {
     const buffer = Buffer.from(value, 'base64');
+
+    // Verify round-trip to catch invalid padding/chars
+    const reencoded = buffer.toString('base64');
+    if (reencoded !== value) {
+      return false;
+    }
+
     if (expectedBytes !== undefined && buffer.length !== expectedBytes) {
       return false;
     }
@@ -301,15 +329,22 @@ export function isValidBase64(
 }
 
 /**
- * Validates nonce is base64 encoded 24 bytes.
+ * Validates nonce is base64 encoded exactly 24 bytes.
  */
 export function isValidNonce(nonce: string): boolean {
   return isValidBase64(nonce, NONCE_SIZE);
 }
 
 /**
- * Validates public key is base64 encoded 32 bytes.
+ * Validates public key is base64 encoded exactly 32 bytes.
  */
 export function isValidPublicKey(key: string): boolean {
   return isValidBase64(key, KEY_SIZE);
+}
+
+/**
+ * Validates signature is base64 encoded exactly 64 bytes.
+ */
+export function isValidSignature(sig: string): boolean {
+  return isValidBase64(sig, SIGNATURE_SIZE);
 }
