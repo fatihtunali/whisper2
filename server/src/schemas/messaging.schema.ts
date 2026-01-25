@@ -8,14 +8,7 @@
  * - fetch_pending
  */
 
-import { JSONSchemaType } from 'ajv';
-import {
-  SendMessagePayload,
-  DeliveryReceiptPayload,
-  FetchPendingPayload,
-  PROTOCOL_VERSION,
-  CRYPTO_VERSION,
-} from '../types/protocol';
+import { PROTOCOL_VERSION, CRYPTO_VERSION } from '../types/protocol';
 
 // =============================================================================
 // COMMON PATTERNS
@@ -28,7 +21,7 @@ const base64Pattern = '^[A-Za-z0-9+/]+=*$';
 // SEND_MESSAGE SCHEMA (Section 4.1)
 // =============================================================================
 
-export const sendMessageSchema: JSONSchemaType<SendMessagePayload> = {
+export const sendMessageSchema = {
   type: 'object',
   properties: {
     protocolVersion: {
@@ -134,7 +127,7 @@ export const sendMessageSchema: JSONSchemaType<SendMessagePayload> = {
 // DELIVERY_RECEIPT SCHEMA (Section 4.3)
 // =============================================================================
 
-export const deliveryReceiptSchema: JSONSchemaType<DeliveryReceiptPayload> = {
+export const deliveryReceiptSchema = {
   type: 'object',
   properties: {
     protocolVersion: {
@@ -187,7 +180,7 @@ export const deliveryReceiptSchema: JSONSchemaType<DeliveryReceiptPayload> = {
 // FETCH_PENDING SCHEMA (Section 5.2)
 // =============================================================================
 
-export const fetchPendingSchema: JSONSchemaType<FetchPendingPayload> = {
+export const fetchPendingSchema = {
   type: 'object',
   properties: {
     protocolVersion: {
