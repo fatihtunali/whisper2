@@ -30,7 +30,11 @@ import {
   SessionRefreshPayload,
   LogoutPayload,
   PingPayload,
+  SendMessagePayload,
+  DeliveryReceiptPayload,
+  FetchPendingPayload,
 } from '../types/protocol';
+import { messageRouter } from '../services/MessageRouter';
 
 // =============================================================================
 // CONSTANTS
@@ -72,6 +76,18 @@ export class WsGateway {
     const ipRateLimit = await rateLimiter.checkIp(ip, 'ws_connect');
     if (!ipRateLimit.allowed) {
       logger.warn({ ip }, 'Connection rate limited');
+      // Send error frame before closing for clean client handling
+      try {
+        ws.send(JSON.stringify({
+          type: 'error',
+          payload: {
+            code: 'RATE_LIMITED',
+            message: 'Too many connections',
+          },
+        }));
+      } catch {
+        // Ignore send errors during rate limit
+      }
       ws.close(4029, 'Rate limited');
       return;
     }
@@ -224,7 +240,20 @@ export class WsGateway {
         await this.handlePing(conn, payload as PingPayload, requestId);
         break;
 
-      // TODO: Add messaging, groups, calls handlers in later steps
+      // Messaging handlers
+      case MessageTypes.SEND_MESSAGE:
+        await this.handleSendMessage(conn, payload as SendMessagePayload, requestId);
+        break;
+
+      case MessageTypes.DELIVERY_RECEIPT:
+        await this.handleDeliveryReceipt(conn, payload as DeliveryReceiptPayload, requestId);
+        break;
+
+      case MessageTypes.FETCH_PENDING:
+        await this.handleFetchPending(conn, payload as FetchPendingPayload, requestId);
+        break;
+
+      // TODO: Add groups, calls handlers in later steps
 
       default:
         logger.warn({ type }, 'Unknown message type');
@@ -343,6 +372,101 @@ export class WsGateway {
     if (conn.whisperId) {
       await connectionManager.refreshPresence(conn.whisperId);
     }
+  }
+
+  // ===========================================================================
+  // MESSAGING HANDLERS
+  // ===========================================================================
+
+  private async handleSendMessage(
+    conn: Connection,
+    payload: SendMessagePayload,
+    requestId?: string
+  ): Promise<void> {
+    if (!conn.whisperId) {
+      this.sendError(conn.ws, 'NOT_REGISTERED', 'Not authenticated', requestId);
+      return;
+    }
+
+    const result = await messageRouter.routeMessage(payload, conn.whisperId);
+
+    if (!result.success || !result.data) {
+      this.sendError(
+        conn.ws,
+        result.error?.code || 'INTERNAL_ERROR',
+        result.error?.message || 'Failed to route message',
+        requestId
+      );
+      return;
+    }
+
+    this.send(conn.ws, {
+      type: MessageTypes.MESSAGE_ACCEPTED,
+      requestId,
+      payload: result.data,
+    });
+  }
+
+  private async handleDeliveryReceipt(
+    conn: Connection,
+    payload: DeliveryReceiptPayload,
+    requestId?: string
+  ): Promise<void> {
+    if (!conn.whisperId) {
+      this.sendError(conn.ws, 'NOT_REGISTERED', 'Not authenticated', requestId);
+      return;
+    }
+
+    const result = await messageRouter.handleReceipt(payload, conn.whisperId);
+
+    if (!result.success) {
+      this.sendError(
+        conn.ws,
+        result.error?.code || 'INTERNAL_ERROR',
+        result.error?.message || 'Failed to process receipt',
+        requestId
+      );
+      return;
+    }
+
+    // Notify original sender if they're online
+    if (result.senderNotification && result.senderWhisperId) {
+      connectionManager.sendToUser(result.senderWhisperId, {
+        type: MessageTypes.MESSAGE_DELIVERED,
+        payload: result.senderNotification,
+      });
+    }
+
+    // No response needed for receipt, but we could send an ACK
+  }
+
+  private async handleFetchPending(
+    conn: Connection,
+    payload: FetchPendingPayload,
+    requestId?: string
+  ): Promise<void> {
+    if (!conn.whisperId) {
+      this.sendError(conn.ws, 'NOT_REGISTERED', 'Not authenticated', requestId);
+      return;
+    }
+
+    const result = await messageRouter.fetchPending(payload, conn.whisperId);
+
+    if (!result.success || !result.data) {
+      this.sendError(
+        conn.ws,
+        result.error?.code || 'INTERNAL_ERROR',
+        result.error?.message || 'Failed to fetch pending',
+        requestId
+      );
+      return;
+    }
+
+    this.send(conn.ws, {
+      type: MessageTypes.PENDING_MESSAGES,
+      requestId,
+      payload: result.data,
+    });
   }
 
   // ===========================================================================

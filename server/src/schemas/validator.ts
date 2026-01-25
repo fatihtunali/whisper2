@@ -15,6 +15,11 @@ import {
   sessionRefreshSchema,
   logoutSchema,
 } from './auth.schema';
+import {
+  sendMessageSchema,
+  deliveryReceiptSchema,
+  fetchPendingSchema,
+} from './messaging.schema';
 
 // =============================================================================
 // AJV INSTANCE
@@ -52,6 +57,11 @@ validators.set('ping', ajv.compile({
   required: ['timestamp'],
   additionalProperties: false,
 }));
+
+// Messaging schemas
+validators.set('send_message', ajv.compile(sendMessageSchema));
+validators.set('delivery_receipt', ajv.compile(deliveryReceiptSchema));
+validators.set('fetch_pending', ajv.compile(fetchPendingSchema));
 
 // =============================================================================
 // VALIDATION FUNCTIONS
