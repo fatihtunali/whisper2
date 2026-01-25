@@ -33,6 +33,7 @@ import {
   SendMessagePayload,
   DeliveryReceiptPayload,
   FetchPendingPayload,
+  UpdateTokensPayload,
 } from '../types/protocol';
 import { messageRouter } from '../services/MessageRouter';
 import {
@@ -270,6 +271,11 @@ export class WsGateway {
 
       case MessageTypes.GROUP_SEND_MESSAGE:
         await this.handleGroupSendMessage(conn, payload as GroupSendMessagePayload, requestId);
+        break;
+
+      // Push token update handler
+      case MessageTypes.UPDATE_TOKENS:
+        await this.handleUpdateTokens(conn, payload as UpdateTokensPayload, requestId);
         break;
 
       // TODO: Add calls handlers in later steps
@@ -569,6 +575,45 @@ export class WsGateway {
       type: MessageTypes.MESSAGE_ACCEPTED,
       requestId,
       payload: result.data,
+    });
+  }
+
+  // ===========================================================================
+  // PUSH TOKEN HANDLERS
+  // ===========================================================================
+
+  private async handleUpdateTokens(
+    conn: Connection,
+    payload: UpdateTokensPayload,
+    requestId?: string
+  ): Promise<void> {
+    if (!conn.whisperId || !conn.deviceId) {
+      this.sendError(conn.ws, 'NOT_REGISTERED', 'Not authenticated', requestId);
+      return;
+    }
+
+    const result = await authService.updateTokens(
+      conn.whisperId,
+      conn.deviceId,
+      payload.pushToken,
+      payload.voipToken
+    );
+
+    if (!result.success) {
+      this.sendError(
+        conn.ws,
+        (result.error?.code as ErrorCode) || 'INTERNAL_ERROR',
+        result.error?.message || 'Failed to update tokens',
+        requestId
+      );
+      return;
+    }
+
+    // Send ACK
+    this.send(conn.ws, {
+      type: 'tokens_updated',
+      requestId,
+      payload: { success: true },
     });
   }
 

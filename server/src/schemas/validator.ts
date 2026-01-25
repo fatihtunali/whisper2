@@ -14,6 +14,7 @@ import {
   registerProofSchema,
   sessionRefreshSchema,
   logoutSchema,
+  updateTokensSchema,
 } from './auth.schema';
 import {
   sendMessageSchema,
@@ -52,6 +53,7 @@ validators.set('register_begin', ajv.compile(registerBeginSchema));
 validators.set('register_proof', ajv.compile(registerProofSchema));
 validators.set('session_refresh', ajv.compile(sessionRefreshSchema));
 validators.set('logout', ajv.compile(logoutSchema));
+validators.set('update_tokens', ajv.compile(updateTokensSchema));
 
 // Ping schema
 validators.set('ping', ajv.compile({

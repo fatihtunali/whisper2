@@ -21,6 +21,7 @@ import {
   isTimestampValid,
   isValidNonce,
 } from '../utils/crypto';
+import { pushService } from './PushService';
 import {
   ErrorCode,
   MessageReceivedPayload,
@@ -620,8 +621,16 @@ export class GroupService {
       });
 
       if (!delivered) {
+        // Check pending count BEFORE storing
+        const pendingCountBefore = await pushService.getPendingCountBefore(envelope.to);
+
         // Store in pending queue
         await this.storePending(envelope.to, messageReceived);
+
+        // Trigger push only on 0→1 transition
+        if (pendingCountBefore === 0) {
+          await pushService.sendWake(envelope.to, 'message');
+        }
       }
 
       // Grant attachment access

@@ -491,6 +491,67 @@ export class AuthService {
     }
   }
 
+  /**
+   * Update push tokens for an existing device.
+   * Called via WS update_tokens message.
+   */
+  async updateTokens(
+    whisperId: string,
+    deviceId: string,
+    pushToken?: string,
+    voipToken?: string
+  ): Promise<{ success: boolean; error?: { code: string; message: string } }> {
+    try {
+      // Check device exists
+      const result = await query(
+        `SELECT device_id FROM devices WHERE whisper_id = $1 AND device_id = $2`,
+        [whisperId, deviceId]
+      );
+
+      if (result.rows.length === 0) {
+        return {
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Device not found' },
+        };
+      }
+
+      // Update tokens (only update provided tokens, preserve existing if not provided)
+      const updates: string[] = [];
+      const values: (string | null)[] = [];
+      let paramIndex = 1;
+
+      if (pushToken !== undefined) {
+        updates.push(`push_token = $${paramIndex++}`);
+        values.push(pushToken || null);
+      }
+      if (voipToken !== undefined) {
+        updates.push(`voip_token = $${paramIndex++}`);
+        values.push(voipToken || null);
+      }
+
+      if (updates.length > 0) {
+        updates.push(`updated_at = NOW()`);
+        values.push(whisperId, deviceId);
+
+        await query(
+          `UPDATE devices SET ${updates.join(', ')}
+           WHERE whisper_id = $${paramIndex++} AND device_id = $${paramIndex}`,
+          values
+        );
+
+        logger.info({ whisperId, deviceId }, 'Push tokens updated');
+      }
+
+      return { success: true };
+    } catch (err) {
+      logger.error({ err, whisperId, deviceId }, 'Failed to update tokens');
+      return {
+        success: false,
+        error: { code: 'INTERNAL_ERROR', message: 'Failed to update tokens' },
+      };
+    }
+  }
+
   private async upsertDevice(
     whisperId: string,
     deviceId: string,

@@ -12,6 +12,7 @@ import {
   RegisterProofPayload,
   SessionRefreshPayload,
   LogoutPayload,
+  UpdateTokensPayload,
   PROTOCOL_VERSION,
   CRYPTO_VERSION,
 } from '../types/protocol';
@@ -176,6 +177,41 @@ export const logoutSchema: JSONSchemaType<LogoutPayload> = {
       type: 'string',
       minLength: 32,
       maxLength: 64,
+    },
+  },
+  required: ['protocolVersion', 'cryptoVersion', 'sessionToken'],
+  additionalProperties: false,
+};
+
+// =============================================================================
+// UPDATE_TOKENS SCHEMA (Section 8 - Push Tokens)
+// =============================================================================
+
+export const updateTokensSchema: JSONSchemaType<UpdateTokensPayload> = {
+  type: 'object',
+  properties: {
+    protocolVersion: {
+      type: 'integer',
+      const: PROTOCOL_VERSION,
+    },
+    cryptoVersion: {
+      type: 'integer',
+      const: CRYPTO_VERSION,
+    },
+    sessionToken: {
+      type: 'string',
+      minLength: 32,
+      maxLength: 64,
+    },
+    pushToken: {
+      type: 'string',
+      maxLength: 512,
+      nullable: true,
+    },
+    voipToken: {
+      type: 'string',
+      maxLength: 512,
+      nullable: true,
     },
   },
   required: ['protocolVersion', 'cryptoVersion', 'sessionToken'],

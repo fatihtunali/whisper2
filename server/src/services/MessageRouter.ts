@@ -19,6 +19,7 @@ import {
   isTimestampValid,
   isValidNonce,
 } from '../utils/crypto';
+import { pushService } from './PushService';
 import {
   SendMessagePayload,
   DeliveryReceiptPayload,
@@ -376,12 +377,17 @@ export class MessageRouter {
     if (delivered) {
       logger.info({ messageId, from, to }, 'Message delivered online');
     } else {
-      // 11. Recipient offline - store in pending queue
+      // 11. Recipient offline - check pending count BEFORE storing
+      const pendingCountBefore = await pushService.getPendingCountBefore(to);
+
+      // Store in pending queue
       await this.storePending(to, messageReceived);
       logger.info({ messageId, from, to }, 'Message stored in pending queue');
 
-      // TODO: Trigger push notification (Step 3/4)
-      // await pushService.sendWakeUp(to, { messageId, from });
+      // 12. Trigger push notification only on 0→1 transition
+      if (pendingCountBefore === 0) {
+        await pushService.sendWake(to, 'message');
+      }
     }
 
     // 12. Grant attachment access to recipient (Step 4)

@@ -33,6 +33,9 @@ export const TTL = {
 
   /** Rate limit window - 1 minute */
   RATE_LIMIT: 60,
+
+  /** Push suppress window - 30 seconds (prevents notification spam) */
+  PUSH_SUPPRESS: 30,
 } as const;
 
 // =============================================================================
@@ -113,6 +116,15 @@ export const RedisKeys = {
    * No TTL: removed on disconnect
    */
   userConnection: (whisperId: string): string => `user_conn:${whisperId}`,
+
+  /**
+   * Push suppress key: prevents notification spam
+   * Value: "1"
+   * TTL: 30 seconds
+   * Used for coalescing multiple pushes into one
+   */
+  pushSuppress: (whisperId: string, reason: string): string =>
+    `push_suppress:${whisperId}:${reason}`,
 } as const;
 
 // =============================================================================
