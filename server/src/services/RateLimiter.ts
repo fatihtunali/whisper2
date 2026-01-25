@@ -68,9 +68,9 @@ export const RATE_LIMITS: Record<string, RateLimitConfig> = {
 
 // Stricter limits for IP-based (unauthenticated)
 export const IP_RATE_LIMITS: Record<string, RateLimitConfig> = {
-  register_begin: { maxRequests: 20, windowSeconds: 60 },
-  register_proof: { maxRequests: 20, windowSeconds: 60 },
-  ws_connect: { maxRequests: 20, windowSeconds: 60 },
+  register_begin: { maxRequests: 30, windowSeconds: 60 },
+  register_proof: { maxRequests: 30, windowSeconds: 60 },
+  ws_connect: { maxRequests: 60, windowSeconds: 60 },
   default: { maxRequests: 100, windowSeconds: 60 },
 };
 
