@@ -35,6 +35,12 @@ import {
   FetchPendingPayload,
 } from '../types/protocol';
 import { messageRouter } from '../services/MessageRouter';
+import {
+  groupService,
+  GroupCreatePayload,
+  GroupUpdatePayload,
+  GroupSendMessagePayload,
+} from '../services/GroupService';
 
 // =============================================================================
 // CONSTANTS
@@ -253,7 +259,20 @@ export class WsGateway {
         await this.handleFetchPending(conn, payload as FetchPendingPayload, requestId);
         break;
 
-      // TODO: Add groups, calls handlers in later steps
+      // Group handlers
+      case MessageTypes.GROUP_CREATE:
+        await this.handleGroupCreate(conn, payload as GroupCreatePayload, requestId);
+        break;
+
+      case MessageTypes.GROUP_UPDATE:
+        await this.handleGroupUpdate(conn, payload as GroupUpdatePayload, requestId);
+        break;
+
+      case MessageTypes.GROUP_SEND_MESSAGE:
+        await this.handleGroupSendMessage(conn, payload as GroupSendMessagePayload, requestId);
+        break;
+
+      // TODO: Add calls handlers in later steps
 
       default:
         logger.warn({ type }, 'Unknown message type');
@@ -464,6 +483,90 @@ export class WsGateway {
 
     this.send(conn.ws, {
       type: MessageTypes.PENDING_MESSAGES,
+      requestId,
+      payload: result.data,
+    });
+  }
+
+  // ===========================================================================
+  // GROUP HANDLERS
+  // ===========================================================================
+
+  private async handleGroupCreate(
+    conn: Connection,
+    payload: GroupCreatePayload,
+    requestId?: string
+  ): Promise<void> {
+    if (!conn.whisperId) {
+      this.sendError(conn.ws, 'NOT_REGISTERED', 'Not authenticated', requestId);
+      return;
+    }
+
+    const result = await groupService.createGroup(payload, conn.whisperId);
+
+    if (!result.success || !result.data) {
+      this.sendError(
+        conn.ws,
+        result.error?.code || 'INTERNAL_ERROR',
+        result.error?.message || 'Failed to create group',
+        requestId
+      );
+      return;
+    }
+
+    // group_event is already emitted by groupService to all members
+    // No additional response needed as creator receives group_event too
+  }
+
+  private async handleGroupUpdate(
+    conn: Connection,
+    payload: GroupUpdatePayload,
+    requestId?: string
+  ): Promise<void> {
+    if (!conn.whisperId) {
+      this.sendError(conn.ws, 'NOT_REGISTERED', 'Not authenticated', requestId);
+      return;
+    }
+
+    const result = await groupService.updateGroup(payload, conn.whisperId);
+
+    if (!result.success) {
+      this.sendError(
+        conn.ws,
+        result.error?.code || 'INTERNAL_ERROR',
+        result.error?.message || 'Failed to update group',
+        requestId
+      );
+      return;
+    }
+
+    // group_event is already emitted by groupService to all affected members
+  }
+
+  private async handleGroupSendMessage(
+    conn: Connection,
+    payload: GroupSendMessagePayload,
+    requestId?: string
+  ): Promise<void> {
+    if (!conn.whisperId) {
+      this.sendError(conn.ws, 'NOT_REGISTERED', 'Not authenticated', requestId);
+      return;
+    }
+
+    const result = await groupService.sendGroupMessage(payload, conn.whisperId);
+
+    if (!result.success || !result.data) {
+      this.sendError(
+        conn.ws,
+        result.error?.code || 'INTERNAL_ERROR',
+        result.error?.message || 'Failed to send group message',
+        requestId
+      );
+      return;
+    }
+
+    this.send(conn.ws, {
+      type: MessageTypes.MESSAGE_ACCEPTED,
       requestId,
       payload: result.data,
     });

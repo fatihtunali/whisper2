@@ -20,6 +20,11 @@ import {
   deliveryReceiptSchema,
   fetchPendingSchema,
 } from './messaging.schema';
+import {
+  groupCreateSchema,
+  groupUpdateSchema,
+  groupSendMessageSchema,
+} from './group.schema';
 
 // =============================================================================
 // AJV INSTANCE
@@ -62,6 +67,11 @@ validators.set('ping', ajv.compile({
 validators.set('send_message', ajv.compile(sendMessageSchema));
 validators.set('delivery_receipt', ajv.compile(deliveryReceiptSchema));
 validators.set('fetch_pending', ajv.compile(fetchPendingSchema));
+
+// Group schemas
+validators.set('group_create', ajv.compile(groupCreateSchema));
+validators.set('group_update', ajv.compile(groupUpdateSchema));
+validators.set('group_send_message', ajv.compile(groupSendMessageSchema));
 
 // =============================================================================
 // VALIDATION FUNCTIONS

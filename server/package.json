@@ -11,7 +11,8 @@
     "test:step2": "npx ts-node --transpile-only tests/step2-messaging.test.ts",
     "test:step3": "npx ts-node --transpile-only tests/step3-contacts-backup.test.ts",
     "test:step4": "npx ts-node --transpile-only tests/step4-attachments.test.ts",
-    "test": "npm run test:step2 && npm run test:step3 && npm run test:step4"
+    "test:step5": "npx ts-node --transpile-only tests/step5-groups.test.ts",
+    "test": "npm run test:step2 && npm run test:step3 && npm run test:step4 && npm run test:step5"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.975.0",

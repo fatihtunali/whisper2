@@ -181,6 +181,7 @@ export interface MessageAcceptedPayload {
 // This simplifies cross-platform decoding (Swift, Kotlin, TS)
 export interface MessageReceivedPayload {
   messageId: string;
+  groupId?: string; // present for group messages
   from: string;
   to: string;
   msgType: MessageType;
@@ -391,7 +392,7 @@ export const MessageTypes = {
 
   // Groups
   GROUP_CREATE: 'group_create',
-  GROUP_CREATE_ACK: 'group_create_ack',
+  GROUP_EVENT: 'group_event',
   GROUP_UPDATE: 'group_update',
   GROUP_SEND_MESSAGE: 'group_send_message',
 
