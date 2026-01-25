@@ -451,11 +451,12 @@ async function test5_FetchPending(
     await clientB.connected;
 
     // B needs to re-register with same keys to get same whisperId
-    // Since we use single-active-device, we register as a new session
+    // For recovery, client must pass whisperId in register_begin
     const newDeviceId = uuidv4();
     clientB.send('register_begin', {
       protocolVersion: PROTOCOL_VERSION,
       cryptoVersion: CRYPTO_VERSION,
+      whisperId: clientBWhisperId, // RECOVERY: pass existing whisperId
       deviceId: newDeviceId,
       platform: 'ios',
     }, 'reg-b1');
@@ -480,6 +481,7 @@ async function test5_FetchPending(
       challengeId: challenge.payload.challengeId,
       deviceId: newDeviceId,
       platform: 'ios',
+      whisperId: clientBWhisperId, // RECOVERY: pass existing whisperId
       encPublicKey: clientBKeys.encPublicKey,
       signPublicKey: clientBKeys.signPublicKey,
       signature: signature.toString('base64'),
