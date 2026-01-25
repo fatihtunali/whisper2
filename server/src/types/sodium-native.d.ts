@@ -11,8 +11,10 @@ declare module 'sodium-native' {
   export const crypto_box_PUBLICKEYBYTES: number;
   export const crypto_box_SECRETKEYBYTES: number;
   export const crypto_box_NONCEBYTES: number;
+  export const crypto_box_MACBYTES: number;
   export const crypto_secretbox_NONCEBYTES: number;
   export const crypto_secretbox_KEYBYTES: number;
+  export const crypto_secretbox_MACBYTES: number;
 
   // Random
   export function randombytes_buf(buffer: Buffer): void;
