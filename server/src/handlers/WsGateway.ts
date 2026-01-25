@@ -502,9 +502,12 @@ export class WsGateway {
       return;
     }
 
+    logger.debug({ memberCount: payload.memberIds?.length, requestId }, 'handleGroupCreate called');
+
     const result = await groupService.createGroup(payload, conn.whisperId);
 
     if (!result.success || !result.data) {
+      logger.info({ code: result.error?.code, message: result.error?.message, requestId }, 'Group create failed, sending error');
       this.sendError(
         conn.ws,
         result.error?.code || 'INTERNAL_ERROR',
@@ -528,9 +531,12 @@ export class WsGateway {
       return;
     }
 
+    logger.debug({ groupId: payload.groupId, requestId }, 'handleGroupUpdate called');
+
     const result = await groupService.updateGroup(payload, conn.whisperId);
 
     if (!result.success) {
+      logger.info({ code: result.error?.code, message: result.error?.message, requestId }, 'Group update failed, sending error');
       this.sendError(
         conn.ws,
         result.error?.code || 'INTERNAL_ERROR',
@@ -540,6 +546,7 @@ export class WsGateway {
       return;
     }
 
+    logger.debug({ groupId: payload.groupId, requestId }, 'Group update succeeded');
     // group_event is already emitted by groupService to all affected members
   }
 
@@ -588,6 +595,7 @@ export class WsGateway {
     message: string,
     requestId?: string
   ): void {
+    logger.debug({ code, message, requestId, wsState: ws.readyState }, 'Sending error');
     const errorPayload: ErrorPayload = {
       code,
       message,
