@@ -489,8 +489,8 @@ export function createHttpRouter(): Router {
       // Calculate size
       const sizeBytes = Buffer.from(ciphertext, 'base64').length;
 
-      // Max backup size: 1MB (plenty for contact lists)
-      const MAX_BACKUP_SIZE = 1024 * 1024;
+      // Max backup size: 256KB (plenty for contact lists)
+      const MAX_BACKUP_SIZE = 256 * 1024;
       if (sizeBytes > MAX_BACKUP_SIZE) {
         res.status(400).json({
           error: 'INVALID_PAYLOAD',

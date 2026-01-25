@@ -686,6 +686,84 @@ async function test12_PutBackup401(): Promise<boolean> {
   }
 }
 
+async function test13_PutBackupInvalidBase64(): Promise<boolean> {
+  console.log('\nTest 13: PUT /backup/contacts validates base64 format');
+
+  let client: WsClient | null = null;
+
+  try {
+    client = await createClient();
+    await registerClient(client);
+
+    const nonce = generateNonce();
+    const invalidCiphertext = 'not-valid-base64!!!@@@'; // Invalid base64
+
+    const resp = await httpRequest(
+      'PUT',
+      '/backup/contacts',
+      { nonce, ciphertext: invalidCiphertext },
+      { Authorization: `Bearer ${client.sessionToken}` }
+    );
+
+    if (resp.status !== 400) {
+      throw new Error(`Expected 400, got ${resp.status}`);
+    }
+
+    console.log('  Got 400 for invalid base64');
+    console.log('  PASSED');
+    return true;
+  } catch (e) {
+    console.log('  FAILED:', e);
+    return false;
+  } finally {
+    client?.close();
+  }
+}
+
+async function test14_KeysReturnsStatus(): Promise<boolean> {
+  console.log('\nTest 14: Keys endpoint returns status field');
+
+  let clientA: WsClient | null = null;
+  let clientB: WsClient | null = null;
+
+  try {
+    clientA = await createClient();
+    clientB = await createClient();
+
+    await registerClient(clientA);
+    await registerClient(clientB);
+
+    const resp = await httpRequest(
+      'GET',
+      `/users/${clientB.whisperId}/keys`,
+      null,
+      { Authorization: `Bearer ${clientA.sessionToken}` }
+    );
+
+    if (resp.status !== 200) {
+      throw new Error(`Expected 200, got ${resp.status}`);
+    }
+
+    if (!resp.data.status) {
+      throw new Error('Response missing status field');
+    }
+
+    if (resp.data.status !== 'active') {
+      throw new Error(`Expected status=active, got ${resp.data.status}`);
+    }
+
+    console.log('  Keys response includes status: active');
+    console.log('  PASSED');
+    return true;
+  } catch (e) {
+    console.log('  FAILED:', e);
+    return false;
+  } finally {
+    clientA?.close();
+    clientB?.close();
+  }
+}
+
 // =============================================================================
 // MAIN
 // =============================================================================
@@ -734,6 +812,12 @@ async function runTests(): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, 300));
 
   results.push({ name: 'Test 12: PUT backup 401', passed: await test12_PutBackup401() });
+  await new Promise(resolve => setTimeout(resolve, 300));
+
+  results.push({ name: 'Test 13: PUT backup invalid base64', passed: await test13_PutBackupInvalidBase64() });
+  await new Promise(resolve => setTimeout(resolve, 300));
+
+  results.push({ name: 'Test 14: Keys returns status', passed: await test14_KeysReturnsStatus() });
 
   // Summary
   console.log('\n========================================');
