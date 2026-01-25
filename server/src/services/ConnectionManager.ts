@@ -1,0 +1,294 @@
+/**
+ * Whisper2 Connection Manager
+ * Following WHISPER-REBUILD.md Section 12.1
+ *
+ * Maps WebSocket connections to identities:
+ * - connId ↔ whisperId
+ * - Handles presence updates on connect/disconnect
+ */
+
+import { WebSocket } from 'ws';
+import { v4 as uuidv4 } from 'uuid';
+import { RedisKeys, TTL, PresenceData } from '../db/redis-keys';
+import * as redis from '../db/redis';
+import { logger } from '../utils/logger';
+import { SessionData } from '../db/redis-keys';
+
+// =============================================================================
+// TYPES
+// =============================================================================
+
+export interface Connection {
+  connId: string;
+  ws: WebSocket;
+  ip: string;
+  whisperId?: string;
+  deviceId?: string;
+  platform?: 'ios' | 'android';
+  sessionToken?: string;
+  authenticatedAt?: number;
+  lastActivity: number;
+}
+
+// =============================================================================
+// CONNECTION MANAGER
+// =============================================================================
+
+export class ConnectionManager {
+  /** In-memory map: connId → Connection */
+  private connections: Map<string, Connection> = new Map();
+
+  /** In-memory map: whisperId → connId (for fast lookup) */
+  private userConnections: Map<string, string> = new Map();
+
+  /**
+   * Register a new WebSocket connection.
+   * Returns a unique connection ID.
+   */
+  createConnection(ws: WebSocket, ip: string): string {
+    const connId = uuidv4();
+    const conn: Connection = {
+      connId,
+      ws,
+      ip,
+      lastActivity: Date.now(),
+    };
+
+    this.connections.set(connId, conn);
+
+    logger.debug({ connId, ip }, 'Connection created');
+
+    return connId;
+  }
+
+  /**
+   * Get connection by ID.
+   */
+  getConnection(connId: string): Connection | undefined {
+    return this.connections.get(connId);
+  }
+
+  /**
+   * Get connection by whisperId.
+   */
+  getConnectionByUser(whisperId: string): Connection | undefined {
+    const connId = this.userConnections.get(whisperId);
+    if (!connId) return undefined;
+    return this.connections.get(connId);
+  }
+
+  /**
+   * Check if user is connected.
+   */
+  isUserConnected(whisperId: string): boolean {
+    return this.userConnections.has(whisperId);
+  }
+
+  /**
+   * Authenticate a connection after successful register_proof.
+   * Links the connection to a whisperId.
+   */
+  async authenticateConnection(
+    connId: string,
+    session: SessionData,
+    sessionToken: string
+  ): Promise<void> {
+    const conn = this.connections.get(connId);
+    if (!conn) {
+      throw new Error(`Connection ${connId} not found`);
+    }
+
+    const { whisperId, deviceId, platform } = session;
+
+    // If user was already connected elsewhere, kick old connection
+    const oldConnId = this.userConnections.get(whisperId);
+    if (oldConnId && oldConnId !== connId) {
+      await this.kickConnection(oldConnId, 'new_session');
+    }
+
+    // Update connection with auth info
+    conn.whisperId = whisperId;
+    conn.deviceId = deviceId;
+    conn.platform = platform;
+    conn.sessionToken = sessionToken;
+    conn.authenticatedAt = Date.now();
+    conn.lastActivity = Date.now();
+
+    // Map user to connection
+    this.userConnections.set(whisperId, connId);
+
+    // Store in Redis for distributed access (if multi-node)
+    await redis.setWithTTL(
+      RedisKeys.connection(connId),
+      whisperId,
+      TTL.SESSION
+    );
+    await redis.setWithTTL(
+      RedisKeys.userConnection(whisperId),
+      connId,
+      TTL.SESSION
+    );
+
+    // Set presence
+    await this.setPresence(whisperId, connId, platform);
+
+    logger.info({ connId, whisperId, deviceId, platform }, 'Connection authenticated');
+  }
+
+  /**
+   * Remove a connection on disconnect or kick.
+   */
+  async removeConnection(connId: string, reason?: string): Promise<void> {
+    const conn = this.connections.get(connId);
+    if (!conn) return;
+
+    const { whisperId, deviceId } = conn;
+
+    // Remove from maps
+    this.connections.delete(connId);
+    if (whisperId) {
+      // Only remove user mapping if this is the current connection
+      const currentConnId = this.userConnections.get(whisperId);
+      if (currentConnId === connId) {
+        this.userConnections.delete(whisperId);
+      }
+    }
+
+    // Clean up Redis
+    await redis.del(RedisKeys.connection(connId));
+    if (whisperId) {
+      // Only remove if this was the active connection
+      const redisConnId = await redis.get(RedisKeys.userConnection(whisperId));
+      if (redisConnId === connId) {
+        await redis.del(RedisKeys.userConnection(whisperId));
+        await this.clearPresence(whisperId);
+      }
+    }
+
+    logger.info(
+      { connId, whisperId, deviceId, reason },
+      'Connection removed'
+    );
+  }
+
+  /**
+   * Kick a connection (force disconnect).
+   */
+  async kickConnection(connId: string, reason: string): Promise<void> {
+    const conn = this.connections.get(connId);
+    if (!conn) return;
+
+    logger.info({ connId, whisperId: conn.whisperId, reason }, 'Kicking connection');
+
+    // Send kick message before closing
+    try {
+      if (conn.ws.readyState === WebSocket.OPEN) {
+        conn.ws.send(
+          JSON.stringify({
+            type: 'error',
+            payload: {
+              code: 'AUTH_FAILED',
+              message: `Session terminated: ${reason}`,
+            },
+          })
+        );
+        conn.ws.close(4001, reason);
+      }
+    } catch (err) {
+      logger.error({ err, connId }, 'Error kicking connection');
+    }
+
+    await this.removeConnection(connId, reason);
+  }
+
+  /**
+   * Update last activity timestamp.
+   */
+  touchConnection(connId: string): void {
+    const conn = this.connections.get(connId);
+    if (conn) {
+      conn.lastActivity = Date.now();
+    }
+  }
+
+  /**
+   * Get all connection IDs (for admin/metrics).
+   */
+  getAllConnectionIds(): string[] {
+    return Array.from(this.connections.keys());
+  }
+
+  /**
+   * Get count of active connections.
+   */
+  getConnectionCount(): number {
+    return this.connections.size;
+  }
+
+  /**
+   * Get count of authenticated connections.
+   */
+  getAuthenticatedCount(): number {
+    return this.userConnections.size;
+  }
+
+  /**
+   * Send message to a specific user if connected.
+   * Returns true if sent, false if user not connected.
+   */
+  sendToUser(whisperId: string, message: object): boolean {
+    const conn = this.getConnectionByUser(whisperId);
+    if (!conn || conn.ws.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+
+    try {
+      conn.ws.send(JSON.stringify(message));
+      return true;
+    } catch (err) {
+      logger.error({ err, whisperId }, 'Failed to send message to user');
+      return false;
+    }
+  }
+
+  // ===========================================================================
+  // PRESENCE HELPERS
+  // ===========================================================================
+
+  private async setPresence(
+    whisperId: string,
+    connId: string,
+    platform: 'ios' | 'android'
+  ): Promise<void> {
+    const presenceData: PresenceData = {
+      connId,
+      lastSeen: Date.now(),
+      platform,
+    };
+
+    await redis.setWithTTL(
+      RedisKeys.presence(whisperId),
+      JSON.stringify(presenceData),
+      TTL.PRESENCE
+    );
+
+    // TODO: Broadcast presence to relevant contacts
+  }
+
+  private async clearPresence(whisperId: string): Promise<void> {
+    await redis.del(RedisKeys.presence(whisperId));
+    // TODO: Broadcast offline status to relevant contacts
+  }
+
+  /**
+   * Refresh presence TTL (call periodically on activity).
+   */
+  async refreshPresence(whisperId: string): Promise<void> {
+    const conn = this.getConnectionByUser(whisperId);
+    if (conn && conn.platform) {
+      await this.setPresence(whisperId, conn.connId, conn.platform);
+    }
+  }
+}
+
+export const connectionManager = new ConnectionManager();
