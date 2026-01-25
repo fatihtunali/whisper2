@@ -728,11 +728,7 @@ async function runTests(): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, 300));
 
   results.push({ name: 'Test 10: DELETE backup 404', passed: await test10_DeleteBackup404() });
-
-  // Longer delay before test 11 to avoid rate limit on registrations
-  // IP rate limit is 10 per 60 seconds, tests 1-10 used ~10 registrations
-  console.log('\n  (waiting 60s for rate limit window to reset...)');
-  await new Promise(resolve => setTimeout(resolve, 60000));
+  await new Promise(resolve => setTimeout(resolve, 300));
 
   results.push({ name: 'Test 11: PUT backup invalid nonce', passed: await test11_PutBackupInvalidNonce() });
   await new Promise(resolve => setTimeout(resolve, 300));
