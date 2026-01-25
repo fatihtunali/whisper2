@@ -56,6 +56,12 @@ export const RATE_LIMITS: Record<string, RateLimitConfig> = {
   session_refresh: { maxRequests: 10, windowSeconds: 60 },
   logout: { maxRequests: 10, windowSeconds: 60 },
 
+  // Key lookup (Step 3)
+  keys_lookup: { maxRequests: 30, windowSeconds: 60 }, // ~1 per 2 sec
+
+  // Contacts backup (Step 3)
+  contacts_backup: { maxRequests: 10, windowSeconds: 60 },
+
   // Default (for unknown actions)
   default: { maxRequests: 30, windowSeconds: 60 },
 };
