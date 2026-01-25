@@ -15,7 +15,8 @@
       "Bash(ssh root@142.93.136.228 \"sudo -u postgres psql -c \"\"CREATE USER whisper2 WITH PASSWORD ''Whisper2DbPass123!'';\"\" 2>&1 || echo ''User may already exist''\")",
       "Bash(ssh root@142.93.136.228:*)",
       "Bash(git commit -m \"$\\(cat <<''EOF''\nFix TypeScript compilation errors\n\n- Add QueryResultRow constraint to query generic\n- Add sodium-native type declarations\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(git commit:*)"
     ]
   }
 }

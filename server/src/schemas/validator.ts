@@ -43,6 +43,16 @@ validators.set('register_proof', ajv.compile(registerProofSchema));
 validators.set('session_refresh', ajv.compile(sessionRefreshSchema));
 validators.set('logout', ajv.compile(logoutSchema));
 
+// Ping schema
+validators.set('ping', ajv.compile({
+  type: 'object',
+  properties: {
+    timestamp: { type: 'number' },
+  },
+  required: ['timestamp'],
+  additionalProperties: false,
+}));
+
 // =============================================================================
 // VALIDATION FUNCTIONS
 // =============================================================================
