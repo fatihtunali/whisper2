@@ -1,0 +1,467 @@
+# Whisper Rebuild — Full Native + Full Server (From Scratch)
+
+**Goal:** Build the complete Whisper product end-to-end (native iOS + native Android + new server + push + media + groups + voice/video calls + admin + abuse tooling) with operational reliability as the top priority.
+
+**Core principles**
+- No phone/email. Identity = Whisper ID + 12-word seed phrase recovery.
+- Server is a relay/signaling/orchestrator with minimal durable metadata.
+- Content encryption happens client-side. Attachments are encrypted client-side before upload.
+- Reliability > “perfect crypto theater”: stable delivery, offline, background/push correctness.
+
+---
+
+## 1) End-to-End Architecture
+
+### Components
+1) **iOS App** (SwiftUI + MVVM + Combine)
+2) **Android App** (Kotlin + Compose + MVVM + Hilt)
+3) **Whisper Server**
+   - WebSocket Gateway (messaging + presence + call signaling)
+   - HTTP Admin API (reports/bans/health/metrics)
+4) **PostgreSQL**
+   - durable minimal metadata: users, devices, groups, bans, reports, audit
+5) **Redis**
+   - presence + ephemeral state + offline pending queues + rate limiting + pubsub
+6) **Object Storage** (S3-compatible)
+   - encrypted blobs for attachments
+7) **Push Providers**
+   - APNs (iOS) + FCM (Android)
+   - VoIP push token support on iOS for incoming calls
+8) **TURN/STUN** (coturn)
+   - WebRTC reliability behind NAT
+
+### High-level data flows
+**Messaging:**
+- Sender encrypts message → sends encrypted envelope to server → server routes or queues → recipient decrypts locally.
+
+**Attachments:**
+- Sender encrypts file bytes with random symmetric key → uploads encrypted blob to S3 → sends message containing blob reference + encrypted file key.
+
+**Calls:**
+- Signaling over WebSocket (offer/answer/ICE) → media is WebRTC P2P (TURN if needed) → OS-native call UI (CallKit/ConnectionService).
+
+---
+
+## 2) Contracts First (Non-negotiable)
+
+Before building UI, freeze these as the single source of truth:
+
+### 2.1 Protocol Contract (WebSocket message schemas)
+Create `docs/protocol.md` + server `src/types/protocol.ts`.
+
+**Client → Server**
+- register_begin
+- register_proof
+- update_tokens
+- send_message
+- delivery_receipt
+- fetch_pending
+- typing_start / typing_stop
+- presence_set (optional)
+- group_create
+- group_update (title, add/remove members, role changes)
+- group_send_message
+- call_initiate
+- call_answer
+- call_ice_candidate
+- call_end
+- get_turn_credentials
+- ping
+
+**Server → Client**
+- register_challenge
+- register_ack
+- tokens_updated
+- message_received
+- message_delivered
+- pending_messages
+- typing_event
+- presence_update
+- group_event (created/updated/member changes)
+- call_incoming
+- call_ringing
+- call_answer
+- call_ice_candidate
+- call_end
+- turn_credentials
+- error
+- pong
+
+**Standard error codes**
+- NOT_REGISTERED
+- AUTH_FAILED
+- INVALID_PAYLOAD
+- RATE_LIMITED
+- USER_BANNED
+- NOT_FOUND
+- FORBIDDEN
+- INTERNAL_ERROR
+
+### 2.2 Crypto Contract (format + encodings)
+Create `docs/crypto.md`.
+
+**Identity keys**
+- BIP39 12-word mnemonic -> seed
+- derive:
+  - X25519 keypair (encryption)
+  - Ed25519 keypair (signing)
+
+**1:1 message encryption**
+- nacl.box(plaintext, nonce, recipientPublicKey, senderPrivateKey)
+- nonce: 24 random bytes
+- all binary fields base64 encoded
+
+**Message envelope (canonical fields)**
+- messageId (UUID)
+- from, to (Whisper IDs)
+- type: text|image|voice|file|system
+- nonce (b64)
+- ciphertext (b64)
+- timestamp (ms)
+- replyTo? reactions? (optional)
+- attachment? (if any)
+
+**Attachments**
+- symmetric key: random 32 bytes
+- secretbox(fileBytes, nonce, symKey)
+- upload encrypted blob
+- include:
+  - objectKey, size, contentType, fileNonce
+  - encryptedSymKeyForRecipient (via nacl.box)
+
+**Group messaging (secure approaches)**
+Pick ONE and implement consistently:
+
+Option A — Pairwise fanout (recommended for correctness & simplicity)
+- Sender encrypts message separately for each member using nacl.box.
+- Server fanouts per-recipient envelopes.
+- Removing a member: no rekey needed for future messages.
+
+Option B — Real group key
+- Random 32-byte group key per group.
+- Distribute encrypted per member.
+- Rekey required on membership changes for strong guarantees.
+
+**Never** derive group key from groupId or other predictable identifiers.
+
+### 2.3 Golden Test Vectors (prevents cross-platform drift)
+Create `tests/vectors/` with:
+- fixed seed phrase -> expected keys (public/private)
+- fixed keys + nonce + plaintext -> expected ciphertext
+- signature test vectors
+Run these tests on iOS and Android. If vectors fail, stop and fix before proceeding.
+
+---
+
+## 3) Server Architecture (Rebuild from scratch)
+
+### 3.1 Server modules
+
+
+### 3.2 PostgreSQL schema (minimal but complete)
+**users**
+- whisper_id (PK)
+- enc_public_key (base64)
+- sign_public_key (base64)
+- created_at
+- status (active/banned/deleted)
+
+**devices**
+- id (PK)
+- whisper_id (FK)
+- platform (ios/android)
+- push_token
+- voip_token (iOS)
+- last_seen_at
+- updated_at
+
+**groups**
+- group_id (PK)
+- title
+- owner_whisper_id
+- created_at
+
+**group_members**
+- group_id (FK)
+- whisper_id (FK)
+- role (owner/admin/member)
+- joined_at
+
+**bans**
+- whisper_id
+- reason
+- created_at
+- expires_at
+
+**reports**
+- report_id
+- reporter_id
+- target_id
+- reason
+- created_at
+- status (open/closed)
+
+**audit_events**
+- id
+- type
+- actor_id
+- meta_json
+- created_at
+
+### 3.3 Redis keys (ephemeral)
+- presence:{whisperId} -> online/lastSeen (TTL)
+- pending:{whisperId} -> pending envelopes (TTL 72h)
+- ratelimit:{key}:{action} -> counters (TTL)
+- wsconn:{connId} -> state
+- call:{callId} -> call session state (TTL)
+
+### 3.4 Messaging reliability rules
+- messageId is generated client-side.
+- Server stores pending per recipient if offline.
+- Recipient acks delivery -> server removes from pending.
+- Dedup: client stores processed messageIds per conversation (or global recent set).
+
+### 3.5 Push strategy
+- Push is “wake-up”, not transport.
+- On offline delivery, server sends push.
+- App on push: connects WS + fetch_pending.
+- Push throttling: avoid spamming; coalesce pushes.
+
+### 3.6 Calls signaling
+- server routes offer/answer/ICE events by whisperId.
+- server issues TURN credentials (time-limited) for clients.
+
+### 3.7 Observability (must exist early)
+- structured logs (connId, whisperId, messageId, event, latency)
+- metrics:
+  - ws connections active
+  - pending queue sizes
+  - push send success/fail
+  - call setup success/fail
+  - error rates by code
+- health endpoints:
+  - GET /health
+  - GET /ready (checks postgres + redis)
+
+### 3.8 Rate limiting and abuse controls
+- per-IP and per-whisperId buckets
+- actions: register, send_message, fetch_pending, call events, group events
+- ban mechanism + report review workflow in admin API
+
+---
+
+## 4) iOS App Architecture (Native)
+
+### 4.1 Stack
+- SwiftUI
+- MVVM
+- Combine
+- WebSocket client (Starscream or URLSessionWebSocket)
+- Crypto: Swift wrapper around NaCl primitives (or libsodium/tweetnacl compatible)
+- Storage: SwiftData/CoreData
+- Key storage: Keychain
+- WebRTC: WebRTC iOS SDK
+- Call UI: CallKit
+- Push: APNs + VoIP Push (PushKit)
+
+### 4.2 Modules
+- App / Navigation
+- Auth (create/recover)
+- Crypto (keys, encrypt/decrypt, sign/verify)
+- Networking (WS client, retry, backoff)
+- Messaging (conversation state, sending pipeline, receipts)
+- Media (image picker, audio record/play, file handling)
+- Storage (SwiftData models, migrations)
+- Push (APNs, notification extension if needed)
+- Calls (WebRTC, CallKit, background audio session)
+- Security UX (AppLock PIN/biometric)
+
+### 4.3 iOS Data models (local)
+- LocalUser (keys, id, createdAt)
+- Contact (id, public keys, displayName)
+- Conversation
+- Message (id, type, ciphertext, nonce, status, timestamps, attachments meta)
+- Group (id, title, members)
+- OutgoingQueueItem
+- Settings (privacy, app lock, notifications)
+
+### 4.4 iOS “hard edge” checklist
+- background/foreground transitions (WS reconnect correctness)
+- APNs token refresh + update_tokens flow
+- notification tap handling -> fetch_pending
+- CallKit UUID and call session lifecycle correctness
+- audio session configuration for record/play + calls
+
+---
+
+## 5) Android App Architecture (Native)
+
+### 5.1 Stack
+- Kotlin
+- Jetpack Compose
+- MVVM + StateFlow
+- Hilt DI
+- WebSocket (OkHttp WebSocket)
+- Crypto: libsodium-jni or compatible NaCl implementation
+- Storage: Room
+- Key storage: Android Keystore + encrypted prefs
+- WebRTC: org.webrtc
+- Call UI: ConnectionService + full-screen intents
+- Push: FCM
+
+### 5.2 Modules
+- app/navigation
+- auth
+- crypto
+- ws
+- messaging
+- media
+- storage
+- push
+- calls
+- security (app lock)
+
+### 5.3 Android “hard edge” checklist
+- Doze / background restrictions for WS (use push+fetch)
+- FCM token refresh + update_tokens
+- Foreground service usage only when user actively records/does call
+- Notification channels: messages vs calls (high priority)
+- OEM quirks (Xiaomi/Huawei) – add in-app guidance
+
+---
+
+## 6) Full Build Plan (Single integrated plan, no “versions”)
+
+> This is the order that minimizes rework and avoids “we built UI but the core is unstable”.
+
+### Phase A — Freeze contracts + test vectors
+Deliverables:
+- protocol.md + crypto.md finalized
+- golden test vectors implemented and passing on iOS + Android (or in small harness)
+
+Exit criteria:
+- both platforms produce identical keys/ciphertext/signature results.
+
+### Phase B — Server foundation (auth + messaging + pending + push skeleton)
+Deliverables:
+- WS gateway with connection manager
+- auth (challenge + proof)
+- send_message routing + pending queues + delivery receipts
+- update_tokens storage
+- push sending integrated (APNs + FCM) with logs
+- rate limiting
+- health/ready + metrics
+
+Exit criteria:
+- with a simple test client: messages route, pending drains, push is triggered for offline.
+
+### Phase C — iOS full client build
+Deliverables:
+- identity create/recover + Keychain
+- WS connect/reconnect + register
+- full chat: text + reactions + reply + typing
+- offline outgoing queue + persistence
+- attachments: image + voice + file (encrypted upload + download)
+- groups (choose secure option and finish it end-to-end)
+- push: APNs + notification handling + fetch_pending
+- app lock (PIN/biometric)
+- calls: WebRTC + CallKit + background audio session + VoIP push for incoming calls
+- settings: privacy, presence, notifications
+
+Exit criteria:
+- iOS daily-usable: closed app receives message push; calls work reliably between two devices.
+
+### Phase D — Android full client build (mirror iOS behavior)
+Deliverables:
+- identity create/recover + Keystore
+- WS connect/reconnect + register
+- full chat parity: text + reactions + reply + typing
+- offline outgoing queue + Room persistence
+- attachments parity (encrypted upload/download)
+- groups parity
+- push: FCM + notification channels + fetch_pending
+- app lock parity
+- calls: WebRTC + ConnectionService + background constraints
+
+Exit criteria:
+- Android daily-usable: closed app receives push; calls work reliably between devices.
+
+### Phase E — Admin + abuse tooling + production hardening
+Deliverables:
+- admin API: reports, bans, unbans, stats
+- audit events
+- backups (postgres + redis snapshot strategy)
+- deployment scripts + infra docs
+- load test for WS + push throughput
+- disaster playbook (what to do when push breaks, redis down, etc.)
+
+Exit criteria:
+- you can operate it safely in production.
+
+---
+
+## 7) Deployment (Concrete baseline)
+
+### Server
+- Node.js 20 LTS + TypeScript
+- Nginx reverse proxy + TLS
+- PM2 or systemd
+- Postgres managed or self-hosted
+- Redis
+- S3-compatible storage
+- coturn on separate host or same (depending on load)
+
+### Environments
+- dev (local)
+- staging (real push credentials separated)
+- production
+
+### Secrets management
+- never commit keys/tokens
+- use env vars + secrets manager (or sealed secrets in CI)
+
+---
+
+## 8) CI/CD + Quality Gates
+
+### CI
+- lint + tests for server
+- protocol schema validation
+- crypto vectors tests on iOS/Android
+- build pipelines for both apps
+
+### Quality gates (must pass before release)
+- crypto vectors pass
+- push token update flow verified
+- offline queue + pending drain verified
+- call setup success rate above threshold
+- basic load test passes
+
+---
+
+## 9) “Stop the Bleeding” Debug Strategy (when it gets hard)
+
+When something breaks, log only what matters:
+- connectionId, whisperId, messageId, event, state transitions, durations
+Avoid logging secrets: tokens, keys, plaintext, raw ciphertext (if possible).
+
+Use a single “problem reproduction protocol”:
+- device A/B ids
+- exact time window
+- network state (wifi/cellular)
+- app state (foreground/background/killed)
+- expected vs actual
+
+---
+
+## 10) Definition of Complete
+Whisper is complete when:
+- Two new users can create identities and add each other by ID/QR.
+- Messages (text/image/voice/file) deliver reliably with offline + push.
+- Groups work correctly (membership changes behave correctly).
+- Calls (voice/video) work reliably with OS native call UI.
+- You can ban/report and see operational stats.
+- You can deploy/redeploy without breaking token state.
+
+
+“Full app in one go” hedefini teknik olarak tutturmanın tek yolu: bu markdown’daki Phase sırasına sadık kalmak. Yoksa aynı anda hem çağrı hem push hem offline queue yapınca her şey birbirine dolanır ve “baştan alıyorum” döngüsü tekrar başlar.

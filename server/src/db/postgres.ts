@@ -8,7 +8,7 @@
  * - attachments, contact_backups
  */
 
-import { Pool, PoolClient, QueryResult } from 'pg';
+import { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { logger } from '../utils/logger';
 
 // =============================================================================
@@ -46,7 +46,7 @@ export function getPool(): Pool {
 // QUERY HELPERS
 // =============================================================================
 
-export async function query<T = unknown>(
+export async function query<T extends QueryResultRow = QueryResultRow>(
   text: string,
   params?: unknown[]
 ): Promise<QueryResult<T>> {

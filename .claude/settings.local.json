@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(scp:*)",
+      "Bash(git init:*)",
+      "Bash(git remote add:*)",
+      "Bash(git branch:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nStep 1: Server foundation\n\n- PostgreSQL schema \\(users, devices, groups, bans, reports, etc.\\)\n- Redis keyspace definitions \\(sessions, challenges, pending, presence\\)\n- WebSocket auth flow \\(register_begin → register_challenge → register_proof → register_ack\\)\n- AuthService with single-active-device enforcement\n- ConnectionManager for socket ↔ identity mapping\n- RateLimiter \\(per IP + per whisperId\\)\n- AJV schema validation\n- Health endpoints \\(/health, /ready, /metrics\\)\n- Canonical signing format for message verification\n\nFollowing WHISPER-REBUILD.md spec exactly.\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git push:*)",
+      "Bash(ssh root@142.93.136.228 \"su - whisper2 -c ''cd ~ && git pull origin main 2>&1''\")",
+      "Bash(ssh root@142.93.136.228 \"su - whisper2 -c ''rm -rf ~/server ~/migrations && git checkout main && git pull origin main 2>&1''\")",
+      "Bash(ssh root@142.93.136.228 \"su - whisper2 -c ''ls -la ~ && git status''\")",
+      "Bash(ssh root@142.93.136.228 \"su - whisper2 -c ''find ~/server -type f | head -30''\")",
+      "Bash(ssh root@142.93.136.228 \"sudo -u postgres psql -c \"\"CREATE USER whisper2 WITH PASSWORD ''Whisper2DbPass123!'';\"\" 2>&1 || echo ''User may already exist''\")",
+      "Bash(ssh root@142.93.136.228:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nFix TypeScript compilation errors\n\n- Add QueryResultRow constraint to query generic\n- Add sodium-native type declarations\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
+    ]
+  }
+}
