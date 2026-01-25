@@ -67,11 +67,6 @@ export const RATE_LIMITS: Record<string, RateLimitConfig> = {
   attachment_presign_download: { maxRequests: 60, windowSeconds: 60 },
   attachment_gc: { maxRequests: 1, windowSeconds: 60 }, // Admin only, very rare
 
-  // Groups (Step 5)
-  group_create: { maxRequests: 5, windowSeconds: 60 },
-  group_update: { maxRequests: 10, windowSeconds: 60 },
-  group_send_message: { maxRequests: 60, windowSeconds: 60 },
-
   // Default (for unknown actions)
   default: { maxRequests: 30, windowSeconds: 60 },
 };
