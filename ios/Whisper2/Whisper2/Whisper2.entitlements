@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Push Notifications -->
+	<!-- Set to "development" for debug builds, "production" for release -->
+	<key>aps-environment</key>
+	<string>development</string>
+
+	<!-- Associated Domains (for Universal Links and future features) -->
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<!-- Universal Links -->
+		<string>applinks:whisper2.aiakademiturkiye.com</string>
+		<!-- Web Credentials (for shared password autofill) -->
+		<string>webcredentials:whisper2.aiakademiturkiye.com</string>
+	</array>
+
+	<!-- Keychain Access Groups -->
+	<!-- Allows sharing keychain items between app and extensions -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.whisper2.app</string>
+		<string>$(AppIdentifierPrefix)com.whisper2.app.share</string>
+		<string>$(AppIdentifierPrefix)com.whisper2.app.notification</string>
+	</array>
+
+	<!-- App Groups -->
+	<!-- Allows sharing data between app and extensions -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.whisper2.app</string>
+	</array>
+
+	<!-- Background Modes (Capability) -->
+	<!-- These are enabled via UIBackgroundModes in Info.plist -->
+	<!-- - voip: VoIP push notifications -->
+	<!-- - remote-notification: Silent push for message delivery -->
+	<!-- - fetch: Background app refresh -->
+	<!-- - audio: Audio playback during calls -->
+
+	<!-- Data Protection -->
+	<!-- Complete protection until first unlock -->
+	<key>com.apple.developer.default-data-protection</key>
+	<string>NSFileProtectionCompleteUntilFirstUserAuthentication</string>
+
+	<!-- Network Extensions (if implementing CallKit properly) -->
+	<!-- Uncomment if needed for advanced networking features -->
+	<!--
+	<key>com.apple.developer.networking.networkextension</key>
+	<array>
+		<string>packet-tunnel-provider</string>
+	</array>
+	-->
+
+	<!-- HealthKit (not needed for messaging, but included as example) -->
+	<!-- Uncomment if adding health-related features -->
+	<!--
+	<key>com.apple.developer.healthkit</key>
+	<true/>
+	<key>com.apple.developer.healthkit.access</key>
+	<array/>
+	-->
+
+	<!-- Siri (for future Siri Shortcuts integration) -->
+	<!-- Uncomment when adding Siri support -->
+	<!--
+	<key>com.apple.developer.siri</key>
+	<true/>
+	-->
+
+	<!-- In-App Payments (for future premium features) -->
+	<!-- Automatically enabled with App Store distribution -->
+	<!--
+	<key>com.apple.developer.in-app-payments</key>
+	<array>
+		<string>merchant.com.whisper2.app</string>
+	</array>
+	-->
+</dict>
+</plist>
