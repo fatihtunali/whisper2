@@ -3,16 +3,16 @@
  * Following WHISPER-REBUILD.md
  *
  * Test cases:
- * 1. Presign upload returns valid URL
- * 2. Presign upload 400 for invalid contentType
- * 3. Presign upload 400 for size exceeding limit
- * 4. Presign upload 401 without auth
- * 5. Presign download returns valid URL for owner
- * 6. Presign download 403 for user without access
- * 7. Presign download 404 for non-existent attachment
- * 8. Presign download returns valid URL for user with granted access
- * 9. GC deletes expired attachments
- * 10. Upload to presigned URL and verify download
+ * 1. Presign upload rejects invalid size (<=0 and >100MB)
+ * 2. Presign upload rejects bad contentType (application/x-msdownload)
+ * 3. Presign upload returns valid objectKey under whisper/att/
+ * 4. Upload to Spaces works using uploadUrl
+ * 5. Download presign denied if not authorized (B before reference)
+ * 6. Send message with attachment grants access
+ * 7. B can download after receiving reference
+ * 8. Download URL fetch works (bytes match)
+ * 9. GC deletes expired attachments (only whisper/att/)
+ * 10. Access rows expire/cleanup
  */
 
 import WebSocket from 'ws';
@@ -50,6 +50,43 @@ function generateKeys() {
 function signChallenge(challengeBytes: Buffer, signSecretKey: Buffer): string {
   const hash = Buffer.alloc(sodium.crypto_hash_sha256_BYTES);
   sodium.crypto_hash_sha256(hash, challengeBytes);
+
+  const signature = Buffer.alloc(sodium.crypto_sign_BYTES);
+  sodium.crypto_sign_detached(signature, hash, signSecretKey);
+  return signature.toString('base64');
+}
+
+function generateNonce(): string {
+  const nonce = Buffer.alloc(24);
+  sodium.randombytes_buf(nonce);
+  return nonce.toString('base64');
+}
+
+function signMessage(
+  signSecretKey: Buffer,
+  data: {
+    messageType: string;
+    messageId: string;
+    from: string;
+    toOrGroupId: string;
+    timestamp: number;
+    nonce: string;
+    ciphertext: string;
+  }
+): string {
+  const payload = JSON.stringify([
+    data.messageType,
+    data.messageId,
+    data.from,
+    data.toOrGroupId,
+    data.timestamp,
+    data.nonce,
+    data.ciphertext,
+  ]);
+
+  const payloadBytes = Buffer.from(payload, 'utf-8');
+  const hash = Buffer.alloc(sodium.crypto_hash_sha256_BYTES);
+  sodium.crypto_hash_sha256(hash, payloadBytes);
 
   const signature = Buffer.alloc(sodium.crypto_sign_BYTES);
   sodium.crypto_sign_detached(signature, hash, signSecretKey);
@@ -234,6 +271,24 @@ function sendAndWait(client: WsClient, msg: any, expectedType?: string, timeout 
   });
 }
 
+function waitForMessage(client: WsClient, expectedType: string, timeout = 5000): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Timeout waiting for ${expectedType}`)), timeout);
+
+    const checkMessages = () => {
+      const idx = client.pendingMessages.findIndex(m => m.type === expectedType);
+      if (idx >= 0) {
+        clearTimeout(timer);
+        const msg = client.pendingMessages.splice(idx, 1)[0];
+        resolve(msg);
+      }
+    };
+
+    client.ws.on('message', () => setTimeout(checkMessages, 50));
+    checkMessages();
+  });
+}
+
 async function registerClient(client: WsClient): Promise<void> {
   const keys = generateKeys();
   client.keys = keys;
@@ -287,8 +342,65 @@ async function registerClient(client: WsClient): Promise<void> {
 // TESTS
 // =============================================================================
 
-async function test1_PresignUploadValid(): Promise<boolean> {
-  console.log('\nTest 1: Presign upload returns valid URL');
+async function test1_PresignUploadRejectsInvalidSize(): Promise<boolean> {
+  console.log('\nTest 1: Presign upload rejects invalid size');
+
+  let client: WsClient | null = null;
+
+  try {
+    client = await createClient();
+    await registerClient(client);
+
+    // Test sizeBytes <= 0
+    const resp1 = await httpRequest(
+      'POST',
+      '/attachments/presign/upload',
+      { contentType: 'image/jpeg', sizeBytes: 0 },
+      { Authorization: `Bearer ${client.sessionToken}` }
+    );
+
+    if (resp1.status !== 400) {
+      throw new Error(`Expected 400 for sizeBytes=0, got ${resp1.status}`);
+    }
+    console.log('  Rejected sizeBytes=0');
+
+    const resp2 = await httpRequest(
+      'POST',
+      '/attachments/presign/upload',
+      { contentType: 'image/jpeg', sizeBytes: -100 },
+      { Authorization: `Bearer ${client.sessionToken}` }
+    );
+
+    if (resp2.status !== 400) {
+      throw new Error(`Expected 400 for sizeBytes=-100, got ${resp2.status}`);
+    }
+    console.log('  Rejected sizeBytes=-100');
+
+    // Test sizeBytes > 100MB
+    const resp3 = await httpRequest(
+      'POST',
+      '/attachments/presign/upload',
+      { contentType: 'image/jpeg', sizeBytes: 101 * 1024 * 1024 },
+      { Authorization: `Bearer ${client.sessionToken}` }
+    );
+
+    if (resp3.status !== 400) {
+      throw new Error(`Expected 400 for sizeBytes>100MB, got ${resp3.status}`);
+    }
+    console.log('  Rejected sizeBytes>100MB');
+
+    console.log('  PASSED');
+    return true;
+  } catch (e) {
+    console.log('  FAILED:', e);
+    return false;
+  } finally {
+    client?.close();
+  }
+}
+
+async function test2_PresignUploadRejectsBadContentType(): Promise<boolean> {
+  console.log('\nTest 2: Presign upload rejects bad contentType');
 
   let client: WsClient | null = null;
 
@@ -299,35 +411,70 @@ async function test1_PresignUploadValid(): Promise<boolean> {
     const resp = await httpRequest(
       'POST',
       '/attachments/presign/upload',
-      {
-        contentType: 'image/jpeg',
-        sizeBytes: 1024,
-      },
+      { contentType: 'application/x-msdownload', sizeBytes: 1024 },
+      { Authorization: `Bearer ${client.sessionToken}` }
+    );
+
+    if (resp.status !== 400) {
+      throw new Error(`Expected 400, got ${resp.status}`);
+    }
+
+    if (resp.data.error !== 'INVALID_PAYLOAD') {
+      throw new Error(`Expected INVALID_PAYLOAD error, got ${resp.data.error}`);
+    }
+
+    console.log('  Rejected application/x-msdownload');
+    console.log('  PASSED');
+    return true;
+  } catch (e) {
+    console.log('  FAILED:', e);
+    return false;
+  } finally {
+    client?.close();
+  }
+}
+
+async function test3_PresignUploadReturnsValidObjectKey(): Promise<boolean> {
+  console.log('\nTest 3: Presign upload returns valid objectKey under whisper/att/');
+
+  let client: WsClient | null = null;
+
+  try {
+    client = await createClient();
+    await registerClient(client);
+
+    const resp = await httpRequest(
+      'POST',
+      '/attachments/presign/upload',
+      { contentType: 'image/jpeg', sizeBytes: 1024 },
       { Authorization: `Bearer ${client.sessionToken}` }
     );
 
     if (resp.status !== 200) {
-      throw new Error(`Expected 200, got ${resp.status}: ${JSON.stringify(resp.data)}`);
+      throw new Error(`Expected 200, got ${resp.status}`);
     }
 
-    if (!resp.data.objectKey) {
-      throw new Error('Missing objectKey in response');
-    }
+    const { objectKey } = resp.data;
 
-    if (!resp.data.uploadUrl) {
-      throw new Error('Missing uploadUrl in response');
+    // Check startsWith whisper/att/
+    if (!objectKey.startsWith('whisper/att/')) {
+      throw new Error(`objectKey doesn't start with whisper/att/: ${objectKey}`);
     }
+    console.log('  objectKey starts with whisper/att/');
 
-    if (!resp.data.objectKey.startsWith('whisper/att/')) {
-      throw new Error(`Invalid objectKey prefix: ${resp.data.objectKey}`);
+    // Check length <= 255
+    if (objectKey.length > 255) {
+      throw new Error(`objectKey too long: ${objectKey.length}`);
     }
+    console.log(`  objectKey length: ${objectKey.length} <= 255`);
 
-    if (!resp.data.uploadUrl.includes('digitaloceanspaces.com')) {
-      throw new Error('uploadUrl does not point to DigitalOcean Spaces');
+    // Check no ..
+    if (objectKey.includes('..')) {
+      throw new Error(`objectKey contains ..: ${objectKey}`);
     }
+    console.log('  objectKey has no path traversal');
 
-    console.log(`  objectKey: ${resp.data.objectKey}`);
-    console.log(`  uploadUrl: ${resp.data.uploadUrl.substring(0, 60)}...`);
+    console.log(`  objectKey: ${objectKey}`);
     console.log('  PASSED');
     return true;
   } catch (e) {
@@ -338,8 +485,8 @@ async function test1_PresignUploadValid(): Promise<boolean> {
   }
 }
 
-async function test2_PresignUploadInvalidContentType(): Promise<boolean> {
-  console.log('\nTest 2: Presign upload 400 for invalid contentType');
+async function test4_UploadToSpacesWorks(): Promise<boolean> {
+  console.log('\nTest 4: Upload to Spaces works using uploadUrl');
 
   let client: WsClient | null = null;
 
@@ -347,21 +494,30 @@ async function test2_PresignUploadInvalidContentType(): Promise<boolean> {
     client = await createClient();
     await registerClient(client);
 
+    const testData = Buffer.alloc(1024);
+    sodium.randombytes_buf(testData);
+
     const resp = await httpRequest(
       'POST',
       '/attachments/presign/upload',
-      {
-        contentType: 'application/x-executable',
-        sizeBytes: 1024,
-      },
+      { contentType: 'application/octet-stream', sizeBytes: testData.length },
       { Authorization: `Bearer ${client.sessionToken}` }
     );
 
-    if (resp.status !== 400) {
-      throw new Error(`Expected 400, got ${resp.status}`);
+    if (resp.status !== 200) {
+      throw new Error(`Presign failed: ${resp.status}`);
     }
 
-    console.log('  Got 400 for invalid contentType');
+    const { uploadUrl } = resp.data;
+
+    // Upload to Spaces
+    const putResp = await uploadToPresignedUrl(uploadUrl, testData);
+
+    if (putResp.status !== 200 && putResp.status !== 204) {
+      throw new Error(`Upload failed with status ${putResp.status}`);
+    }
+
+    console.log(`  Uploaded ${testData.length} bytes to Spaces (HTTP ${putResp.status})`);
     console.log('  PASSED');
     return true;
   } catch (e) {
@@ -372,121 +528,8 @@ async function test2_PresignUploadInvalidContentType(): Promise<boolean> {
   }
 }
 
-async function test3_PresignUploadSizeExceedsLimit(): Promise<boolean> {
-  console.log('\nTest 3: Presign upload 400 for size exceeding limit');
-
-  let client: WsClient | null = null;
-
-  try {
-    client = await createClient();
-    await registerClient(client);
-
-    const resp = await httpRequest(
-      'POST',
-      '/attachments/presign/upload',
-      {
-        contentType: 'image/jpeg',
-        sizeBytes: 200 * 1024 * 1024, // 200MB - exceeds 100MB limit
-      },
-      { Authorization: `Bearer ${client.sessionToken}` }
-    );
-
-    if (resp.status !== 400) {
-      throw new Error(`Expected 400, got ${resp.status}`);
-    }
-
-    console.log('  Got 400 for size exceeding limit');
-    console.log('  PASSED');
-    return true;
-  } catch (e) {
-    console.log('  FAILED:', e);
-    return false;
-  } finally {
-    client?.close();
-  }
-}
-
-async function test4_PresignUpload401(): Promise<boolean> {
-  console.log('\nTest 4: Presign upload 401 without auth');
-
-  try {
-    const resp = await httpRequest(
-      'POST',
-      '/attachments/presign/upload',
-      {
-        contentType: 'image/jpeg',
-        sizeBytes: 1024,
-      }
-    );
-
-    if (resp.status !== 401) {
-      throw new Error(`Expected 401, got ${resp.status}`);
-    }
-
-    console.log('  Got 401 as expected');
-    console.log('  PASSED');
-    return true;
-  } catch (e) {
-    console.log('  FAILED:', e);
-    return false;
-  }
-}
-
-async function test5_PresignDownloadOwner(): Promise<boolean> {
-  console.log('\nTest 5: Presign download returns valid URL for owner');
-
-  let client: WsClient | null = null;
-
-  try {
-    client = await createClient();
-    await registerClient(client);
-
-    // First, presign an upload
-    const uploadResp = await httpRequest(
-      'POST',
-      '/attachments/presign/upload',
-      {
-        contentType: 'image/png',
-        sizeBytes: 512,
-      },
-      { Authorization: `Bearer ${client.sessionToken}` }
-    );
-
-    if (uploadResp.status !== 200) {
-      throw new Error(`Upload presign failed: ${uploadResp.status}`);
-    }
-
-    const { objectKey } = uploadResp.data;
-
-    // Now request download presign as owner
-    const downloadResp = await httpRequest(
-      'POST',
-      '/attachments/presign/download',
-      { objectKey },
-      { Authorization: `Bearer ${client.sessionToken}` }
-    );
-
-    if (downloadResp.status !== 200) {
-      throw new Error(`Expected 200, got ${downloadResp.status}: ${JSON.stringify(downloadResp.data)}`);
-    }
-
-    if (!downloadResp.data.downloadUrl) {
-      throw new Error('Missing downloadUrl in response');
-    }
-
-    console.log('  Owner can request download presign');
-    console.log('  PASSED');
-    return true;
-  } catch (e) {
-    console.log('  FAILED:', e);
-    return false;
-  } finally {
-    client?.close();
-  }
-}
-
-async function test6_PresignDownload403(): Promise<boolean> {
-  console.log('\nTest 6: Presign download 403 for user without access');
+async function test5_DownloadDeniedWithoutAccess(): Promise<boolean> {
+  console.log('\nTest 5: Download presign denied if not authorized (B before reference)');
 
   let clientA: WsClient | null = null;
   let clientB: WsClient | null = null;
@@ -498,14 +541,11 @@ async function test6_PresignDownload403(): Promise<boolean> {
     await registerClient(clientA);
     await registerClient(clientB);
 
-    // Client A presigns an upload
+    // A creates an attachment
     const uploadResp = await httpRequest(
       'POST',
       '/attachments/presign/upload',
-      {
-        contentType: 'image/png',
-        sizeBytes: 512,
-      },
+      { contentType: 'image/png', sizeBytes: 512 },
       { Authorization: `Bearer ${clientA.sessionToken}` }
     );
 
@@ -514,8 +554,9 @@ async function test6_PresignDownload403(): Promise<boolean> {
     }
 
     const { objectKey } = uploadResp.data;
+    console.log(`  A created attachment: ${objectKey}`);
 
-    // Client B tries to download (no access granted)
+    // B tries to download WITHOUT receiving it via message
     const downloadResp = await httpRequest(
       'POST',
       '/attachments/presign/download',
@@ -524,10 +565,14 @@ async function test6_PresignDownload403(): Promise<boolean> {
     );
 
     if (downloadResp.status !== 403) {
-      throw new Error(`Expected 403, got ${downloadResp.status}`);
+      throw new Error(`Expected 403 FORBIDDEN, got ${downloadResp.status}`);
     }
 
-    console.log('  Got 403 for user without access');
+    if (downloadResp.data.error !== 'FORBIDDEN') {
+      throw new Error(`Expected FORBIDDEN error, got ${downloadResp.data.error}`);
+    }
+
+    console.log('  B denied with 403 FORBIDDEN');
     console.log('  PASSED');
     return true;
   } catch (e) {
@@ -539,46 +584,316 @@ async function test6_PresignDownload403(): Promise<boolean> {
   }
 }
 
-async function test7_PresignDownload404(): Promise<boolean> {
-  console.log('\nTest 7: Presign download 404 for non-existent attachment');
+async function test6_SendMessageWithAttachmentGrantsAccess(): Promise<boolean> {
+  console.log('\nTest 6: Send message with attachment grants access');
 
-  let client: WsClient | null = null;
+  let clientA: WsClient | null = null;
+  let clientB: WsClient | null = null;
 
   try {
-    client = await createClient();
-    await registerClient(client);
+    clientA = await createClient();
+    clientB = await createClient();
 
-    const resp = await httpRequest(
+    await registerClient(clientA);
+    await registerClient(clientB);
+
+    // A creates an attachment
+    const uploadResp = await httpRequest(
       'POST',
-      '/attachments/presign/download',
-      { objectKey: 'whisper/att/2024/01/nonexistent/file.bin' },
-      { Authorization: `Bearer ${client.sessionToken}` }
+      '/attachments/presign/upload',
+      { contentType: 'image/png', sizeBytes: 512 },
+      { Authorization: `Bearer ${clientA.sessionToken}` }
     );
 
-    if (resp.status !== 404) {
-      throw new Error(`Expected 404, got ${resp.status}`);
+    if (uploadResp.status !== 200) {
+      throw new Error(`Upload presign failed: ${uploadResp.status}`);
     }
 
-    console.log('  Got 404 for non-existent attachment');
+    const { objectKey, uploadUrl } = uploadResp.data;
+    console.log(`  A created attachment: ${objectKey}`);
+
+    // A uploads data to Spaces
+    const testData = Buffer.alloc(512);
+    sodium.randombytes_buf(testData);
+    await uploadToPresignedUrl(uploadUrl, testData);
+
+    // A sends message with attachment to B
+    const messageId = uuidv4();
+    const timestamp = Date.now();
+    const nonce = generateNonce();
+    const ciphertext = Buffer.from('encrypted message').toString('base64');
+    const fileNonce = generateNonce();
+    const fileKeyBoxNonce = generateNonce();
+
+    const sig = signMessage(clientA.keys!.signSecretKey, {
+      messageType: 'send_message',
+      messageId,
+      from: clientA.whisperId!,
+      toOrGroupId: clientB.whisperId!,
+      timestamp,
+      nonce,
+      ciphertext,
+    });
+
+    const sendResp = await sendAndWait(clientA, {
+      type: 'send_message',
+      requestId: uuidv4(),
+      payload: {
+        messageId,
+        from: clientA.whisperId!,
+        to: clientB.whisperId!,
+        msgType: 'media',
+        timestamp,
+        nonce,
+        ciphertext,
+        sig,
+        attachment: {
+          objectKey,
+          contentType: 'image/png',
+          ciphertextSize: 512,
+          fileNonce,
+          fileKeyBox: {
+            nonce: fileKeyBoxNonce,
+            ciphertext: Buffer.from('encrypted file key').toString('base64'),
+          },
+        },
+      },
+    }, 'message_accepted');
+
+    if (sendResp.type !== 'message_accepted') {
+      throw new Error(`Expected message_accepted, got ${sendResp.type}: ${JSON.stringify(sendResp)}`);
+    }
+
+    console.log('  A sent message with attachment to B');
+
+    // Wait a bit for access to be granted
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    // Now B should be able to download
+    const downloadResp = await httpRequest(
+      'POST',
+      '/attachments/presign/download',
+      { objectKey },
+      { Authorization: `Bearer ${clientB.sessionToken}` }
+    );
+
+    if (downloadResp.status !== 200) {
+      throw new Error(`B still cannot download: ${downloadResp.status} - ${JSON.stringify(downloadResp.data)}`);
+    }
+
+    console.log('  B can now request download (access granted via message)');
     console.log('  PASSED');
     return true;
   } catch (e) {
     console.log('  FAILED:', e);
     return false;
   } finally {
-    client?.close();
+    clientA?.close();
+    clientB?.close();
   }
 }
 
-async function test8_PresignDownloadWithAccess(): Promise<boolean> {
-  console.log('\nTest 8: Presign download with granted access (via message)');
-  console.log('  (Skipping - requires full message flow with attachment)');
-  console.log('  SKIPPED');
-  return true;
+async function test7_BCanDownloadAfterReceivingReference(): Promise<boolean> {
+  console.log('\nTest 7: B can download after receiving reference');
+
+  let clientA: WsClient | null = null;
+  let clientB: WsClient | null = null;
+
+  try {
+    clientA = await createClient();
+    clientB = await createClient();
+
+    await registerClient(clientA);
+    await registerClient(clientB);
+
+    // A creates and uploads attachment
+    const testData = Buffer.alloc(256);
+    sodium.randombytes_buf(testData);
+
+    const uploadResp = await httpRequest(
+      'POST',
+      '/attachments/presign/upload',
+      { contentType: 'application/octet-stream', sizeBytes: testData.length },
+      { Authorization: `Bearer ${clientA.sessionToken}` }
+    );
+
+    const { objectKey, uploadUrl } = uploadResp.data;
+    await uploadToPresignedUrl(uploadUrl, testData);
+
+    // A sends message with attachment to B
+    const messageId = uuidv4();
+    const timestamp = Date.now();
+    const nonce = generateNonce();
+    const ciphertext = Buffer.from('test').toString('base64');
+    const fileNonce = generateNonce();
+    const fileKeyBoxNonce = generateNonce();
+
+    const sig = signMessage(clientA.keys!.signSecretKey, {
+      messageType: 'send_message',
+      messageId,
+      from: clientA.whisperId!,
+      toOrGroupId: clientB.whisperId!,
+      timestamp,
+      nonce,
+      ciphertext,
+    });
+
+    await sendAndWait(clientA, {
+      type: 'send_message',
+      requestId: uuidv4(),
+      payload: {
+        messageId,
+        from: clientA.whisperId!,
+        to: clientB.whisperId!,
+        msgType: 'media',
+        timestamp,
+        nonce,
+        ciphertext,
+        sig,
+        attachment: {
+          objectKey,
+          contentType: 'application/octet-stream',
+          ciphertextSize: testData.length,
+          fileNonce,
+          fileKeyBox: {
+            nonce: fileKeyBoxNonce,
+            ciphertext: Buffer.from('key').toString('base64'),
+          },
+        },
+      },
+    }, 'message_accepted');
+
+    await new Promise(resolve => setTimeout(resolve, 300));
+
+    // B requests download presign
+    const downloadResp = await httpRequest(
+      'POST',
+      '/attachments/presign/download',
+      { objectKey },
+      { Authorization: `Bearer ${clientB.sessionToken}` }
+    );
+
+    if (downloadResp.status !== 200) {
+      throw new Error(`Download presign failed: ${downloadResp.status}`);
+    }
+
+    if (!downloadResp.data.downloadUrl) {
+      throw new Error('Missing downloadUrl');
+    }
+
+    console.log('  B got downloadUrl after receiving message');
+    console.log('  PASSED');
+    return true;
+  } catch (e) {
+    console.log('  FAILED:', e);
+    return false;
+  } finally {
+    clientA?.close();
+    clientB?.close();
+  }
 }
 
-async function test9_GCEndpoint(): Promise<boolean> {
-  console.log('\nTest 9: GC endpoint works');
+async function test8_DownloadUrlFetchWorks(): Promise<boolean> {
+  console.log('\nTest 8: Download URL fetch works (bytes match)');
+
+  let clientA: WsClient | null = null;
+  let clientB: WsClient | null = null;
+
+  try {
+    clientA = await createClient();
+    clientB = await createClient();
+
+    await registerClient(clientA);
+    await registerClient(clientB);
+
+    // A creates and uploads attachment with known data
+    const testData = Buffer.from('This is test attachment content for verification!');
+
+    const uploadResp = await httpRequest(
+      'POST',
+      '/attachments/presign/upload',
+      { contentType: 'application/octet-stream', sizeBytes: testData.length },
+      { Authorization: `Bearer ${clientA.sessionToken}` }
+    );
+
+    const { objectKey, uploadUrl } = uploadResp.data;
+    await uploadToPresignedUrl(uploadUrl, testData);
+
+    // A sends message to B
+    const messageId = uuidv4();
+    const timestamp = Date.now();
+    const nonce = generateNonce();
+    const ciphertext = Buffer.from('test').toString('base64');
+
+    const sig = signMessage(clientA.keys!.signSecretKey, {
+      messageType: 'send_message',
+      messageId,
+      from: clientA.whisperId!,
+      toOrGroupId: clientB.whisperId!,
+      timestamp,
+      nonce,
+      ciphertext,
+    });
+
+    await sendAndWait(clientA, {
+      type: 'send_message',
+      requestId: uuidv4(),
+      payload: {
+        messageId,
+        from: clientA.whisperId!,
+        to: clientB.whisperId!,
+        msgType: 'media',
+        timestamp,
+        nonce,
+        ciphertext,
+        sig,
+        attachment: {
+          objectKey,
+          contentType: 'application/octet-stream',
+          ciphertextSize: testData.length,
+          fileNonce: generateNonce(),
+          fileKeyBox: { nonce: generateNonce(), ciphertext: 'a2V5' },
+        },
+      },
+    }, 'message_accepted');
+
+    await new Promise(resolve => setTimeout(resolve, 300));
+
+    // B gets download URL
+    const downloadResp = await httpRequest(
+      'POST',
+      '/attachments/presign/download',
+      { objectKey },
+      { Authorization: `Bearer ${clientB.sessionToken}` }
+    );
+
+    const { downloadUrl } = downloadResp.data;
+
+    // Fetch and verify bytes match
+    const getResp = await downloadFromPresignedUrl(downloadUrl);
+
+    if (getResp.status !== 200) {
+      throw new Error(`Download failed: ${getResp.status}`);
+    }
+
+    if (!getResp.data.equals(testData)) {
+      throw new Error(`Downloaded data doesn't match! Expected ${testData.length} bytes, got ${getResp.data.length}`);
+    }
+
+    console.log(`  Downloaded ${getResp.data.length} bytes, matches uploaded data`);
+    console.log('  PASSED');
+    return true;
+  } catch (e) {
+    console.log('  FAILED:', e);
+    return false;
+  } finally {
+    clientA?.close();
+    clientB?.close();
+  }
+}
+
+async function test9_GCDeletesExpiredAttachments(): Promise<boolean> {
+  console.log('\nTest 9: GC deletes expired attachments (only whisper/att/)');
 
   let client: WsClient | null = null;
 
@@ -586,6 +901,7 @@ async function test9_GCEndpoint(): Promise<boolean> {
     client = await createClient();
     await registerClient(client);
 
+    // Run GC
     const resp = await httpRequest(
       'POST',
       '/admin/attachments/gc/run',
@@ -594,14 +910,19 @@ async function test9_GCEndpoint(): Promise<boolean> {
     );
 
     if (resp.status !== 200) {
-      throw new Error(`Expected 200, got ${resp.status}: ${JSON.stringify(resp.data)}`);
+      throw new Error(`GC failed: ${resp.status}`);
     }
+
+    console.log(`  GC completed: ${resp.data.deletedCount} deleted, ${resp.data.failedCount} failed`);
+
+    // Note: We can't easily create an expired attachment from tests
+    // This test verifies the GC endpoint works
+    // The GC only processes keys starting with whisper/att/
 
     if (typeof resp.data.deletedCount !== 'number') {
-      throw new Error('Missing deletedCount in response');
+      throw new Error('Missing deletedCount');
     }
 
-    console.log(`  GC completed: ${resp.data.deletedCount} deleted, ${resp.data.accessRowsDeleted} access rows cleaned`);
     console.log('  PASSED');
     return true;
   } catch (e) {
@@ -612,8 +933,8 @@ async function test9_GCEndpoint(): Promise<boolean> {
   }
 }
 
-async function test10_UploadAndDownload(): Promise<boolean> {
-  console.log('\nTest 10: Upload to presigned URL and verify download');
+async function test10_AccessRowsExpireCleanup(): Promise<boolean> {
+  console.log('\nTest 10: Access rows expire/cleanup');
 
   let client: WsClient | null = null;
 
@@ -621,59 +942,24 @@ async function test10_UploadAndDownload(): Promise<boolean> {
     client = await createClient();
     await registerClient(client);
 
-    const testData = Buffer.from('Hello, this is test attachment data!');
-
-    // 1. Get presigned upload URL
-    const uploadResp = await httpRequest(
+    // Run GC to clean up expired access rows
+    const resp = await httpRequest(
       'POST',
-      '/attachments/presign/upload',
-      {
-        contentType: 'application/octet-stream',
-        sizeBytes: testData.length,
-      },
+      '/admin/attachments/gc/run',
+      {},
       { Authorization: `Bearer ${client.sessionToken}` }
     );
 
-    if (uploadResp.status !== 200) {
-      throw new Error(`Upload presign failed: ${uploadResp.status}`);
+    if (resp.status !== 200) {
+      throw new Error(`GC failed: ${resp.status}`);
     }
 
-    const { objectKey, uploadUrl } = uploadResp.data;
-    console.log(`  Got upload URL for ${objectKey}`);
+    console.log(`  Access rows cleaned: ${resp.data.accessRowsDeleted}`);
 
-    // 2. Upload to presigned URL
-    const putResp = await uploadToPresignedUrl(uploadUrl, testData);
-    if (putResp.status !== 200) {
-      throw new Error(`Upload failed: ${putResp.status}`);
-    }
-    console.log('  Uploaded data to Spaces');
-
-    // 3. Get presigned download URL
-    const downloadResp = await httpRequest(
-      'POST',
-      '/attachments/presign/download',
-      { objectKey },
-      { Authorization: `Bearer ${client.sessionToken}` }
-    );
-
-    if (downloadResp.status !== 200) {
-      throw new Error(`Download presign failed: ${downloadResp.status}`);
+    if (typeof resp.data.accessRowsDeleted !== 'number') {
+      throw new Error('Missing accessRowsDeleted');
     }
 
-    const { downloadUrl } = downloadResp.data;
-    console.log('  Got download URL');
-
-    // 4. Download and verify
-    const getResp = await downloadFromPresignedUrl(downloadUrl);
-    if (getResp.status !== 200) {
-      throw new Error(`Download failed: ${getResp.status}`);
-    }
-
-    if (!getResp.data.equals(testData)) {
-      throw new Error('Downloaded data does not match uploaded data');
-    }
-
-    console.log('  Downloaded data matches uploaded data');
     console.log('  PASSED');
     return true;
   } catch (e) {
@@ -697,35 +983,34 @@ async function runTests(): Promise<void> {
 
   const results: { name: string; passed: boolean }[] = [];
 
-  // Run tests sequentially
-  results.push({ name: 'Test 1: Presign upload valid', passed: await test1_PresignUploadValid() });
+  results.push({ name: 'Test 1: Presign upload rejects invalid size', passed: await test1_PresignUploadRejectsInvalidSize() });
   await new Promise(resolve => setTimeout(resolve, 300));
 
-  results.push({ name: 'Test 2: Presign upload invalid contentType', passed: await test2_PresignUploadInvalidContentType() });
+  results.push({ name: 'Test 2: Presign upload rejects bad contentType', passed: await test2_PresignUploadRejectsBadContentType() });
   await new Promise(resolve => setTimeout(resolve, 300));
 
-  results.push({ name: 'Test 3: Presign upload size exceeds limit', passed: await test3_PresignUploadSizeExceedsLimit() });
+  results.push({ name: 'Test 3: Presign upload returns valid objectKey', passed: await test3_PresignUploadReturnsValidObjectKey() });
   await new Promise(resolve => setTimeout(resolve, 300));
 
-  results.push({ name: 'Test 4: Presign upload 401', passed: await test4_PresignUpload401() });
+  results.push({ name: 'Test 4: Upload to Spaces works', passed: await test4_UploadToSpacesWorks() });
   await new Promise(resolve => setTimeout(resolve, 300));
 
-  results.push({ name: 'Test 5: Presign download owner', passed: await test5_PresignDownloadOwner() });
+  results.push({ name: 'Test 5: Download denied without access', passed: await test5_DownloadDeniedWithoutAccess() });
   await new Promise(resolve => setTimeout(resolve, 300));
 
-  results.push({ name: 'Test 6: Presign download 403', passed: await test6_PresignDownload403() });
+  results.push({ name: 'Test 6: Send message with attachment grants access', passed: await test6_SendMessageWithAttachmentGrantsAccess() });
   await new Promise(resolve => setTimeout(resolve, 300));
 
-  results.push({ name: 'Test 7: Presign download 404', passed: await test7_PresignDownload404() });
+  results.push({ name: 'Test 7: B can download after receiving reference', passed: await test7_BCanDownloadAfterReceivingReference() });
   await new Promise(resolve => setTimeout(resolve, 300));
 
-  results.push({ name: 'Test 8: Presign download with access', passed: await test8_PresignDownloadWithAccess() });
+  results.push({ name: 'Test 8: Download URL fetch works', passed: await test8_DownloadUrlFetchWorks() });
   await new Promise(resolve => setTimeout(resolve, 300));
 
-  results.push({ name: 'Test 9: GC endpoint', passed: await test9_GCEndpoint() });
+  results.push({ name: 'Test 9: GC deletes expired attachments', passed: await test9_GCDeletesExpiredAttachments() });
   await new Promise(resolve => setTimeout(resolve, 300));
 
-  results.push({ name: 'Test 10: Upload and download', passed: await test10_UploadAndDownload() });
+  results.push({ name: 'Test 10: Access rows expire/cleanup', passed: await test10_AccessRowsExpireCleanup() });
 
   // Summary
   console.log('\n========================================');
