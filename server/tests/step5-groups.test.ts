@@ -771,9 +771,14 @@ async function test5_OfflineMemberGetsGroupMessagePending(): Promise<boolean> {
       },
     }, 'pending_messages');
 
-    const pendingMsg = pendingResp.payload.messages.find((m: any) => m.messageId === messageId);
+    if (pendingResp.type !== 'pending_messages') {
+      throw new Error(`Expected pending_messages, got ${pendingResp.type}: ${JSON.stringify(pendingResp)}`);
+    }
+
+    const messages = pendingResp.payload?.messages || [];
+    const pendingMsg = messages.find((m: any) => m.messageId === messageId);
     if (!pendingMsg) {
-      throw new Error('Group message not found in pending');
+      throw new Error(`Group message not found in pending. Got ${messages.length} messages: ${JSON.stringify(messages.map((m: any) => m.messageId))}`);
     }
 
     if (pendingMsg.groupId !== groupId) {
