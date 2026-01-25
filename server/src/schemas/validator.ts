@@ -26,6 +26,14 @@ import {
   groupUpdateSchema,
   groupSendMessageSchema,
 } from './group.schema';
+import {
+  getTurnCredentialsSchema,
+  callInitiateSchema,
+  callRingingSchema,
+  callAnswerSchema,
+  callIceCandidateSchema,
+  callEndSchema,
+} from './call.schema';
 
 // =============================================================================
 // AJV INSTANCE
@@ -74,6 +82,14 @@ validators.set('fetch_pending', ajv.compile(fetchPendingSchema));
 validators.set('group_create', ajv.compile(groupCreateSchema));
 validators.set('group_update', ajv.compile(groupUpdateSchema));
 validators.set('group_send_message', ajv.compile(groupSendMessageSchema));
+
+// Call schemas
+validators.set('get_turn_credentials', ajv.compile(getTurnCredentialsSchema));
+validators.set('call_initiate', ajv.compile(callInitiateSchema));
+validators.set('call_ringing', ajv.compile(callRingingSchema));
+validators.set('call_answer', ajv.compile(callAnswerSchema));
+validators.set('call_ice_candidate', ajv.compile(callIceCandidateSchema));
+validators.set('call_end', ajv.compile(callEndSchema));
 
 // =============================================================================
 // VALIDATION FUNCTIONS

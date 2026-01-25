@@ -34,6 +34,12 @@ import {
   DeliveryReceiptPayload,
   FetchPendingPayload,
   UpdateTokensPayload,
+  GetTurnCredentialsPayload,
+  CallInitiatePayload,
+  CallRingingPayload,
+  CallAnswerPayload,
+  CallIceCandidatePayload,
+  CallEndPayload,
 } from '../types/protocol';
 import { messageRouter } from '../services/MessageRouter';
 import {
@@ -42,6 +48,7 @@ import {
   GroupUpdatePayload,
   GroupSendMessagePayload,
 } from '../services/GroupService';
+import { callService } from '../services/CallService';
 
 // =============================================================================
 // CONSTANTS
@@ -278,7 +285,30 @@ export class WsGateway {
         await this.handleUpdateTokens(conn, payload as UpdateTokensPayload, requestId);
         break;
 
-      // TODO: Add calls handlers in later steps
+      // Call handlers
+      case MessageTypes.GET_TURN_CREDENTIALS:
+        await this.handleGetTurnCredentials(conn, payload as GetTurnCredentialsPayload, requestId);
+        break;
+
+      case MessageTypes.CALL_INITIATE:
+        await this.handleCallInitiate(conn, payload as CallInitiatePayload, requestId);
+        break;
+
+      case MessageTypes.CALL_RINGING:
+        await this.handleCallRinging(conn, payload as CallRingingPayload, requestId);
+        break;
+
+      case MessageTypes.CALL_ANSWER:
+        await this.handleCallAnswer(conn, payload as CallAnswerPayload, requestId);
+        break;
+
+      case MessageTypes.CALL_ICE_CANDIDATE:
+        await this.handleCallIceCandidate(conn, payload as CallIceCandidatePayload, requestId);
+        break;
+
+      case MessageTypes.CALL_END:
+        await this.handleCallEnd(conn, payload as CallEndPayload, requestId);
+        break;
 
       default:
         logger.warn({ type }, 'Unknown message type');
@@ -615,6 +645,164 @@ export class WsGateway {
       requestId,
       payload: { success: true },
     });
+  }
+
+  // ===========================================================================
+  // CALL HANDLERS
+  // ===========================================================================
+
+  private async handleGetTurnCredentials(
+    conn: Connection,
+    payload: GetTurnCredentialsPayload,
+    requestId?: string
+  ): Promise<void> {
+    if (!conn.whisperId) {
+      this.sendError(conn.ws, 'NOT_REGISTERED', 'Not authenticated', requestId);
+      return;
+    }
+
+    const result = await callService.getTurnCredentials(conn.whisperId);
+
+    if (!result.success || !result.data) {
+      this.sendError(
+        conn.ws,
+        (result.error?.code as ErrorCode) || 'INTERNAL_ERROR',
+        result.error?.message || 'Failed to get TURN credentials',
+        requestId
+      );
+      return;
+    }
+
+    this.send(conn.ws, {
+      type: MessageTypes.TURN_CREDENTIALS,
+      requestId,
+      payload: result.data,
+    });
+  }
+
+  private async handleCallInitiate(
+    conn: Connection,
+    payload: CallInitiatePayload,
+    requestId?: string
+  ): Promise<void> {
+    if (!conn.whisperId) {
+      this.sendError(conn.ws, 'NOT_REGISTERED', 'Not authenticated', requestId);
+      return;
+    }
+
+    const result = await callService.initiateCall(payload, conn.whisperId);
+
+    if (!result.success) {
+      this.sendError(
+        conn.ws,
+        (result.error?.code as ErrorCode) || 'INTERNAL_ERROR',
+        result.error?.message || 'Failed to initiate call',
+        requestId
+      );
+      return;
+    }
+
+    // ACK is implicit - callee will receive call_incoming
+  }
+
+  private async handleCallRinging(
+    conn: Connection,
+    payload: CallRingingPayload,
+    requestId?: string
+  ): Promise<void> {
+    if (!conn.whisperId) {
+      this.sendError(conn.ws, 'NOT_REGISTERED', 'Not authenticated', requestId);
+      return;
+    }
+
+    const result = await callService.handleRinging(payload, conn.whisperId);
+
+    if (!result.success) {
+      this.sendError(
+        conn.ws,
+        (result.error?.code as ErrorCode) || 'INTERNAL_ERROR',
+        result.error?.message || 'Failed to process ringing',
+        requestId
+      );
+      return;
+    }
+
+    // Caller receives call_ringing notification
+  }
+
+  private async handleCallAnswer(
+    conn: Connection,
+    payload: CallAnswerPayload,
+    requestId?: string
+  ): Promise<void> {
+    if (!conn.whisperId) {
+      this.sendError(conn.ws, 'NOT_REGISTERED', 'Not authenticated', requestId);
+      return;
+    }
+
+    const result = await callService.handleAnswer(payload, conn.whisperId);
+
+    if (!result.success) {
+      this.sendError(
+        conn.ws,
+        (result.error?.code as ErrorCode) || 'INTERNAL_ERROR',
+        result.error?.message || 'Failed to process answer',
+        requestId
+      );
+      return;
+    }
+
+    // Caller receives call_answer
+  }
+
+  private async handleCallIceCandidate(
+    conn: Connection,
+    payload: CallIceCandidatePayload,
+    requestId?: string
+  ): Promise<void> {
+    if (!conn.whisperId) {
+      this.sendError(conn.ws, 'NOT_REGISTERED', 'Not authenticated', requestId);
+      return;
+    }
+
+    const result = await callService.handleIceCandidate(payload, conn.whisperId);
+
+    if (!result.success) {
+      this.sendError(
+        conn.ws,
+        (result.error?.code as ErrorCode) || 'INTERNAL_ERROR',
+        result.error?.message || 'Failed to relay ICE candidate',
+        requestId
+      );
+      return;
+    }
+
+    // Peer receives ice_candidate
+  }
+
+  private async handleCallEnd(
+    conn: Connection,
+    payload: CallEndPayload,
+    requestId?: string
+  ): Promise<void> {
+    if (!conn.whisperId) {
+      this.sendError(conn.ws, 'NOT_REGISTERED', 'Not authenticated', requestId);
+      return;
+    }
+
+    const result = await callService.handleEnd(payload, conn.whisperId);
+
+    if (!result.success) {
+      this.sendError(
+        conn.ws,
+        (result.error?.code as ErrorCode) || 'INTERNAL_ERROR',
+        result.error?.message || 'Failed to end call',
+        requestId
+      );
+      return;
+    }
+
+    // Peer receives call_end
   }
 
   // ===========================================================================

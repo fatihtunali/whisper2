@@ -40,7 +40,9 @@ export const RATE_LIMITS: Record<string, RateLimitConfig> = {
   group_send_message: { maxRequests: 60, windowSeconds: 60 },
 
   // Calls
+  get_turn_credentials: { maxRequests: 10, windowSeconds: 60 },
   call_initiate: { maxRequests: 10, windowSeconds: 60 },
+  call_ringing: { maxRequests: 10, windowSeconds: 60 },
   call_answer: { maxRequests: 10, windowSeconds: 60 },
   call_ice_candidate: { maxRequests: 100, windowSeconds: 60 }, // ICE can be chatty
   call_end: { maxRequests: 10, windowSeconds: 60 },

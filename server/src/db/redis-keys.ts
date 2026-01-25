@@ -28,8 +28,11 @@ export const TTL = {
   /** Presence TTL - 5 minutes for cleanup on disconnect */
   PRESENCE: 5 * 60, // 300 seconds
 
-  /** Call state TTL - 5 minutes */
-  CALL: 5 * 60, // 300 seconds
+  /** Call state TTL - 3 minutes (180 seconds) */
+  CALL: 180,
+
+  /** Pending call TTL - 60 seconds (for offline callee) */
+  PENDING_CALL: 60,
 
   /** Rate limit window - 1 minute */
   RATE_LIMIT: 60,
@@ -88,10 +91,17 @@ export const RedisKeys = {
 
   /**
    * Call state key: tracks active call signaling
-   * Value: JSON { callId, initiator, recipient, state, createdAt }
-   * TTL: 5 minutes
+   * Value: JSON CallData
+   * TTL: 180 seconds (renewed on activity)
    */
   call: (callId: string): string => `call:${callId}`,
+
+  /**
+   * Pending call key: stores call event for offline callee
+   * Value: JSON { callId, from, isVideo, timestamp, nonce, ciphertext, sig }
+   * TTL: 60 seconds
+   */
+  pendingCall: (whisperId: string): string => `pending_call:${whisperId}`,
 
   /**
    * Active session lookup: maps whisperId to current sessionToken
@@ -153,13 +163,14 @@ export interface PresenceData {
 // CALL STATE TYPE
 // =============================================================================
 
-export type CallState = 'initiating' | 'ringing' | 'answered' | 'ended';
+export type CallState = 'initiating' | 'ringing' | 'connected' | 'ended';
 
 export interface CallData {
   callId: string;
-  initiator: string; // whisperId
-  recipient: string; // whisperId
+  caller: string; // whisperId
+  callee: string; // whisperId
   state: CallState;
   isVideo: boolean;
   createdAt: number; // timestamp ms
+  lastUpdate: number; // timestamp ms
 }

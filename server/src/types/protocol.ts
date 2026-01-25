@@ -279,6 +279,20 @@ export interface UpdateTokensPayload extends VersionedPayload {
 // CALLS (Section 9)
 // =============================================================================
 
+// get_turn_credentials request
+export interface GetTurnCredentialsPayload extends VersionedPayload {
+  sessionToken: string;
+}
+
+// turn_credentials response
+export interface TurnCredentialsPayload {
+  urls: string[];
+  username: string;
+  credential: string;
+  ttl: number;
+}
+
+// call_initiate (caller → server)
 export interface CallInitiatePayload extends VersionedPayload {
   sessionToken: string;
   callId: string;
@@ -287,7 +301,18 @@ export interface CallInitiatePayload extends VersionedPayload {
   isVideo: boolean;
   timestamp: number;
   nonce: string;
-  ciphertext: string; // encrypted SDP offer
+  ciphertext: string; // base64(sdpOfferString)
+  sig: string;
+}
+
+// call_incoming (server → callee)
+export interface CallIncomingPayload {
+  callId: string;
+  from: string;
+  isVideo: boolean;
+  timestamp: number;
+  nonce: string;
+  ciphertext: string;
   sig: string;
 }
 
@@ -325,10 +350,22 @@ export interface CallEndPayload extends VersionedPayload {
   reason: 'ended' | 'declined' | 'busy' | 'timeout' | 'failed';
 }
 
-export interface CallRingingPayload {
+// call_ringing (callee → server, server → caller)
+export interface CallRingingPayload extends VersionedPayload {
+  sessionToken: string;
   callId: string;
   from: string;
   to: string;
+  timestamp: number;
+  nonce: string;
+  ciphertext: string;
+  sig: string;
+}
+
+// call_ringing notification (server → caller, no session needed)
+export interface CallRingingNotificationPayload {
+  callId: string;
+  from: string;
 }
 
 // =============================================================================
@@ -397,7 +434,10 @@ export const MessageTypes = {
   GROUP_SEND_MESSAGE: 'group_send_message',
 
   // Calls
+  GET_TURN_CREDENTIALS: 'get_turn_credentials',
+  TURN_CREDENTIALS: 'turn_credentials',
   CALL_INITIATE: 'call_initiate',
+  CALL_INCOMING: 'call_incoming',
   CALL_ANSWER: 'call_answer',
   CALL_ICE_CANDIDATE: 'call_ice_candidate',
   CALL_END: 'call_end',
