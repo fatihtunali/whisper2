@@ -74,6 +74,10 @@ const DEDUP_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days
 const MAX_CIPHERTEXT_B64_LEN = 100_000; // ~75KB decoded
 const MAX_OBJECT_KEY_LEN = 255;
 const MAX_CONTENT_TYPE_LEN = 100;
+const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024; // 100MB max file size
+
+// Required prefix for attachment object keys (prevents bucket key reference attacks)
+const OBJECT_KEY_PREFIX = 'att/';
 
 // Allowed content types for attachments
 const ALLOWED_CONTENT_TYPES = new Set([
@@ -167,7 +171,7 @@ export class MessageRouter {
     if (payload.attachment) {
       const att = payload.attachment;
 
-      // Validate objectKey: non-empty, safe characters, no path traversal
+      // Validate objectKey: non-empty, safe characters, required prefix, no path traversal
       if (!att.objectKey || att.objectKey.length === 0 || att.objectKey.length > MAX_OBJECT_KEY_LEN) {
         logger.warn({ messageId }, 'Invalid attachment objectKey length');
         return {
@@ -175,6 +179,17 @@ export class MessageRouter {
           error: {
             code: 'INVALID_PAYLOAD',
             message: 'Invalid attachment objectKey',
+          },
+        };
+      }
+      // Must start with required prefix (prevents bucket key reference attacks)
+      if (!att.objectKey.startsWith(OBJECT_KEY_PREFIX)) {
+        logger.warn({ messageId, objectKey: att.objectKey }, 'Attachment objectKey missing required prefix');
+        return {
+          success: false,
+          error: {
+            code: 'INVALID_PAYLOAD',
+            message: `Attachment objectKey must start with '${OBJECT_KEY_PREFIX}'`,
           },
         };
       }
@@ -221,7 +236,7 @@ export class MessageRouter {
         };
       }
 
-      // Validate ciphertextSize is positive
+      // Validate ciphertextSize is positive and within limits
       if (!Number.isFinite(att.ciphertextSize) || att.ciphertextSize <= 0) {
         logger.warn({ messageId }, 'Invalid attachment ciphertextSize');
         return {
@@ -229,6 +244,16 @@ export class MessageRouter {
           error: {
             code: 'INVALID_PAYLOAD',
             message: 'Invalid attachment ciphertextSize',
+          },
+        };
+      }
+      if (att.ciphertextSize > MAX_ATTACHMENT_BYTES) {
+        logger.warn({ messageId, size: att.ciphertextSize }, 'Attachment too large');
+        return {
+          success: false,
+          error: {
+            code: 'INVALID_PAYLOAD',
+            message: `Attachment exceeds maximum size (${MAX_ATTACHMENT_BYTES / 1024 / 1024}MB)`,
           },
         };
       }
