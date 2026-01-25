@@ -30,6 +30,7 @@ import {
   ErrorCode,
   TIMESTAMP_SKEW_MS,
 } from '../types/protocol';
+import { attachmentService } from './AttachmentService';
 
 // =============================================================================
 // TYPES
@@ -77,7 +78,7 @@ const MAX_CONTENT_TYPE_LEN = 100;
 const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024; // 100MB max file size
 
 // Required prefix for attachment object keys (prevents bucket key reference attacks)
-const OBJECT_KEY_PREFIX = 'att/';
+const OBJECT_KEY_PREFIX = 'whisper/att/';
 
 // Allowed content types for attachments
 const ALLOWED_CONTENT_TYPES = new Set([
@@ -381,6 +382,17 @@ export class MessageRouter {
 
       // TODO: Trigger push notification (Step 3/4)
       // await pushService.sendWakeUp(to, { messageId, from });
+    }
+
+    // 12. Grant attachment access to recipient (Step 4)
+    if (payload.attachment) {
+      const granted = await attachmentService.grantAccess(payload.attachment.objectKey, to);
+      if (!granted) {
+        logger.warn(
+          { messageId, objectKey: payload.attachment.objectKey, to },
+          'Failed to grant attachment access (attachment may not exist)'
+        );
+      }
     }
 
     return {

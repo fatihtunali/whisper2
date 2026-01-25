@@ -62,6 +62,11 @@ export const RATE_LIMITS: Record<string, RateLimitConfig> = {
   // Contacts backup (Step 3)
   contacts_backup: { maxRequests: 10, windowSeconds: 60 },
 
+  // Attachments (Step 4)
+  attachment_presign_upload: { maxRequests: 20, windowSeconds: 60 },
+  attachment_presign_download: { maxRequests: 60, windowSeconds: 60 },
+  attachment_gc: { maxRequests: 1, windowSeconds: 60 }, // Admin only, very rare
+
   // Default (for unknown actions)
   default: { maxRequests: 30, windowSeconds: 60 },
 };

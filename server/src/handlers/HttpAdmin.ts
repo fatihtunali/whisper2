@@ -20,6 +20,7 @@ import { connectionManager } from '../services/ConnectionManager';
 import { RedisKeys, SessionData } from '../db/redis-keys';
 import { isValidWhisperId } from '../utils/crypto';
 import { rateLimiter } from '../services/RateLimiter';
+import { attachmentService, isValidContentType, isValidSize } from '../services/AttachmentService';
 
 // =============================================================================
 // TYPES
@@ -386,10 +387,238 @@ export function createHttpRouter(): Router {
   // - POST /admin/unban
   // - GET /admin/bans
 
-  // TODO: Add attachment endpoints in later steps:
-  // - POST /attachments/presign
-  // - GET /attachments/:objectKey/download
-  // - POST /admin/attachments/gc/run
+  // ===========================================================================
+  // ATTACHMENTS (Step 4)
+  // ===========================================================================
+
+  /**
+   * POST /attachments/presign/upload
+   *
+   * Request a presigned URL for uploading an encrypted attachment.
+   * The client encrypts the file locally before uploading.
+   *
+   * Request body:
+   * {
+   *   "contentType": "image/jpeg",
+   *   "sizeBytes": 1234567
+   * }
+   *
+   * Response:
+   * {
+   *   "objectKey": "whisper/att/2024/01/WSP-XXXX/uuid.bin",
+   *   "uploadUrl": "https://...",
+   *   "expiresAtMs": 1234567890,
+   *   "headers": { "Content-Type": "application/octet-stream" }
+   * }
+   */
+  router.post(
+    '/attachments/presign/upload',
+    requireAuth,
+    async (req: AuthenticatedRequest, res: Response) => {
+      const whisperId = req.whisperId!;
+      const ip = req.ip || req.socket.remoteAddress || 'unknown';
+
+      // 1. Rate limit
+      const rateResult = await rateLimiter.checkBoth(
+        ip,
+        whisperId,
+        'attachment_presign_upload'
+      );
+
+      if (!rateResult.allowed) {
+        res.status(429).json({
+          error: 'RATE_LIMITED',
+          message: 'Too many requests',
+          retryAfter: Math.ceil((rateResult.resetAt - Date.now()) / 1000),
+        });
+        return;
+      }
+
+      // 2. Validate request body
+      const { contentType, sizeBytes } = req.body;
+
+      if (!contentType || typeof contentType !== 'string') {
+        res.status(400).json({
+          error: 'INVALID_PAYLOAD',
+          message: 'Missing or invalid contentType',
+        });
+        return;
+      }
+
+      if (!isValidContentType(contentType)) {
+        res.status(400).json({
+          error: 'INVALID_PAYLOAD',
+          message: 'Content type not allowed',
+        });
+        return;
+      }
+
+      if (typeof sizeBytes !== 'number' || !isValidSize(sizeBytes)) {
+        res.status(400).json({
+          error: 'INVALID_PAYLOAD',
+          message: 'Invalid sizeBytes (must be > 0 and <= 100MB)',
+        });
+        return;
+      }
+
+      // 3. Generate presigned upload URL
+      const result = await attachmentService.presignUpload(whisperId, {
+        contentType,
+        sizeBytes,
+      });
+
+      if (!result.success) {
+        const statusCode = result.code === 'INVALID_PAYLOAD' ? 400 : 500;
+        res.status(statusCode).json({
+          error: result.code,
+          message: result.error,
+        });
+        return;
+      }
+
+      res.json(result.data);
+    }
+  );
+
+  /**
+   * POST /attachments/presign/download
+   *
+   * Request a presigned URL for downloading an encrypted attachment.
+   * Requires authorization: owner OR has access grant.
+   *
+   * Request body:
+   * {
+   *   "objectKey": "whisper/att/2024/01/WSP-XXXX/uuid.bin"
+   * }
+   *
+   * Response:
+   * {
+   *   "objectKey": "whisper/att/2024/01/WSP-XXXX/uuid.bin",
+   *   "downloadUrl": "https://...",
+   *   "expiresAtMs": 1234567890,
+   *   "sizeBytes": 1234567,
+   *   "contentType": "image/jpeg"
+   * }
+   */
+  router.post(
+    '/attachments/presign/download',
+    requireAuth,
+    async (req: AuthenticatedRequest, res: Response) => {
+      const whisperId = req.whisperId!;
+      const ip = req.ip || req.socket.remoteAddress || 'unknown';
+
+      // 1. Rate limit
+      const rateResult = await rateLimiter.checkBoth(
+        ip,
+        whisperId,
+        'attachment_presign_download'
+      );
+
+      if (!rateResult.allowed) {
+        res.status(429).json({
+          error: 'RATE_LIMITED',
+          message: 'Too many requests',
+          retryAfter: Math.ceil((rateResult.resetAt - Date.now()) / 1000),
+        });
+        return;
+      }
+
+      // 2. Validate request body
+      const { objectKey } = req.body;
+
+      if (!objectKey || typeof objectKey !== 'string') {
+        res.status(400).json({
+          error: 'INVALID_PAYLOAD',
+          message: 'Missing or invalid objectKey',
+        });
+        return;
+      }
+
+      // 3. Generate presigned download URL
+      const result = await attachmentService.presignDownload(whisperId, {
+        objectKey,
+      });
+
+      if (!result.success) {
+        let statusCode = 500;
+        if (result.code === 'INVALID_PAYLOAD') statusCode = 400;
+        else if (result.code === 'NOT_FOUND') statusCode = 404;
+        else if (result.code === 'FORBIDDEN') statusCode = 403;
+
+        res.status(statusCode).json({
+          error: result.code,
+          message: result.error,
+        });
+        return;
+      }
+
+      res.json(result.data);
+    }
+  );
+
+  /**
+   * POST /admin/attachments/gc/run
+   *
+   * Run garbage collection for expired attachments.
+   * Admin endpoint (requires auth).
+   *
+   * Response:
+   * {
+   *   "success": true,
+   *   "deletedCount": 5,
+   *   "failedCount": 0,
+   *   "accessRowsDeleted": 10
+   * }
+   */
+  router.post(
+    '/admin/attachments/gc/run',
+    requireAuth,
+    async (req: AuthenticatedRequest, res: Response) => {
+      const whisperId = req.whisperId!;
+      const ip = req.ip || req.socket.remoteAddress || 'unknown';
+
+      // 1. Rate limit (very strict - GC is expensive)
+      const rateResult = await rateLimiter.checkBoth(
+        ip,
+        whisperId,
+        'attachment_gc'
+      );
+
+      if (!rateResult.allowed) {
+        res.status(429).json({
+          error: 'RATE_LIMITED',
+          message: 'Too many requests',
+          retryAfter: Math.ceil((rateResult.resetAt - Date.now()) / 1000),
+        });
+        return;
+      }
+
+      // TODO: Add admin role check in future
+      // For now, any authenticated user can trigger GC
+
+      logger.info({ whisperId }, 'GC triggered via HTTP');
+
+      // 2. Run garbage collection
+      const result = await attachmentService.runGC();
+
+      if (!result.success) {
+        res.status(500).json({
+          error: 'INTERNAL_ERROR',
+          message: 'Garbage collection failed',
+          deletedCount: result.deletedCount,
+          failedCount: result.failedCount,
+        });
+        return;
+      }
+
+      res.json({
+        success: true,
+        deletedCount: result.deletedCount,
+        failedCount: result.failedCount,
+        accessRowsDeleted: result.accessRowsDeleted,
+      });
+    }
+  );
 
   // ===========================================================================
   // CONTACTS BACKUP (Steps 3.3-3.5)
