@@ -224,9 +224,10 @@ function sendAndWait(client: WsClient, msg: any, expectedType?: string, timeout 
 
     const checkMessages = () => {
       if (resolved) return;
-      // Match by requestId if available, otherwise by type
+      // Match by requestId if available (check both top-level and in payload), otherwise by type
       const idx = client.pendingMessages.findIndex(m => {
-        if (requestId && m.requestId === requestId) return true;
+        const msgRequestId = m.requestId || m.payload?.requestId;
+        if (requestId && msgRequestId === requestId) return true;
         if (!requestId && (!expectedType || m.type === expectedType || m.type === 'error')) return true;
         return false;
       });

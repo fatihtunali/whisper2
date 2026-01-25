@@ -91,6 +91,9 @@ export interface RateLimitResult {
   resetAt: number; // timestamp ms
 }
 
+// Set to true to disable rate limiting (for testing)
+const RATE_LIMITS_DISABLED = process.env.DISABLE_RATE_LIMITS === 'true';
+
 export class RateLimiter {
   /**
    * Check rate limit for authenticated user (by whisperId).
@@ -99,6 +102,9 @@ export class RateLimiter {
     whisperId: string,
     action: string
   ): Promise<RateLimitResult> {
+    if (RATE_LIMITS_DISABLED) {
+      return { allowed: true, current: 0, limit: 999999, remaining: 999999, resetAt: Date.now() + 60000 };
+    }
     const config = RATE_LIMITS[action] || RATE_LIMITS.default;
     const key = RedisKeys.rateLimit(whisperId, action);
 
@@ -109,6 +115,9 @@ export class RateLimiter {
    * Check rate limit by IP (for unauthenticated requests).
    */
   async checkIp(ip: string, action: string): Promise<RateLimitResult> {
+    if (RATE_LIMITS_DISABLED) {
+      return { allowed: true, current: 0, limit: 999999, remaining: 999999, resetAt: Date.now() + 60000 };
+    }
     const config = IP_RATE_LIMITS[action] || IP_RATE_LIMITS.default;
     const key = RedisKeys.rateLimitIp(ip, action);
 
