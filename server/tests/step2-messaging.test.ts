@@ -176,11 +176,15 @@ async function registerClient(client: WsClient, deviceId: string): Promise<void>
   // Step 2: wait for register_challenge
   const challenge = await client.waitForMessage('register_challenge');
 
-  // Step 3: Sign the challenge
+  // Step 3: Sign SHA256(challenge)
+  const challengeBytes = Buffer.from(challenge.payload.challenge, 'base64');
+  const challengeHash = Buffer.alloc(sodium.crypto_hash_sha256_BYTES);
+  sodium.crypto_hash_sha256(challengeHash, challengeBytes);
+
   const signature = Buffer.alloc(sodium.crypto_sign_BYTES);
   sodium.crypto_sign_detached(
     signature,
-    Buffer.from(challenge.payload.challenge, 'base64'),
+    challengeHash,
     client.keys.signSecretKey
   );
 
@@ -451,10 +455,15 @@ async function test5_FetchPending(
 
     const challenge = await clientB.waitForMessage('register_challenge');
 
+    // Sign SHA256(challenge)
+    const challengeBytes = Buffer.from(challenge.payload.challenge, 'base64');
+    const challengeHash = Buffer.alloc(sodium.crypto_hash_sha256_BYTES);
+    sodium.crypto_hash_sha256(challengeHash, challengeBytes);
+
     const signature = Buffer.alloc(sodium.crypto_sign_BYTES);
     sodium.crypto_sign_detached(
       signature,
-      Buffer.from(challenge.payload.challenge, 'base64'),
+      challengeHash,
       clientBKeys.signSecretKey
     );
 
