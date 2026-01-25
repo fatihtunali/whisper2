@@ -725,6 +725,7 @@ async function test5_OfflineMemberGetsGroupMessagePending(): Promise<boolean> {
     // C reconnects and fetches pending
     clientC = await createClient();
     clientC.keys = clientCKeys;
+    const newDeviceId = uuidv4();
 
     const beginResp = await sendAndWait(clientC, {
       type: 'register_begin',
@@ -733,7 +734,7 @@ async function test5_OfflineMemberGetsGroupMessagePending(): Promise<boolean> {
         protocolVersion: PROTOCOL_VERSION,
         cryptoVersion: CRYPTO_VERSION,
         whisperId: clientCWhisperId,
-        deviceId: uuidv4(),
+        deviceId: newDeviceId,
         platform: 'ios',
       },
     }, 'register_challenge');
@@ -749,7 +750,7 @@ async function test5_OfflineMemberGetsGroupMessagePending(): Promise<boolean> {
         cryptoVersion: CRYPTO_VERSION,
         challengeId: beginResp.payload.challengeId,
         whisperId: clientCWhisperId,
-        deviceId: uuidv4(),
+        deviceId: newDeviceId,
         platform: 'ios',
         encPublicKey: clientCKeys.encPublicKey,
         signPublicKey: clientCKeys.signPublicKey,
