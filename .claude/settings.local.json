@@ -16,7 +16,10 @@
       "Bash(ssh root@142.93.136.228:*)",
       "Bash(git commit -m \"$\\(cat <<''EOF''\nFix TypeScript compilation errors\n\n- Add QueryResultRow constraint to query generic\n- Add sodium-native type declarations\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
       "Bash(curl:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm install)",
+      "Bash(npm install:*)"
     ]
   }
 }

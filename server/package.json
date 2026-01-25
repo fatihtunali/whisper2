@@ -8,7 +8,9 @@
     "start": "node dist/index.js",
     "dev": "ts-node-dev --respawn src/index.ts",
     "migrate": "node dist/db/migrate.js",
-    "test": "jest"
+    "test:step2": "npx ts-node tests/step2-messaging.test.ts",
+    "test:step3": "npx ts-node tests/step3-contacts-backup.test.ts",
+    "test": "npm run test:step2 && npm run test:step3"
   },
   "dependencies": {
     "ajv": "^8.12.0",
