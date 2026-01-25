@@ -51,21 +51,28 @@ function signCanonical(
   parts: Record<string, string | number | undefined>
 ): string {
   const canonical = buildCanonical(parts);
+  const canonicalBytes = Buffer.from(canonical, 'utf8');
+
+  // Hash the canonical bytes (SHA256)
+  const hash = Buffer.alloc(sodium.crypto_hash_sha256_BYTES);
+  sodium.crypto_hash_sha256(hash, canonicalBytes);
+
+  // Sign the hash
   const signature = Buffer.alloc(sodium.crypto_sign_BYTES);
-  const message = Buffer.from(canonical, 'utf8');
-  sodium.crypto_sign_detached(signature, message, signSecretKey);
+  sodium.crypto_sign_detached(signature, hash, signSecretKey);
   return signature.toString('base64');
 }
 
 function buildCanonical(parts: Record<string, string | number | undefined>): string {
-  const lines: string[] = ['v1'];
+  // Format: v1\nmessageType\nmessageId\nfrom\ntoOrGroupId\ntimestamp\nnonce\nciphertext\n
   const order = ['messageType', 'messageId', 'from', 'toOrGroupId', 'timestamp', 'nonce', 'ciphertext'];
+  let result = 'v1\n';
   for (const key of order) {
     if (parts[key] !== undefined) {
-      lines.push(String(parts[key]));
+      result += String(parts[key]) + '\n';
     }
   }
-  return lines.join('\n');
+  return result;
 }
 
 function encrypt(plaintext: string, recipientPubKey: Buffer, senderSecretKey: Buffer): { nonce: string; ciphertext: string } {
