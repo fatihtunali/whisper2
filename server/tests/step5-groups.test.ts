@@ -219,19 +219,27 @@ function createClient(): Promise<WsClient> {
 function sendAndWait(client: WsClient, msg: any, expectedType?: string, timeout = 5000): Promise<any> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Timeout waiting for response')), timeout);
+    const requestId = msg.requestId;
+    let resolved = false;
 
     const checkMessages = () => {
-      const idx = client.pendingMessages.findIndex(m =>
-        !expectedType || m.type === expectedType || m.type === 'error'
-      );
+      if (resolved) return;
+      // Match by requestId if available, otherwise by type
+      const idx = client.pendingMessages.findIndex(m => {
+        if (requestId && m.requestId === requestId) return true;
+        if (!requestId && (!expectedType || m.type === expectedType || m.type === 'error')) return true;
+        return false;
+      });
       if (idx >= 0) {
+        resolved = true;
         clearTimeout(timer);
         const msg = client.pendingMessages.splice(idx, 1)[0];
         resolve(msg);
       }
     };
 
-    client.ws.on('message', () => setTimeout(checkMessages, 50));
+    const listener = () => setTimeout(checkMessages, 50);
+    client.ws.on('message', listener);
     checkMessages();
 
     client.ws.send(JSON.stringify(msg));
@@ -241,17 +249,21 @@ function sendAndWait(client: WsClient, msg: any, expectedType?: string, timeout 
 function waitForMessage(client: WsClient, expectedType: string, timeout = 5000): Promise<any> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`Timeout waiting for ${expectedType}`)), timeout);
+    let resolved = false;
 
     const checkMessages = () => {
+      if (resolved) return;
       const idx = client.pendingMessages.findIndex(m => m.type === expectedType);
       if (idx >= 0) {
+        resolved = true;
         clearTimeout(timer);
         const msg = client.pendingMessages.splice(idx, 1)[0];
         resolve(msg);
       }
     };
 
-    client.ws.on('message', () => setTimeout(checkMessages, 50));
+    const listener = () => setTimeout(checkMessages, 50);
+    client.ws.on('message', listener);
     checkMessages();
   });
 }
