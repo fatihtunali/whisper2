@@ -165,14 +165,12 @@ function createClient(): WsClient {
 async function registerClient(client: WsClient, deviceId: string): Promise<void> {
   await client.connected;
 
-  // Step 1: register_begin
+  // Step 1: register_begin (no keys - just device info)
   client.send('register_begin', {
     protocolVersion: PROTOCOL_VERSION,
     cryptoVersion: CRYPTO_VERSION,
-    encPublicKey: client.keys.encPublicKey,
-    signPublicKey: client.keys.signPublicKey,
     deviceId,
-    platform: 'test',
+    platform: 'ios', // must be 'ios' or 'android'
   }, 'reg-1');
 
   // Step 2: wait for register_challenge
@@ -186,14 +184,16 @@ async function registerClient(client: WsClient, deviceId: string): Promise<void>
     client.keys.signSecretKey
   );
 
-  // Step 4: send register_proof
+  // Step 4: send register_proof (includes keys + signature)
   client.send('register_proof', {
     protocolVersion: PROTOCOL_VERSION,
     cryptoVersion: CRYPTO_VERSION,
-    tempId: challenge.payload.tempId,
-    challengeSig: signature.toString('base64'),
+    challengeId: challenge.payload.challengeId,
     deviceId,
-    platform: 'test',
+    platform: 'ios',
+    encPublicKey: client.keys.encPublicKey,
+    signPublicKey: client.keys.signPublicKey,
+    signature: signature.toString('base64'),
   }, 'reg-2');
 
   // Step 5: wait for register_ack
@@ -215,8 +215,8 @@ async function test1_TwoClientsRegister(): Promise<boolean> {
 
   try {
     await Promise.all([
-      registerClient(clientA, 'device-A-' + Date.now()),
-      registerClient(clientB, 'device-B-' + Date.now()),
+      registerClient(clientA, uuidv4()),
+      registerClient(clientB, uuidv4()),
     ]);
 
     console.log('  Client A whisperId:', clientA.whisperId);
@@ -248,8 +248,8 @@ async function test2_SendMessageOnline(): Promise<{ clientA: WsClient; clientB: 
 
   try {
     await Promise.all([
-      registerClient(clientA, 'device-A-' + Date.now()),
-      registerClient(clientB, 'device-B-' + Date.now()),
+      registerClient(clientA, uuidv4()),
+      registerClient(clientB, uuidv4()),
     ]);
 
     // A sends message to B
@@ -362,8 +362,8 @@ async function test4_OfflineMessage(): Promise<{ clientA: WsClient; messageId: s
 
   try {
     await Promise.all([
-      registerClient(clientA, 'device-A-' + Date.now()),
-      registerClient(clientB, 'device-B-' + Date.now()),
+      registerClient(clientA, uuidv4()),
+      registerClient(clientB, uuidv4()),
     ]);
 
     const clientBWhisperId = clientB.whisperId!;
@@ -441,13 +441,12 @@ async function test5_FetchPending(
 
     // B needs to re-register with same keys to get same whisperId
     // Since we use single-active-device, we register as a new session
+    const newDeviceId = uuidv4();
     clientB.send('register_begin', {
       protocolVersion: PROTOCOL_VERSION,
       cryptoVersion: CRYPTO_VERSION,
-      encPublicKey: clientBKeys.encPublicKey,
-      signPublicKey: clientBKeys.signPublicKey,
-      deviceId: 'device-B-reconnect-' + Date.now(),
-      platform: 'test',
+      deviceId: newDeviceId,
+      platform: 'ios',
     }, 'reg-b1');
 
     const challenge = await clientB.waitForMessage('register_challenge');
@@ -462,10 +461,12 @@ async function test5_FetchPending(
     clientB.send('register_proof', {
       protocolVersion: PROTOCOL_VERSION,
       cryptoVersion: CRYPTO_VERSION,
-      tempId: challenge.payload.tempId,
-      challengeSig: signature.toString('base64'),
-      deviceId: 'device-B-reconnect-' + Date.now(),
-      platform: 'test',
+      challengeId: challenge.payload.challengeId,
+      deviceId: newDeviceId,
+      platform: 'ios',
+      encPublicKey: clientBKeys.encPublicKey,
+      signPublicKey: clientBKeys.signPublicKey,
+      signature: signature.toString('base64'),
     }, 'reg-b2');
 
     const ack = await clientB.waitForMessage('register_ack');
@@ -557,8 +558,8 @@ async function test6_Deduplication(): Promise<boolean> {
 
   try {
     await Promise.all([
-      registerClient(clientA, 'device-A-' + Date.now()),
-      registerClient(clientB, 'device-B-' + Date.now()),
+      registerClient(clientA, uuidv4()),
+      registerClient(clientB, uuidv4()),
     ]);
 
     // A sends message to B
