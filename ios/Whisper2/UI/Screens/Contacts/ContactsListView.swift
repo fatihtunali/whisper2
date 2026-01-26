@@ -114,7 +114,7 @@ struct ContactsListView: View {
                 ShareWhisperIDView(whisperId: whisperId)
             }
         }
-        .sheet(item: $chatContact) { contact in
+        .fullScreenCover(item: $chatContact) { contact in
             NavigationStack {
                 // Create a conversation for this contact and show ChatView
                 let conversation = ConversationUI(
