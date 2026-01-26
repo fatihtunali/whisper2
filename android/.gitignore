@@ -23,4 +23,6 @@ captures/
 # OS
 .DS_Store
 Thumbs.db
-android/app/google-services.json
+# Firebase config (contains API keys - add locally, don't commit)
+app/google-services.json
+google-services.json
