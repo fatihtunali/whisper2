@@ -246,12 +246,12 @@ final class KeychainService {
 
     // MARK: - String Helpers
 
-    private func getString(forKey key: String) -> String? {
+    func getString(forKey key: String) -> String? {
         guard let data = getData(forKey: key) else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
-    private func setString(_ string: String?, forKey key: String) {
+    func setString(_ string: String?, forKey key: String) {
         guard let string = string else {
             delete(forKey: key)
             return

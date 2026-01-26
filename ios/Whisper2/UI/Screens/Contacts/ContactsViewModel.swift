@@ -2,30 +2,38 @@ import SwiftUI
 import Observation
 
 /// Model representing a contact
-struct Contact: Identifiable, Equatable, Hashable {
+struct ContactUI: Identifiable, Equatable, Hashable {
     let id: String
     let whisperId: String
     var displayName: String
     var avatarURL: URL?
     var isOnline: Bool
     var lastSeen: Date?
+    var encPublicKey: String? = nil  // X25519 public key for encryption (base64)
+    var isBlocked: Bool = false
 
-    static func == (lhs: Contact, rhs: Contact) -> Bool {
+    static func == (lhs: ContactUI, rhs: ContactUI) -> Bool {
         lhs.id == rhs.id
     }
 
     func hash(into hasher: inout Hasher) {
         hasher.combine(id)
     }
+
+    /// Get contact's public key as Data
+    var encPublicKeyData: Data? {
+        guard let keyString = encPublicKey else { return nil }
+        return Data(base64Encoded: keyString)
+    }
 }
 
-/// Manages contacts list
+/// Manages contacts list - connected to real server
 @Observable
 final class ContactsViewModel {
     // MARK: - State
 
-    var contacts: [Contact] = []
-    var filteredContacts: [Contact] = []
+    var contacts: [ContactUI] = []
+    var filteredContacts: [ContactUI] = []
     var searchText: String = "" {
         didSet { filterContacts() }
     }
@@ -40,13 +48,11 @@ final class ContactsViewModel {
 
     // MARK: - Dependencies
 
-    // These will be injected when actual services are implemented
-    // private let contactsService: ContactsServiceProtocol
-    // private let networkService: NetworkServiceProtocol
+    private let keychain = KeychainService.shared
 
     // MARK: - Computed Properties
 
-    var groupedContacts: [(String, [Contact])] {
+    var groupedContacts: [(String, [ContactUI])] {
         let grouped = Dictionary(grouping: filteredContacts) { contact in
             String(contact.displayName.prefix(1)).uppercased()
         }
@@ -68,58 +74,38 @@ final class ContactsViewModel {
         error = nil
 
         Task { @MainActor in
-            do {
-                // Simulate loading
-                try await Task.sleep(for: .seconds(1))
+            // Load contacts from local storage (ContactsBackupService manages persistence)
+            let backupService = ContactsBackupService.shared
+            let backupContacts = backupService.getLocalContacts()
 
-                // Placeholder data
-                contacts = [
-                    Contact(
-                        id: "1",
-                        whisperId: "WH2-ALICE123",
-                        displayName: "Alice Smith",
-                        avatarURL: nil,
-                        isOnline: true,
-                        lastSeen: nil
-                    ),
-                    Contact(
-                        id: "2",
-                        whisperId: "WH2-BOB45678",
-                        displayName: "Bob Johnson",
-                        avatarURL: nil,
-                        isOnline: false,
-                        lastSeen: Date().addingTimeInterval(-3600)
-                    ),
-                    Contact(
-                        id: "3",
-                        whisperId: "WH2-CAROL999",
-                        displayName: "Carol Williams",
-                        avatarURL: nil,
-                        isOnline: true,
-                        lastSeen: nil
-                    ),
-                    Contact(
-                        id: "4",
-                        whisperId: "WH2-DAVID456",
-                        displayName: "David Brown",
-                        avatarURL: nil,
-                        isOnline: false,
-                        lastSeen: Date().addingTimeInterval(-86400)
-                    )
-                ]
-
-                filterContacts()
-                isLoading = false
-            } catch {
-                self.error = "Failed to load contacts"
-                isLoading = false
+            // Convert BackupContact to ContactUI
+            contacts = backupContacts.map { backup in
+                ContactUI(
+                    id: backup.whisperId, // Use whisperId as id
+                    whisperId: backup.whisperId,
+                    displayName: backup.displayName ?? backup.whisperId,
+                    avatarURL: nil,
+                    isOnline: false,
+                    lastSeen: nil,
+                    encPublicKey: nil, // Will be fetched when needed
+                    isBlocked: isContactBlocked(backup.whisperId)
+                )
             }
+
+            // Fetch public keys for all contacts in background
+            for i in contacts.indices {
+                if let publicKey = try? await fetchUserPublicKey(contacts[i].whisperId) {
+                    contacts[i].encPublicKey = publicKey
+                }
+            }
+
+            filterContacts()
+            isLoading = false
+            logger.debug("Contacts loaded: \(contacts.count) contacts", category: .messaging)
         }
     }
 
     func refreshContacts() async {
-        // Simulate refresh
-        try? await Task.sleep(for: .milliseconds(500))
         loadContacts()
     }
 
@@ -129,54 +115,152 @@ final class ContactsViewModel {
         isAddingContact = true
         addContactError = nil
 
-        let whisperId = newContactWhisperId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let whisperId = newContactWhisperId.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         let displayName = newContactDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        Task { @MainActor in
-            do {
-                // Simulate adding
-                try await Task.sleep(for: .seconds(1))
+        // Validate WhisperId format (WSP-XXXX-XXXX-XXXX)
+        let whisperIdPattern = #"^WSP-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$"#
+        guard whisperId.range(of: whisperIdPattern, options: .regularExpression) != nil else {
+            addContactError = "Invalid WhisperID format. Expected: WSP-XXXX-XXXX-XXXX"
+            isAddingContact = false
+            return
+        }
 
-                // Check if already exists
-                if contacts.contains(where: { $0.whisperId == whisperId }) {
-                    addContactError = "Contact already exists"
+        Task { @MainActor in
+            // Check if already exists locally
+            if contacts.contains(where: { $0.whisperId == whisperId }) {
+                addContactError = "Contact already exists"
+                isAddingContact = false
+                return
+            }
+
+            // Fetch user's public key from server (also verifies user exists)
+            var encPublicKey: String? = nil
+            do {
+                encPublicKey = try await fetchUserPublicKey(whisperId)
+                if encPublicKey == nil {
+                    addContactError = "WhisperID not found. User may not exist."
                     isAddingContact = false
                     return
                 }
-
-                // Add new contact
-                let newContact = Contact(
-                    id: UUID().uuidString,
-                    whisperId: whisperId,
-                    displayName: displayName.isEmpty ? whisperId : displayName,
-                    avatarURL: nil,
-                    isOnline: false,
-                    lastSeen: nil
-                )
-
-                contacts.append(newContact)
-                filterContacts()
-
-                // Reset form
-                newContactWhisperId = ""
-                newContactDisplayName = ""
-                isAddingContact = false
             } catch {
-                addContactError = "Failed to add contact. Please check the WhisperID."
+                addContactError = "Could not verify WhisperID: \(error.localizedDescription)"
                 isAddingContact = false
+                return
             }
+
+            // Add new contact locally with their public key
+            let newContact = ContactUI(
+                id: whisperId, // Use whisperId as id for consistency
+                whisperId: whisperId,
+                displayName: displayName.isEmpty ? whisperId : displayName,
+                avatarURL: nil,
+                isOnline: false,
+                lastSeen: nil,
+                encPublicKey: encPublicKey
+            )
+
+            contacts.append(newContact)
+            filterContacts()
+
+            // Persist to ContactsBackupService
+            let backupContact = BackupContact(
+                whisperId: whisperId,
+                displayName: displayName.isEmpty ? nil : displayName,
+                flags: 0
+            )
+            ContactsBackupService.shared.addContact(backupContact)
+
+            logger.info("Contact added: \(whisperId) (with public key)", category: .messaging)
+
+            // Reset form
+            newContactWhisperId = ""
+            newContactDisplayName = ""
+            isAddingContact = false
         }
     }
 
-    func deleteContact(_ contact: Contact) {
-        contacts.removeAll { $0.id == contact.id }
-        filterContacts()
+    /// Fetches user's public keys from server. Returns encPublicKey if user exists, nil if not found.
+    private func fetchUserPublicKey(_ whisperId: String) async throws -> String? {
+        let urlString = "\(Constants.Server.baseURL)/users/\(whisperId)/keys"
+        guard let url = URL(string: urlString) else {
+            throw NSError(domain: "ContactsViewModel", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])
+        }
+
+        // Get session token for authentication
+        guard let sessionToken = SessionManager.shared.sessionToken else {
+            throw NSError(domain: "ContactsViewModel", code: 5, userInfo: [NSLocalizedDescriptionKey: "Not authenticated"])
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 10
+        request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NSError(domain: "ContactsViewModel", code: 2, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])
+        }
+
+        // 404 = user not found
+        if httpResponse.statusCode == 404 {
+            return nil
+        }
+
+        // 200 = user exists, parse keys
+        guard httpResponse.statusCode == 200 else {
+            throw NSError(domain: "ContactsViewModel", code: 3, userInfo: [NSLocalizedDescriptionKey: "Server error: \(httpResponse.statusCode)"])
+        }
+
+        // Parse JSON response for encPublicKey
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let encPublicKey = json["encPublicKey"] as? String else {
+            throw NSError(domain: "ContactsViewModel", code: 4, userInfo: [NSLocalizedDescriptionKey: "Invalid response format"])
+        }
+
+        return encPublicKey
     }
 
-    func updateContactName(_ contact: Contact, newName: String) {
+    func deleteContact(_ contact: ContactUI) {
+        contacts.removeAll { $0.id == contact.id }
+        filterContacts()
+
+        // Persist deletion to ContactsBackupService
+        ContactsBackupService.shared.removeContact(contact.whisperId)
+    }
+
+    func updateContactName(_ contact: ContactUI, newName: String) {
         guard let index = contacts.firstIndex(where: { $0.id == contact.id }) else { return }
         contacts[index].displayName = newName
         filterContacts()
+    }
+
+    func blockContact(_ contact: ContactUI) {
+        guard let index = contacts.firstIndex(where: { $0.id == contact.id }) else { return }
+        contacts[index].isBlocked = true
+        filterContacts()
+
+        // Persist block status
+        let key = "whisper2.blocked.\(contact.whisperId)"
+        UserDefaults.standard.set(true, forKey: key)
+        logger.info("Contact blocked: \(contact.whisperId)", category: .messaging)
+    }
+
+    func unblockContact(_ contact: ContactUI) {
+        guard let index = contacts.firstIndex(where: { $0.id == contact.id }) else { return }
+        contacts[index].isBlocked = false
+        filterContacts()
+
+        // Persist unblock status
+        let key = "whisper2.blocked.\(contact.whisperId)"
+        UserDefaults.standard.removeObject(forKey: key)
+        logger.info("Contact unblocked: \(contact.whisperId)", category: .messaging)
+    }
+
+    func isContactBlocked(_ whisperId: String) -> Bool {
+        let key = "whisper2.blocked.\(whisperId)"
+        return UserDefaults.standard.bool(forKey: key)
     }
 
     // MARK: - Private Methods

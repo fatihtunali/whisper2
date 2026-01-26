@@ -1,0 +1,26 @@
+{
+  "type": "group_event",
+  "payload": {
+    "event": "member_added",
+    "group": {
+      "groupId": "grp-550e8400-e29b-41d4-a716-446655440000",
+      "title": "Family Group",
+      "ownerId": "WSP-ABCD-EFGH-IJKL",
+      "createdAt": 1705000000000,
+      "updatedAt": 1705084800000,
+      "members": [
+        {
+          "whisperId": "WSP-ABCD-EFGH-IJKL",
+          "role": "owner",
+          "joinedAt": 1705000000000
+        },
+        {
+          "whisperId": "WSP-MNOP-QRST-UVWX",
+          "role": "member",
+          "joinedAt": 1705084800000
+        }
+      ]
+    },
+    "affectedMembers": ["WSP-MNOP-QRST-UVWX"]
+  }
+}

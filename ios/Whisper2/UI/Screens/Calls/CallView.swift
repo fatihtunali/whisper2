@@ -4,6 +4,7 @@ import SwiftUI
 struct CallView: View {
     @Bindable var viewModel: CallViewModel
     @Environment(\.dismiss) private var dismiss
+    @State private var showingMoreOptions = false
 
     var body: some View {
         ZStack {
@@ -85,7 +86,7 @@ struct CallView: View {
                             icon: "ellipsis",
                             label: "More"
                         ) {
-                            // Show more options
+                            showingMoreOptions = true
                         }
                     }
 
@@ -108,6 +109,15 @@ struct CallView: View {
             if case .idle = newState {
                 dismiss()
             }
+        }
+        .confirmationDialog("Call Options", isPresented: $showingMoreOptions) {
+            Button("Speaker") {
+                viewModel.toggleSpeaker()
+            }
+            Button("Bluetooth") {
+                // Switch to bluetooth if available
+            }
+            Button("Cancel", role: .cancel) {}
         }
     }
 }

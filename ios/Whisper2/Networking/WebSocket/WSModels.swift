@@ -234,8 +234,8 @@ struct PongPayload: Codable {
 
 // MARK: - Messaging
 
-/// Message types
-enum MessageContentType: String, Codable {
+/// Message types (for WebSocket messages)
+enum WSMessageContentType: String, Codable {
     case text
     case image
     case voice
@@ -279,7 +279,7 @@ struct SendMessagePayload: VersionedPayload {
         messageId: String,
         from: String,
         to: String,
-        msgType: MessageContentType,
+        msgType: WSMessageContentType,
         timestamp: Int64,
         nonce: String,
         ciphertext: String,
@@ -417,8 +417,8 @@ struct GroupCreateAckPayload: Codable {
     let createdAt: Int64
 }
 
-/// Group member info
-struct GroupMember: Codable {
+/// Group member info for WebSocket messages
+struct WSGroupMember: Codable {
     let whisperId: String
     let role: String  // "owner", "admin", "member"
     let joinedAt: Int64
@@ -432,7 +432,7 @@ struct GroupInfo: Codable {
     let ownerId: String
     let createdAt: Int64
     let updatedAt: Int64
-    let members: [GroupMember]
+    let members: [WSGroupMember]
 }
 
 /// Group event payload (server sends this for all group changes)
@@ -501,7 +501,7 @@ struct GroupSendMessagePayload: VersionedPayload {
         messageId: String,
         from: String,
         to: String,
-        msgType: MessageContentType,
+        msgType: WSMessageContentType,
         timestamp: Int64,
         nonce: String,
         ciphertext: String,
@@ -711,8 +711,8 @@ struct CallIceCandidatePayload: VersionedPayload {
     }
 }
 
-/// End call reasons
-enum CallEndReason: String, Codable {
+/// End call reasons (WebSocket message format)
+enum WSCallEndReason: String, Codable {
     case ended
     case declined
     case busy
@@ -743,7 +743,7 @@ struct CallEndPayload: VersionedPayload {
         nonce: String,
         ciphertext: String,
         sig: String,
-        reason: CallEndReason
+        reason: WSCallEndReason
     ) {
         self.protocolVersion = Protocol.version
         self.cryptoVersion = Protocol.cryptoVersion

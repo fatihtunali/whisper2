@@ -1,5 +1,5 @@
 import Foundation
-import TweetNaClx
+import TweetNacl
 
 /// NaCl Box (Curve25519-XSalsa20-Poly1305) implementation
 /// Public-key authenticated encryption
@@ -33,27 +33,23 @@ enum NaClBox {
             throw CryptoError.invalidSeed
         }
 
-        // TweetNaCl box keypair from seed
-        let seedBytes = [UInt8](seed.prefix(keyLength))
-        guard let keyPair = TweetNaCl.keyPair(fromSeed: seedBytes) else {
-            throw CryptoError.keyDerivationFailed
-        }
+        // TweetNaCl box keypair from secret key (seed)
+        let seedData = seed.prefix(keyLength)
+        let keyPair = try NaclBox.keyPair(fromSecretKey: Data(seedData))
 
         return KeyPair(
-            publicKey: Data(keyPair.publicKey),
-            privateKey: Data(keyPair.secretKey)
+            publicKey: keyPair.publicKey,
+            privateKey: keyPair.secretKey
         )
     }
 
     /// Generate random X25519 key pair
     static func generateKeyPair() throws -> KeyPair {
-        guard let keyPair = TweetNaCl.keyPair() else {
-            throw CryptoError.keyDerivationFailed
-        }
+        let keyPair = try NaclBox.keyPair()
 
         return KeyPair(
-            publicKey: Data(keyPair.publicKey),
-            privateKey: Data(keyPair.secretKey)
+            publicKey: keyPair.publicKey,
+            privateKey: keyPair.secretKey
         )
     }
 
@@ -117,21 +113,17 @@ enum NaClBox {
             throw CryptoError.invalidPrivateKey
         }
 
-        let messageBytes = [UInt8](message)
-        let nonceBytes = [UInt8](nonce)
-        let pubKeyBytes = [UInt8](recipientPublicKey)
-        let secKeyBytes = [UInt8](senderPrivateKey)
-
-        guard let ciphertext = TweetNaCl.box(
-            message: messageBytes,
-            nonce: nonceBytes,
-            publicKey: pubKeyBytes,
-            secretKey: secKeyBytes
-        ) else {
+        do {
+            let ciphertext = try NaclBox.box(
+                message: message,
+                nonce: nonce,
+                publicKey: recipientPublicKey,
+                secretKey: senderPrivateKey
+            )
+            return ciphertext
+        } catch {
             throw CryptoError.encryptionFailed
         }
-
-        return Data(ciphertext)
     }
 
     // MARK: - Decryption
@@ -162,21 +154,17 @@ enum NaClBox {
             throw CryptoError.decryptionFailed
         }
 
-        let ciphertextBytes = [UInt8](ciphertext)
-        let nonceBytes = [UInt8](nonce)
-        let pubKeyBytes = [UInt8](senderPublicKey)
-        let secKeyBytes = [UInt8](recipientPrivateKey)
-
-        guard let plaintext = TweetNaCl.open(
-            box: ciphertextBytes,
-            nonce: nonceBytes,
-            publicKey: pubKeyBytes,
-            secretKey: secKeyBytes
-        ) else {
+        do {
+            let plaintext = try NaclBox.open(
+                message: ciphertext,
+                nonce: nonce,
+                publicKey: senderPublicKey,
+                secretKey: recipientPrivateKey
+            )
+            return plaintext
+        } catch {
             throw CryptoError.decryptionFailed
         }
-
-        return Data(plaintext)
     }
 
     // MARK: - Convenience

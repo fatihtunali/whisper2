@@ -1,19 +1,29 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Manual backup trigger
 struct BackupView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showingRecoveryPhrase = false
     @State private var showingExportContacts = false
+    @State private var showingImportPicker = false
+    @State private var showingShareSheet = false
     @State private var isBackingUp = false
+    @State private var isImporting = false
     @State private var lastBackupDate: Date?
+    @State private var backupData: Data?
+    @State private var errorMessage: String?
+    @State private var showingError = false
+    @State private var successMessage: String?
+    @State private var showingSuccess = false
 
-    // Placeholder recovery phrase
-    private let recoveryPhrase = [
-        "apple", "banana", "cherry", "dragon",
-        "eagle", "forest", "garden", "harbor",
-        "island", "jungle", "kitten", "lemon"
-    ]
+    /// Get recovery phrase from keychain (the actual user's mnemonic)
+    private var recoveryPhrase: [String] {
+        if let mnemonic = KeychainService.shared.getString(forKey: Constants.StorageKey.mnemonic) {
+            return mnemonic.components(separatedBy: " ")
+        }
+        return []
+    }
 
     var body: some View {
         NavigationStack {
@@ -108,15 +118,21 @@ struct BackupView: View {
                 // Restore contacts
                 Section {
                     Button {
-                        // Import contacts
+                        showingImportPicker = true
                     } label: {
                         HStack {
-                            Image(systemName: "square.and.arrow.down")
-                                .foregroundColor(Theme.Colors.primary)
+                            if isImporting {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                            } else {
+                                Image(systemName: "square.and.arrow.down")
+                                    .foregroundColor(Theme.Colors.primary)
+                            }
                             Text("Import Contacts Backup")
                                 .foregroundColor(Theme.Colors.textPrimary)
                         }
                     }
+                    .disabled(isImporting)
                 } footer: {
                     Text("Import a previously exported contacts backup. The backup must have been created with your recovery phrase.")
                 }
@@ -153,6 +169,28 @@ struct BackupView: View {
             .sheet(isPresented: $showingRecoveryPhrase) {
                 RecoveryPhraseView(words: recoveryPhrase)
             }
+            .sheet(isPresented: $showingShareSheet) {
+                if let data = backupData {
+                    BackupShareSheet(backupData: data)
+                }
+            }
+            .fileImporter(
+                isPresented: $showingImportPicker,
+                allowedContentTypes: [.data, .json],
+                allowsMultipleSelection: false
+            ) { result in
+                handleImport(result)
+            }
+            .alert("Error", isPresented: $showingError) {
+                Button("OK") { errorMessage = nil }
+            } message: {
+                Text(errorMessage ?? "An error occurred")
+            }
+            .alert("Success", isPresented: $showingSuccess) {
+                Button("OK") { successMessage = nil }
+            } message: {
+                Text(successMessage ?? "Operation completed")
+            }
         }
     }
 
@@ -160,15 +198,86 @@ struct BackupView: View {
         isBackingUp = true
 
         Task { @MainActor in
-            // Simulate export
-            try? await Task.sleep(for: .seconds(2))
+            do {
+                // Get contacts key from keychain
+                guard let contactsKey = KeychainService.shared.getData(forKey: Constants.StorageKey.contactsKey) else {
+                    throw NSError(domain: "BackupView", code: 1, userInfo: [NSLocalizedDescriptionKey: "Contacts key not found"])
+                }
 
-            lastBackupDate = Date()
-            isBackingUp = false
+                // Get contacts from ContactsBackupService
+                let backupService = ContactsBackupService.shared
+                let encryptedBackup = try await backupService.createBackup()
 
-            // In real implementation, show share sheet with backup file
+                backupData = encryptedBackup
+                lastBackupDate = Date()
+                isBackingUp = false
+                showingShareSheet = true
+
+                logger.info("Contacts backup created successfully", category: .storage)
+            } catch {
+                isBackingUp = false
+                errorMessage = "Failed to export contacts: \(error.localizedDescription)"
+                showingError = true
+                logger.error(error, message: "Failed to export contacts", category: .storage)
+            }
         }
     }
+
+    private func handleImport(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard let url = urls.first else { return }
+
+            isImporting = true
+
+            Task { @MainActor in
+                do {
+                    // Read backup file
+                    let data = try Data(contentsOf: url)
+
+                    // Restore using ContactsBackupService
+                    let backupService = ContactsBackupService.shared
+                    let restoredCount = try await backupService.restoreBackup(data)
+
+                    isImporting = false
+                    successMessage = "Successfully restored \(restoredCount) contacts"
+                    showingSuccess = true
+
+                    logger.info("Restored \(restoredCount) contacts from backup", category: .storage)
+                } catch {
+                    isImporting = false
+                    errorMessage = "Failed to import contacts: \(error.localizedDescription)"
+                    showingError = true
+                    logger.error(error, message: "Failed to import contacts", category: .storage)
+                }
+            }
+
+        case .failure(let error):
+            errorMessage = "Failed to open file: \(error.localizedDescription)"
+            showingError = true
+        }
+    }
+}
+
+// MARK: - Backup Share Sheet
+
+private struct BackupShareSheet: UIViewControllerRepresentable {
+    let backupData: Data
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        // Create temporary file
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("whisper2_contacts_backup_\(Date().timeIntervalSince1970).enc")
+
+        try? backupData.write(to: tempURL)
+
+        return UIActivityViewController(
+            activityItems: [tempURL],
+            applicationActivities: nil
+        )
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
 // MARK: - Recovery Phrase View

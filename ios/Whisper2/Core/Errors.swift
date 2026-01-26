@@ -208,6 +208,7 @@ enum CallError: WhisperError {
     case notCallParty
     case webRTCFailed(reason: String)
     case turnCredentialsFailed
+    case notAuthenticated
 
     var code: String {
         switch self {
@@ -217,6 +218,7 @@ enum CallError: WhisperError {
         case .notCallParty: return "CALL_NOT_PARTY"
         case .webRTCFailed: return "CALL_WEBRTC_FAILED"
         case .turnCredentialsFailed: return "CALL_TURN_FAILED"
+        case .notAuthenticated: return "CALL_NOT_AUTHENTICATED"
         }
     }
 
@@ -228,6 +230,7 @@ enum CallError: WhisperError {
         case .notCallParty: return "Not a party to this call"
         case .webRTCFailed(let reason): return "WebRTC error: \(reason)"
         case .turnCredentialsFailed: return "Failed to get TURN credentials"
+        case .notAuthenticated: return "Not authenticated"
         }
     }
 }

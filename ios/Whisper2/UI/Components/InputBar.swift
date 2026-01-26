@@ -1,5 +1,14 @@
 import SwiftUI
 
+/// Share menu option types
+enum ShareMenuOption {
+    case photoLibrary
+    case camera
+    case document
+    case location
+    case contact
+}
+
 /// Text input bar with send and attachment buttons
 struct InputBar: View {
     @Binding var text: String
@@ -7,7 +16,7 @@ struct InputBar: View {
     var showAttachmentButton: Bool = true
     var isEnabled: Bool = true
     var onSend: () -> Void
-    var onAttachment: (() -> Void)? = nil
+    var onAttachment: ((ShareMenuOption) -> Void)? = nil
 
     @FocusState private var isFocused: Bool
 
@@ -16,23 +25,62 @@ struct InputBar: View {
     }
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: Theme.Spacing.xs) {
-            // Attachment button
+        HStack(alignment: .bottom, spacing: WhisperSpacing.xs) {
+            // Attachment menu button
             if showAttachmentButton {
-                Button {
-                    onAttachment?()
+                Menu {
+                    Button(action: {
+                        // Delay to allow menu to dismiss before presenting sheet
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            onAttachment?(.photoLibrary)
+                        }
+                    }) {
+                        Label("Photo & Video", systemImage: "photo.on.rectangle")
+                    }
+
+                    Button(action: {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            onAttachment?(.camera)
+                        }
+                    }) {
+                        Label("Camera", systemImage: "camera")
+                    }
+
+                    Button(action: {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            onAttachment?(.document)
+                        }
+                    }) {
+                        Label("Document", systemImage: "doc")
+                    }
+
+                    Button(action: {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            onAttachment?(.location)
+                        }
+                    }) {
+                        Label("Location", systemImage: "location")
+                    }
+
+                    Button(action: {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            onAttachment?(.contact)
+                        }
+                    }) {
+                        Label("Contact", systemImage: "person.crop.circle")
+                    }
                 } label: {
                     Image(systemName: "plus.circle.fill")
-                        .font(.system(size: Theme.IconSize.lg))
-                        .foregroundColor(Theme.Colors.primary)
+                        .font(.system(size: 28))
+                        .foregroundColor(.whisperPrimary)
                 }
                 .disabled(!isEnabled)
             }
 
             // Text input
-            HStack(alignment: .bottom, spacing: Theme.Spacing.xs) {
+            HStack(alignment: .bottom, spacing: WhisperSpacing.xs) {
                 TextField(placeholder, text: $text, axis: .vertical)
-                    .font(Theme.Typography.body)
+                    .font(.whisper(size: WhisperFontSize.md))
                     .lineLimit(1...5)
                     .focused($isFocused)
                     .disabled(!isEnabled)
@@ -44,20 +92,20 @@ struct InputBar: View {
                     } label: {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.system(size: 28))
-                            .foregroundColor(Theme.Colors.primary)
+                            .foregroundColor(.whisperPrimary)
                     }
                     .transition(.scale.combined(with: .opacity))
                 }
             }
-            .padding(.horizontal, Theme.Spacing.sm)
-            .padding(.vertical, Theme.Spacing.xs)
-            .background(Theme.Colors.surface)
+            .padding(.horizontal, WhisperSpacing.sm)
+            .padding(.vertical, WhisperSpacing.xs)
+            .background(Color.whisperSurface)
             .clipShape(RoundedRectangle(cornerRadius: 20))
         }
-        .padding(.horizontal, Theme.Spacing.md)
-        .padding(.vertical, Theme.Spacing.xs)
-        .background(Theme.Colors.background)
-        .animation(Theme.Animation.fast, value: canSend)
+        .padding(.horizontal, WhisperSpacing.md)
+        .padding(.vertical, WhisperSpacing.xs)
+        .background(Color.whisperBackground)
+        .animation(.easeInOut(duration: 0.2), value: canSend)
     }
 }
 

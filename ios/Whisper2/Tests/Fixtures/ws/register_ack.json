@@ -1,0 +1,10 @@
+{
+  "type": "register_ack",
+  "payload": {
+    "success": true,
+    "whisperId": "WSP-ABCD-EFGH-IJKL",
+    "sessionToken": "sess_01H9XYZABCDEFGHIJ1234567890abcdefghij",
+    "sessionExpiresAt": 1705171200000,
+    "serverTime": 1705084800000
+  }
+}

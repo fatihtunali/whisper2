@@ -11,18 +11,11 @@ import Foundation
 /// - Send delivery receipts
 
 // MARK: - Message Types
+// Note: MessageContentType, DeliveryStatus, AttachmentPointer, SendMessagePayload,
+// and MessageReceivedPayload are defined in WSModels.swift
 
-/// Message content types matching server protocol
-enum MessageContentType: String, Codable {
-    case text
-    case image
-    case voice
-    case file
-    case system
-}
-
-/// Delivery status for messages
-enum DeliveryStatus: String, Codable {
+/// Extended delivery status for internal use (includes pending state)
+enum MessagingDeliveryStatus: String, Codable {
     case pending
     case sent
     case delivered
@@ -68,106 +61,12 @@ struct IncomingMessage {
     let attachment: AttachmentPointer?
 }
 
-/// Attachment pointer for file messages
-struct AttachmentPointer: Codable {
-    let objectKey: String
-    let contentType: String
-    let ciphertextSize: Int
-    let fileNonce: String
-    let fileKeyBox: FileKeyBox
-
-    struct FileKeyBox: Codable {
-        let nonce: String
-        let ciphertext: String
-    }
-}
-
 // MARK: - Protocol Types
+// Note: DeliveryReceiptPayload and FetchPendingPayload are defined in WSModels.swift
 
 /// Protocol versions (must match server)
 private let protocolVersion = 1
 private let cryptoVersion = 1
-
-/// Send message payload matching server schema
-struct SendMessagePayload: Encodable {
-    let protocolVersion: Int
-    let cryptoVersion: Int
-    let sessionToken: String
-    let messageId: String
-    let from: String
-    let to: String
-    let msgType: String
-    let timestamp: Int64
-    let nonce: String
-    let ciphertext: String
-    let sig: String
-    let replyTo: String?
-    let attachment: AttachmentPointer?
-
-    enum CodingKeys: String, CodingKey {
-        case protocolVersion, cryptoVersion, sessionToken, messageId
-        case from, to, msgType, timestamp, nonce, ciphertext, sig
-        case replyTo, attachment
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(protocolVersion, forKey: .protocolVersion)
-        try container.encode(cryptoVersion, forKey: .cryptoVersion)
-        try container.encode(sessionToken, forKey: .sessionToken)
-        try container.encode(messageId, forKey: .messageId)
-        try container.encode(from, forKey: .from)
-        try container.encode(to, forKey: .to)
-        try container.encode(msgType, forKey: .msgType)
-        try container.encode(timestamp, forKey: .timestamp)
-        try container.encode(nonce, forKey: .nonce)
-        try container.encode(ciphertext, forKey: .ciphertext)
-        try container.encode(sig, forKey: .sig)
-        // Only encode optional fields if present
-        if let replyTo = replyTo {
-            try container.encode(replyTo, forKey: .replyTo)
-        }
-        if let attachment = attachment {
-            try container.encode(attachment, forKey: .attachment)
-        }
-    }
-}
-
-/// Message received payload from server
-struct MessageReceivedPayload: Decodable {
-    let messageId: String
-    let from: String
-    let to: String
-    let msgType: String
-    let timestamp: Int64
-    let nonce: String
-    let ciphertext: String
-    let sig: String
-    let replyTo: String?
-    let groupId: String?
-    let attachment: AttachmentPointer?
-}
-
-/// Delivery receipt payload
-struct DeliveryReceiptPayload: Encodable {
-    let protocolVersion: Int
-    let cryptoVersion: Int
-    let sessionToken: String
-    let messageId: String
-    let from: String
-    let to: String
-    let status: String
-    let timestamp: Int64
-}
-
-/// Fetch pending payload
-struct FetchPendingPayload: Encodable {
-    let protocolVersion: Int
-    let cryptoVersion: Int
-    let sessionToken: String
-    let cursor: String?
-    let limit: Int?
-}
 
 // MARK: - Crypto Protocol
 
@@ -363,15 +262,14 @@ actor MessagingService {
             throw MessagingError.sendFailed(reason: "Signing failed")
         }
 
-        // Build payload
+        // Build payload - convert MessageContentType to WSMessageContentType
+        let wsContentType = WSMessageContentType(rawValue: message.contentType.rawValue) ?? .text
         let payload = SendMessagePayload(
-            protocolVersion: protocolVersion,
-            cryptoVersion: cryptoVersion,
             sessionToken: sessionToken,
             messageId: message.id,
             from: myWhisperId,
             to: message.recipientId,
-            msgType: message.contentType.rawValue,
+            msgType: wsContentType,
             timestamp: timestamp,
             nonce: nonceB64,
             ciphertext: ciphertextB64,
@@ -521,25 +419,26 @@ actor MessagingService {
     // MARK: - Delivery Receipts
 
     /// Send a delivery receipt
+    /// Note: Uses MessagingDeliveryStatus for internal status tracking
     func sendDeliveryReceipt(
         messageId: String,
         from: String,
         to: String,
-        status: DeliveryStatus
+        status: MessagingDeliveryStatus
     ) async {
         guard let sessionToken = crypto.sessionToken else {
             logger.warning("Cannot send receipt: no session token", category: .messaging)
             return
         }
 
+        // Convert to WS DeliveryStatus
+        let wsStatus: DeliveryStatus = status == .delivered ? .delivered : .read
         let payload = DeliveryReceiptPayload(
-            protocolVersion: protocolVersion,
-            cryptoVersion: cryptoVersion,
             sessionToken: sessionToken,
             messageId: messageId,
             from: from,
             to: to,
-            status: status == .delivered ? "delivered" : "read",
+            status: wsStatus,
             timestamp: Time.nowMs
         )
 

@@ -1,0 +1,8 @@
+{
+  "type": "register_challenge",
+  "payload": {
+    "challengeId": "550e8400-e29b-41d4-a716-446655440000",
+    "challenge": "dGVzdENoYWxsZW5nZUJ5dGVzMzJCeXRlc0xvbmch",
+    "expiresAt": 1705084800000
+  }
+}

@@ -17,7 +17,7 @@ struct Whisper2App: App {
 
     // MARK: - Push Delegates
     private let pushDelegate = PushNotificationDelegate()
-    private let voipDelegate = VoIPPushDelegate()
+    // Note: VoIP push is handled by VoipPushService.shared
 
     // MARK: - SwiftData Container
     private let modelContainer: ModelContainer
@@ -61,7 +61,9 @@ struct Whisper2App: App {
             RootView()
                 .environment(appEnvironment)
                 .environment(appCoordinator)
+                .environmentObject(ThemeManager.shared)
                 .modelContainer(modelContainer)
+                .preferredColorScheme(ThemeManager.shared.colorScheme)
                 .onAppear {
                     appCoordinator.setEnvironment(appEnvironment)
                     setupNotificationHandling()
@@ -144,11 +146,11 @@ struct Whisper2App: App {
     }
 
     private func registerForVoIPPush() {
-        let voipRegistry = PKPushRegistry(queue: .main)
-        voipRegistry.delegate = voipDelegate
-        voipRegistry.desiredPushTypes = [.voIP]
+        // Use the shared VoipPushService singleton
+        // It handles both registration and CallKit reporting
+        VoipPushService.setupAtLaunch()
 
-        logger.info("VoIP push registry configured", category: .calls)
+        logger.info("VoIP push service configured", category: .calls)
     }
 
     private func setupNotificationHandling() {
@@ -157,31 +159,9 @@ struct Whisper2App: App {
             appCoordinator?.handleNotificationTap(response)
         }
 
-        voipDelegate.onIncomingCall = { [weak appEnvironment] payload in
-            Task {
-                // Extract call info from VoIP payload
-                let callPayload = payload.dictionaryPayload
-
-                guard let callId = callPayload["callId"] as? String,
-                      let fromWhisperId = callPayload["from"] as? String,
-                      let isVideo = callPayload["isVideo"] as? Bool,
-                      let offer = callPayload["offer"] as? String,
-                      let nonce = callPayload["nonce"] as? String,
-                      let sig = callPayload["sig"] as? String else {
-                    logger.error("Invalid VoIP push payload", category: .calls)
-                    return
-                }
-
-                await appEnvironment?.callService.handleIncomingCall(
-                    callId: callId,
-                    from: fromWhisperId,
-                    isVideo: isVideo,
-                    offer: offer,
-                    nonce: nonce,
-                    sig: sig
-                )
-            }
-        }
+        // Connect VoipPushService to CallService
+        // CallService will handle incoming calls and report to CallKit
+        VoipPushService.shared.delegate = CallService.shared
     }
 }
 
@@ -192,10 +172,10 @@ struct RootView: View {
     @Environment(AppEnvironment.self) private var environment
 
     var body: some View {
-        Group {
+        SwiftUI.Group {
             switch coordinator.appState {
             case .loading:
-                LoadingView()
+                AppLoadingView()
             case .unauthenticated:
                 AuthenticationView()
             case .authenticated:
@@ -209,9 +189,9 @@ struct RootView: View {
     }
 }
 
-// MARK: - Placeholder Views (to be replaced with actual implementations)
+// MARK: - App State Views
 
-struct LoadingView: View {
+struct AppLoadingView: View {
     var body: some View {
         VStack(spacing: 16) {
             ProgressView()
@@ -225,119 +205,88 @@ struct LoadingView: View {
 
 struct AuthenticationView: View {
     @Environment(AppCoordinator.self) private var coordinator
+    @State private var authViewModel = AuthViewModel()
 
     var body: some View {
-        VStack(spacing: 24) {
-            Spacer()
-
-            Image(systemName: "bubble.left.and.bubble.right.fill")
-                .font(.system(size: 80))
-                .foregroundStyle(.blue)
-
-            Text("Whisper2")
-                .font(.largeTitle)
-                .fontWeight(.bold)
-
-            Text("Secure, Private Messaging")
-                .font(.title3)
-                .foregroundStyle(.secondary)
-
-            Spacer()
-
-            Button {
-                // Navigate to registration/login flow
-                // This will be replaced with actual WelcomeView
-            } label: {
-                Text("Get Started")
-                    .font(.headline)
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 50)
-                    .background(.blue)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+        WelcomeView(viewModel: authViewModel)
+            .onChange(of: authViewModel.state) { _, newState in
+                if newState == .authenticated {
+                    coordinator.transitionToAuthenticated()
+                }
             }
-            .padding(.horizontal, 24)
-            .padding(.bottom, 32)
-        }
     }
 }
 
 struct MainTabView: View {
     @Environment(AppCoordinator.self) private var coordinator
+    @StateObject private var themeManager = ThemeManager.shared
 
     var body: some View {
         @Bindable var coordinatorBinding = coordinator
 
         TabView(selection: $coordinatorBinding.selectedTab) {
-            ConversationsPlaceholderView()
-                .tabItem {
-                    Label("Chats", systemImage: "message.fill")
-                }
-                .tag(AppCoordinator.MainTab.conversations)
-
-            ContactsPlaceholderView()
-                .tabItem {
-                    Label("Contacts", systemImage: "person.2.fill")
-                }
-                .tag(AppCoordinator.MainTab.contacts)
-
-            SettingsPlaceholderView()
-                .tabItem {
-                    Label("Settings", systemImage: "gear")
-                }
-                .tag(AppCoordinator.MainTab.settings)
-        }
-    }
-}
-
-// MARK: - Placeholder Tab Views
-
-struct ConversationsPlaceholderView: View {
-    var body: some View {
-        NavigationStack {
-            Text("Conversations")
-                .navigationTitle("Chats")
-        }
-    }
-}
-
-struct ContactsPlaceholderView: View {
-    var body: some View {
-        NavigationStack {
-            Text("Contacts")
-                .navigationTitle("Contacts")
-        }
-    }
-}
-
-struct SettingsPlaceholderView: View {
-    @Environment(AppEnvironment.self) private var environment
-    @Environment(AppCoordinator.self) private var coordinator
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Section("Account") {
-                    if let whisperId = environment.sessionManager.whisperId {
-                        LabeledContent("Whisper ID", value: whisperId)
-                    }
-                }
-
-                Section("Actions") {
-                    Button("Logout", role: .destructive) {
-                        Task {
-                            await environment.logout()
-                            await MainActor.run {
-                                coordinator.transitionToUnauthenticated()
-                            }
-                        }
-                    }
-                }
+            NavigationStack {
+                ChatsListView()
             }
-            .navigationTitle("Settings")
+            .tabItem {
+                Label("Chats", systemImage: "message.fill")
+            }
+            .tag(AppCoordinator.MainTab.conversations)
+
+            NavigationStack {
+                GroupsListView()
+            }
+            .tabItem {
+                Label("Groups", systemImage: "person.3.fill")
+            }
+            .tag(AppCoordinator.MainTab.groups)
+
+            NavigationStack {
+                ContactsListView()
+            }
+            .tabItem {
+                Label("Contacts", systemImage: "person.2.fill")
+            }
+            .tag(AppCoordinator.MainTab.contacts)
+
+            NavigationStack {
+                SettingsView()
+            }
+            .tabItem {
+                Label("Settings", systemImage: "gearshape.fill")
+            }
+            .tag(AppCoordinator.MainTab.settings)
+        }
+        .tint(Color.whisperPrimary)
+        .onAppear {
+            updateTabBarAppearance()
+        }
+        .onChange(of: themeManager.themeMode) { _, _ in
+            updateTabBarAppearance()
         }
     }
+
+    private func updateTabBarAppearance() {
+        let appearance = UITabBarAppearance()
+        appearance.configureWithOpaqueBackground()
+        appearance.backgroundColor = UIColor(Color.whisperBackground)
+
+        // Update tab bar item colors
+        let itemAppearance = UITabBarItemAppearance()
+        itemAppearance.normal.iconColor = UIColor(Color.whisperTextMuted)
+        itemAppearance.normal.titleTextAttributes = [.foregroundColor: UIColor(Color.whisperTextMuted)]
+        itemAppearance.selected.iconColor = UIColor(Color.whisperPrimary)
+        itemAppearance.selected.titleTextAttributes = [.foregroundColor: UIColor(Color.whisperPrimary)]
+
+        appearance.stackedLayoutAppearance = itemAppearance
+        appearance.inlineLayoutAppearance = itemAppearance
+        appearance.compactInlineLayoutAppearance = itemAppearance
+
+        UITabBar.appearance().standardAppearance = appearance
+        UITabBar.appearance().scrollEdgeAppearance = appearance
+    }
 }
+
 
 // MARK: - Push Notification Delegate
 

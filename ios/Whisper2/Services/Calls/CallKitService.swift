@@ -41,8 +41,7 @@ final class CallKitService: NSObject {
 
     override init() {
         // Configure provider
-        let config = CXProviderConfiguration()
-        config.localizedName = "Whisper2"
+        let config = CXProviderConfiguration(localizedName: "Whisper2")
         config.supportsVideo = true
         config.maximumCallsPerCallGroup = 1
         config.maximumCallGroups = 1
@@ -283,10 +282,11 @@ extension CallKitService: CXProviderDelegate {
         audioSession.lockForConfiguration()
 
         do {
-            try audioSession.setCategory(AVAudioSession.Category.playAndRecord.rawValue)
-            try audioSession.setMode(AVAudioSession.Mode.voiceChat.rawValue)
-        } catch {
-            logger.error(error, message: "Failed to configure audio session", category: .calls)
+            try audioSession.setCategory(.playAndRecord,
+                                         with: [.allowBluetooth, .defaultToSpeaker])
+            try audioSession.setMode(.voiceChat)
+        } catch let err {
+            logger.debug("Failed to configure audio session: \(err.localizedDescription)", category: .calls)
         }
 
         audioSession.unlockForConfiguration()

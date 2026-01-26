@@ -1,12 +1,13 @@
 import SwiftUI
 import Observation
+import Combine
 
-/// Call state management
+/// Call state management - connects to real CallService
 @Observable
 final class CallViewModel {
     // MARK: - State
 
-    enum CallState {
+    enum ViewState: Equatable {
         case idle
         case initiating
         case ringing
@@ -21,7 +22,7 @@ final class CallViewModel {
         case incoming
     }
 
-    var state: CallState = .idle
+    var state: ViewState = .idle
     var direction: CallDirection = .outgoing
 
     // Participant info
@@ -40,12 +41,18 @@ final class CallViewModel {
 
     // Timer
     private var durationTimer: Timer?
+    private var cancellables = Set<AnyCancellable>()
 
     // MARK: - Dependencies
 
-    // These will be injected when actual services are implemented
-    // private let callService: CallServiceProtocol
-    // private let webRTCService: WebRTCServiceProtocol
+    private let callService = CallService.shared
+    private let keychain = KeychainService.shared
+
+    // MARK: - Init
+
+    init() {
+        setupCallServiceObserver()
+    }
 
     // MARK: - Computed Properties
 
@@ -74,9 +81,50 @@ final class CallViewModel {
         }
     }
 
+    // MARK: - CallService Observer
+
+    private func setupCallServiceObserver() {
+        callService.statePublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] callState in
+                self?.handleCallStateChange(callState)
+            }
+            .store(in: &cancellables)
+    }
+
+    private func handleCallStateChange(_ callState: CallState) {
+        switch callState {
+        case .idle:
+            state = .idle
+        case .outgoingInitiating:
+            state = .initiating
+            direction = .outgoing
+        case .incomingRinging:
+            state = .ringing
+            direction = .incoming
+        case .connecting:
+            state = .connecting
+        case .connected:
+            state = .connected
+            if startTime == nil {
+                startTime = Date()
+                startDurationTimer()
+            }
+        case .ended:
+            stopDurationTimer()
+            state = .ended
+        }
+
+        // Update call info from service
+        if let currentCall = callService.currentCall {
+            callId = currentCall.callId
+            participantId = currentCall.remoteWhisperId
+        }
+    }
+
     // MARK: - Actions
 
-    func initiateCall(to participantId: String, name: String, avatarURL: URL? = nil) {
+    func initiateCall(to participantId: String, name: String, avatarURL: URL? = nil, isVideo: Bool = false) {
         self.participantId = participantId
         self.participantName = name
         self.participantAvatarURL = avatarURL
@@ -85,18 +133,10 @@ final class CallViewModel {
 
         Task { @MainActor in
             do {
-                // Simulate call setup
-                try await Task.sleep(for: .seconds(1))
-                state = .ringing
-
-                // Simulate answer (for demo)
-                try await Task.sleep(for: .seconds(2))
-                state = .connecting
-
-                try await Task.sleep(for: .milliseconds(500))
-                startCall()
+                try await callService.initiateCall(to: participantId, isVideo: isVideo)
             } catch {
-                state = .failed(reason: "Failed to connect")
+                logger.error(error, message: "Failed to initiate call", category: .calls)
+                state = .failed(reason: error.localizedDescription)
             }
         }
     }
@@ -122,39 +162,39 @@ final class CallViewModel {
 
         Task { @MainActor in
             do {
-                // Simulate connection
-                try await Task.sleep(for: .milliseconds(500))
-                startCall()
+                try await callService.answerCall()
             } catch {
-                state = .failed(reason: "Failed to connect")
+                logger.error(error, message: "Failed to answer call", category: .calls)
+                state = .failed(reason: error.localizedDescription)
             }
         }
     }
 
     func declineCall() {
         guard state == .ringing && direction == .incoming else { return }
-        endCall()
+
+        Task { @MainActor in
+            await callService.endCall(reason: .declined)
+        }
     }
 
     func endCall() {
         stopDurationTimer()
-        state = .ended
 
-        // Clean up after a delay
         Task { @MainActor in
-            try? await Task.sleep(for: .seconds(2))
-            reset()
+            await callService.endCall(reason: .ended)
         }
     }
 
     func toggleMute() {
         isMuted.toggle()
-        // In real implementation, toggle audio track
+        // Mute is handled by CallKitService delegate which notifies CallService
+        // The WebRTC audio track is toggled there
     }
 
     func toggleSpeaker() {
         isSpeakerOn.toggle()
-        // In real implementation, change audio route
+        // Audio route change handled by AudioSessionService
     }
 
     func reset() {
@@ -172,12 +212,6 @@ final class CallViewModel {
     }
 
     // MARK: - Private Methods
-
-    private func startCall() {
-        state = .connected
-        startTime = Date()
-        startDurationTimer()
-    }
 
     private func startDurationTimer() {
         durationTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in

@@ -89,7 +89,7 @@ final class AttachmentService {
 
         // 1. Validate size
         guard data.count > 0 && data.count <= Constants.Limits.maxAttachmentSize else {
-            throw AttachmentError.sizeLimitExceeded
+            throw AttachmentServiceError.sizeLimitExceeded
         }
 
         // 2. Get session token
@@ -250,7 +250,7 @@ final class AttachmentService {
 
         guard let httpResponse = response as? HTTPURLResponse,
               (200...299).contains(httpResponse.statusCode) else {
-            throw AttachmentError.uploadFailed
+            throw AttachmentServiceError.uploadFailed
         }
     }
 
@@ -268,7 +268,7 @@ final class AttachmentService {
 
         guard let httpResponse = response as? HTTPURLResponse,
               (200...299).contains(httpResponse.statusCode) else {
-            throw AttachmentError.downloadFailed
+            throw AttachmentServiceError.downloadFailed
         }
 
         return data
@@ -304,9 +304,9 @@ final class AttachmentService {
         case 401:
             throw AuthError.sessionExpired
         case 403:
-            throw AttachmentError.accessDenied
+            throw AttachmentServiceError.accessDenied
         case 404:
-            throw AttachmentError.notFound
+            throw AttachmentServiceError.notFound
         case 429:
             throw NetworkError.httpError(statusCode: 429, message: "Rate limited")
         default:
@@ -319,9 +319,10 @@ final class AttachmentService {
     }
 }
 
-// MARK: - Attachment Errors
+// MARK: - Attachment Service Errors
+// Note: AttachmentError is defined in Domain/Models/Attachment.swift
 
-enum AttachmentError: WhisperError {
+enum AttachmentServiceError: WhisperError {
     case sizeLimitExceeded
     case invalidContentType
     case uploadFailed
@@ -387,35 +388,12 @@ final class AttachmentCrypto {
 
     /// Encrypt data with secretbox (symmetric).
     func secretboxSeal(plaintext: Data, key: Data) throws -> (nonce: Data, ciphertext: Data) {
-        guard key.count == Constants.Crypto.keyLength else {
-            throw CryptoError.invalidKeyLength
-        }
-
-        // Generate random nonce
-        let nonce = try randomBytes(Constants.Crypto.nonceLength)
-
-        // TODO: Implement actual NaCl secretbox_seal
-        // Using TweetNaCl or libsodium
-        // crypto_secretbox_easy(c, m, mlen, n, k)
-
-        // Placeholder - needs real crypto implementation
-        throw CryptoError.encryptionFailed
+        return try NaClSecretBox.seal(message: plaintext, key: key)
     }
 
     /// Decrypt data with secretbox (symmetric).
     func secretboxOpen(ciphertext: Data, nonce: Data, key: Data) throws -> Data {
-        guard key.count == Constants.Crypto.keyLength else {
-            throw CryptoError.invalidKeyLength
-        }
-        guard nonce.count == Constants.Crypto.nonceLength else {
-            throw CryptoError.invalidNonce
-        }
-
-        // TODO: Implement actual NaCl secretbox_open
-        // crypto_secretbox_open_easy(m, c, clen, n, k)
-
-        // Placeholder - needs real crypto implementation
-        throw CryptoError.decryptionFailed
+        return try NaClSecretBox.open(ciphertext: ciphertext, nonce: nonce, key: key)
     }
 
     /// Encrypt data with box (asymmetric).
@@ -424,21 +402,11 @@ final class AttachmentCrypto {
         recipientPublicKey: Data,
         senderPrivateKey: Data
     ) throws -> (nonce: Data, ciphertext: Data) {
-        guard recipientPublicKey.count == Constants.Crypto.publicKeyLength else {
-            throw CryptoError.invalidPublicKey
-        }
-        guard senderPrivateKey.count == Constants.Crypto.secretKeyLength else {
-            throw CryptoError.invalidPrivateKey
-        }
-
-        // Generate random nonce
-        let nonce = try randomBytes(Constants.Crypto.nonceLength)
-
-        // TODO: Implement actual NaCl box_seal
-        // crypto_box_easy(c, m, mlen, n, pk, sk)
-
-        // Placeholder - needs real crypto implementation
-        throw CryptoError.encryptionFailed
+        return try NaClBox.seal(
+            message: plaintext,
+            recipientPublicKey: recipientPublicKey,
+            senderPrivateKey: senderPrivateKey
+        )
     }
 
     /// Decrypt data with box (asymmetric).
@@ -448,20 +416,11 @@ final class AttachmentCrypto {
         senderPublicKey: Data,
         recipientPrivateKey: Data
     ) throws -> Data {
-        guard senderPublicKey.count == Constants.Crypto.publicKeyLength else {
-            throw CryptoError.invalidPublicKey
-        }
-        guard recipientPrivateKey.count == Constants.Crypto.secretKeyLength else {
-            throw CryptoError.invalidPrivateKey
-        }
-        guard nonce.count == Constants.Crypto.nonceLength else {
-            throw CryptoError.invalidNonce
-        }
-
-        // TODO: Implement actual NaCl box_open
-        // crypto_box_open_easy(m, c, clen, n, pk, sk)
-
-        // Placeholder - needs real crypto implementation
-        throw CryptoError.decryptionFailed
+        return try NaClBox.open(
+            ciphertext: ciphertext,
+            nonce: nonce,
+            senderPublicKey: senderPublicKey,
+            recipientPrivateKey: recipientPrivateKey
+        )
     }
 }

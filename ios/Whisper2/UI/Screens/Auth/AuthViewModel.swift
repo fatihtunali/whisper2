@@ -1,19 +1,19 @@
 import SwiftUI
 import Observation
 
-/// Auth flow state management
+/// Auth flow state management with real server integration
 @Observable
 final class AuthViewModel {
     // MARK: - State
 
-    enum AuthState {
+    enum AuthState: Equatable {
         case initial
         case creatingAccount
         case recoveringAccount
         case authenticated
     }
 
-    enum AuthStep {
+    enum AuthStep: Equatable {
         case welcome
         case generateMnemonic
         case confirmMnemonic
@@ -38,10 +38,9 @@ final class AuthViewModel {
 
     // MARK: - Dependencies
 
-    // These will be injected when actual services are implemented
-    // private let cryptoService: CryptoServiceProtocol
-    // private let authService: AuthServiceProtocol
-    // private let storageService: StorageServiceProtocol
+    private let cryptoService = CryptoService.shared
+    private let authService = AuthService.shared
+    private let keychain = KeychainService.shared
 
     // MARK: - Computed Properties
 
@@ -88,22 +87,23 @@ final class AuthViewModel {
         isLoading = true
         error = nil
 
-        // Simulate mnemonic generation (will be replaced with actual crypto)
         Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(500))
+            do {
+                // Generate real BIP39 mnemonic
+                let mnemonic = cryptoService.generateMnemonic()
+                generatedMnemonic = mnemonic.split(separator: " ").map(String.init)
 
-            // Placeholder words - actual implementation will use BIP39
-            generatedMnemonic = [
-                "apple", "banana", "cherry", "dragon",
-                "eagle", "forest", "garden", "harbor",
-                "island", "jungle", "kitten", "lemon"
-            ]
+                // Select 3 random indices for confirmation
+                confirmationIndices = Array(0..<12).shuffled().prefix(3).sorted()
+                selectedConfirmationWords.removeAll()
 
-            // Select 3 random indices for confirmation
-            confirmationIndices = Array(0..<12).shuffled().prefix(3).sorted()
-            selectedConfirmationWords.removeAll()
-
-            isLoading = false
+                isLoading = false
+                logger.info("Generated new mnemonic", category: .auth)
+            } catch {
+                self.error = "Failed to generate recovery phrase"
+                isLoading = false
+                logger.error(error, message: "Mnemonic generation failed", category: .auth)
+            }
         }
     }
 
@@ -126,21 +126,48 @@ final class AuthViewModel {
         isLoading = true
         error = nil
 
+        let mnemonicString = generatedMnemonic.joined(separator: " ")
+
         Task { @MainActor in
             do {
-                // Simulate registration
-                try await Task.sleep(for: .seconds(2))
+                // Connect to WebSocket first with timeout
+                let wsClient = WSClient()
+                logger.info("Connecting to WebSocket server...", category: .auth)
 
-                // Generate WhisperID (placeholder)
-                whisperId = "WH2-\(UUID().uuidString.prefix(8).uppercased())"
+                let connected = await wsClient.connectAndWait(timeout: 15)
 
+                guard connected else {
+                    throw AuthError.registrationFailed(reason: "Failed to connect to server. Please check your internet connection.")
+                }
+
+                logger.info("WebSocket connected, starting registration...", category: .auth)
+
+                // Create connection adapter
+                let connection = WSClientConnectionAdapter(client: wsClient)
+
+                // Register with server
+                let result = try await authService.register(mnemonic: mnemonicString, ws: connection)
+
+                // Disconnect after registration
+                await wsClient.disconnect()
+
+                whisperId = result.whisperId
                 currentStep = .complete
                 state = .authenticated
                 isLoading = false
-            } catch {
-                self.error = "Failed to create account. Please try again."
+
+                logger.info("Account created successfully: \(result.whisperId)", category: .auth)
+
+            } catch let authError as AuthError {
+                self.error = authError.localizedDescription
                 currentStep = .confirmMnemonic
                 isLoading = false
+                logger.error(authError, message: "Registration failed", category: .auth)
+            } catch {
+                self.error = "Failed to create account: \(error.localizedDescription)"
+                currentStep = .confirmMnemonic
+                isLoading = false
+                logger.error(error, message: "Registration failed", category: .auth)
             }
         }
     }
@@ -155,21 +182,48 @@ final class AuthViewModel {
         isLoading = true
         error = nil
 
+        let mnemonicString = enteredMnemonic.joined(separator: " ")
+
         Task { @MainActor in
             do {
-                // Simulate recovery
-                try await Task.sleep(for: .seconds(2))
+                // Connect to WebSocket first with timeout
+                let wsClient = WSClient()
+                logger.info("Connecting to WebSocket server...", category: .auth)
 
-                // Verify mnemonic and recover (placeholder)
-                whisperId = "WH2-\(UUID().uuidString.prefix(8).uppercased())"
+                let connected = await wsClient.connectAndWait(timeout: 15)
 
+                guard connected else {
+                    throw AuthError.registrationFailed(reason: "Failed to connect to server. Please check your internet connection.")
+                }
+
+                logger.info("WebSocket connected, starting recovery...", category: .auth)
+
+                // Create connection adapter
+                let connection = WSClientConnectionAdapter(client: wsClient)
+
+                // Register/recover with server
+                let result = try await authService.register(mnemonic: mnemonicString, ws: connection)
+
+                // Disconnect after registration
+                await wsClient.disconnect()
+
+                whisperId = result.whisperId
                 currentStep = .complete
                 state = .authenticated
                 isLoading = false
+
+                logger.info("Account recovered successfully: \(result.whisperId)", category: .auth)
+
+            } catch let authError as AuthError {
+                self.error = authError.localizedDescription
+                currentStep = .enterMnemonic
+                isLoading = false
+                logger.error(authError, message: "Recovery failed", category: .auth)
             } catch {
                 self.error = "Invalid recovery phrase. Please check and try again."
                 currentStep = .enterMnemonic
                 isLoading = false
+                logger.error(error, message: "Recovery failed", category: .auth)
             }
         }
     }

@@ -1,14 +1,20 @@
 import SwiftUI
+import PhotosUI
 
 /// View/edit profile
 struct ProfileView: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var displayName = "John Doe"
+    @State private var displayName = ""
     @State private var isEditing = false
     @State private var showingQRCode = false
+    @State private var showingPhotoPicker = false
+    @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var avatarImage: UIImage?
 
-    // Placeholder WhisperID
-    private let whisperId = "WH2-JOHN1234"
+    // Real WhisperID from keychain
+    private var whisperId: String {
+        KeychainService.shared.whisperId ?? "Not registered"
+    }
 
     var body: some View {
         NavigationStack {
@@ -18,14 +24,22 @@ struct ProfileView: View {
                     VStack(spacing: Theme.Spacing.md) {
                         // Avatar
                         ZStack(alignment: .bottomTrailing) {
-                            AvatarView(
-                                name: displayName,
-                                imageURL: nil,
-                                size: Theme.AvatarSize.xxl
-                            )
+                            if let avatarImage = avatarImage {
+                                Image(uiImage: avatarImage)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: Theme.AvatarSize.xxl, height: Theme.AvatarSize.xxl)
+                                    .clipShape(Circle())
+                            } else {
+                                AvatarView(
+                                    name: displayName,
+                                    imageURL: nil,
+                                    size: Theme.AvatarSize.xxl
+                                )
+                            }
 
                             Button {
-                                // Change avatar
+                                showingPhotoPicker = true
                             } label: {
                                 Image(systemName: "camera.fill")
                                     .font(.system(size: 14))
@@ -115,7 +129,8 @@ struct ProfileView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(isEditing ? "Done" : "Edit") {
                         if isEditing {
-                            // Save changes
+                            // Save display name to UserDefaults
+                            UserDefaults.standard.set(displayName, forKey: "whisper2.profile.displayName")
                         }
                         isEditing.toggle()
                     }
@@ -123,6 +138,34 @@ struct ProfileView: View {
             }
             .sheet(isPresented: $showingQRCode) {
                 ShareWhisperIDView(whisperId: whisperId)
+            }
+            .photosPicker(
+                isPresented: $showingPhotoPicker,
+                selection: $selectedPhotoItem,
+                matching: .images
+            )
+            .onChange(of: selectedPhotoItem) { _, newItem in
+                Task {
+                    if let data = try? await newItem?.loadTransferable(type: Data.self),
+                       let image = UIImage(data: data) {
+                        await MainActor.run {
+                            avatarImage = image
+                            // Save to UserDefaults (compressed)
+                            if let jpegData = image.jpegData(compressionQuality: 0.7) {
+                                UserDefaults.standard.set(jpegData, forKey: "whisper2.profile.avatar")
+                            }
+                        }
+                    }
+                }
+            }
+            .onAppear {
+                // Load saved display name
+                displayName = UserDefaults.standard.string(forKey: "whisper2.profile.displayName") ?? "Anonymous"
+                // Load saved avatar
+                if let avatarData = UserDefaults.standard.data(forKey: "whisper2.profile.avatar"),
+                   let image = UIImage(data: avatarData) {
+                    avatarImage = image
+                }
             }
         }
     }
@@ -148,9 +191,20 @@ private struct InfoRow: View {
 // MARK: - Keys Info View
 
 private struct KeysInfoView: View {
-    // Placeholder keys
-    private let encryptionPublicKey = "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
-    private let signingPublicKey = "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+    // Real public keys from keychain
+    private var encryptionPublicKey: String {
+        if let data = KeychainService.shared.getData(forKey: Constants.StorageKey.encPublicKey) {
+            return data.base64EncodedString()
+        }
+        return "Not available"
+    }
+
+    private var signingPublicKey: String {
+        if let data = KeychainService.shared.getData(forKey: Constants.StorageKey.signPublicKey) {
+            return data.base64EncodedString()
+        }
+        return "Not available"
+    }
 
     var body: some View {
         List {

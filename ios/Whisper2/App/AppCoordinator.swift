@@ -39,8 +39,9 @@ final class AppCoordinator {
 
     enum MainTab: Int, CaseIterable {
         case conversations = 0
-        case contacts = 1
-        case settings = 2
+        case groups = 1
+        case contacts = 2
+        case settings = 3
     }
 
     // MARK: - Deep Link Types
@@ -55,7 +56,7 @@ final class AppCoordinator {
         init?(url: URL) {
             // whisper2://conversation/abc123
             // whisper2://group/xyz789
-            // whisper2://contact/WH2-...
+            // whisper2://contact/WSP-XXXX-XXXX-XXXX
             // whisper2://call/call123
             // whisper2://settings/privacy
 
@@ -384,9 +385,4 @@ extension Notification.Name {
 }
 
 // MARK: - Scene Phase Extension for URL Handling
-
-extension Whisper2App {
-    func handleOpenURL(_ url: URL) {
-        appCoordinator.handleURL(url)
-    }
-}
+// Note: URL handling is done via .onOpenURL in Whisper2App.swift

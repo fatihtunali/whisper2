@@ -156,9 +156,49 @@ extension VoipPushService: PKPushRegistryDelegate {
         // Notify delegate
         delegate?.voipPushService(self, didReceiveToken: token)
 
-        // Also send to server (via your auth/session service)
-        // TODO: Call your service to update the server with the new token
-        // Example: AuthService.shared.updateVoIPToken(token)
+        // Send token to server via WebSocket
+        Task {
+            await sendTokenToServer(voipToken: token)
+        }
+    }
+
+    /// Send VoIP token to server via WebSocket update_tokens message
+    @MainActor
+    private func sendTokenToServer(voipToken: String?, pushToken: String? = nil) async {
+        guard let wsClient = AppConnectionManager.shared.getWSClient() else {
+            logger.warning("Cannot send token - WebSocket not connected", category: .calls)
+            return
+        }
+
+        guard let sessionToken = KeychainService.shared.sessionToken else {
+            logger.warning("Cannot send token - not authenticated", category: .calls)
+            return
+        }
+
+        var payload: [String: Any] = [
+            "protocolVersion": Constants.protocolVersion,
+            "cryptoVersion": Constants.cryptoVersion,
+            "sessionToken": sessionToken
+        ]
+
+        if let voip = voipToken {
+            payload["voipToken"] = voip
+        }
+        if let push = pushToken {
+            payload["pushToken"] = push
+        }
+
+        do {
+            let frame: [String: Any] = [
+                "type": Constants.MessageType.updateTokens,
+                "payload": payload
+            ]
+            let data = try JSONSerialization.data(withJSONObject: frame)
+            try await wsClient.send(data)
+            logger.info("Sent token update to server", category: .calls)
+        } catch {
+            logger.error(error, message: "Failed to send token update", category: .calls)
+        }
     }
 
     func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
@@ -171,8 +211,10 @@ extension VoipPushService: PKPushRegistryDelegate {
 
         UserDefaults.standard.removeObject(forKey: Constants.StorageKey.voipToken)
 
-        // Notify server that token is invalid
-        // TODO: Call your service to remove the token from server
+        // Notify server that token is invalidated (send empty token)
+        Task {
+            await sendTokenToServer(voipToken: "")
+        }
     }
 
     func pushRegistry(
@@ -190,7 +232,7 @@ extension VoipPushService: PKPushRegistryDelegate {
 
         let payloadDict = payload.dictionaryPayload
 
-        // CRITICAL: iOS 13+ requires reporting to CallKit immediately
+        // CRITICAL: iOS 13+ requires reporting to CallKit IMMEDIATELY
         // Failure to do so will cause the app to be terminated and
         // potentially banned from receiving VoIP pushes
 
@@ -204,10 +246,26 @@ extension VoipPushService: PKPushRegistryDelegate {
             return
         }
 
-        // Notify delegate (should handle CallKit reporting)
-        delegate?.voipPushService(self, didReceiveIncomingCall: callPayload)
+        // CRITICAL: Report to CallKit FIRST, SYNCHRONOUSLY, before any async work
+        // The delegate will handle CallKit reporting
+        if let del = delegate {
+            // Delegate is responsible for reporting to CallKit immediately
+            del.voipPushService(self, didReceiveIncomingCall: callPayload)
+        } else {
+            // No delegate - report directly to CallKit to avoid termination
+            logger.warning("No VoipPushService delegate set - reporting directly to CallKit", category: .calls)
+            let uuid = UUID(uuidString: callPayload.callId) ?? UUID()
+            let handle = callPayload.callerName ?? callPayload.callerWhisperId
+            let callKitService = CallKitService()
+            callKitService.reportIncomingCall(uuid: uuid, handle: handle, hasVideo: callPayload.isVideo) { error in
+                if let error = error {
+                    logger.error(error, message: "Failed to report to CallKit", category: .calls)
+                }
+            }
+        }
 
         // Connect WebSocket if needed and fetch full call details
+        // This happens AFTER CallKit is notified
         ensureWebSocketConnected { [weak self] in
             // After WebSocket is connected, the full call_incoming message
             // will be received via WebSocket with complete SDP offer
@@ -226,20 +284,24 @@ extension VoipPushService: PKPushRegistryDelegate {
     // MARK: - Private Helpers
 
     private func ensureWebSocketConnected(completion: @escaping () -> Void) {
-        // TODO: Implement WebSocket connection check and connect if needed
-        // This is critical for receiving the full call_incoming message
-        //
-        // Example:
-        // if WebSocketService.shared.isConnected {
-        //     completion()
-        // } else {
-        //     WebSocketService.shared.connect { _ in
-        //         completion()
-        //     }
-        // }
+        Task { @MainActor in
+            let connectionManager = AppConnectionManager.shared
 
-        // For now, just complete immediately
-        completion()
+            // Check if already connected
+            if connectionManager.connectionState == .connected {
+                completion()
+                return
+            }
+
+            // Try to connect
+            logger.info("Connecting WebSocket for incoming call", category: .calls)
+            await connectionManager.connect()
+
+            // Wait briefly for connection
+            try? await Task.sleep(nanoseconds: 500_000_000) // 500ms
+
+            completion()
+        }
     }
 
     private func reportFakeCallForRecovery() {

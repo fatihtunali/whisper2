@@ -93,6 +93,7 @@ struct ContactsBackupDownloadResponse: Decodable {
     let nonce: String        // base64(24 bytes)
     let ciphertext: String   // base64
     let sizeBytes: Int
+    let createdAt: Int64     // timestamp ms
     let updatedAt: Int64     // timestamp ms
 }
 

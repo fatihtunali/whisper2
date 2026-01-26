@@ -185,15 +185,17 @@ final class CallService: NSObject {
     ///   - offer: The encrypted SDP offer (base64)
     ///   - nonce: The encryption nonce
     ///   - sig: The signature
+    ///   - callKitAlreadyReported: If true, skip reporting to CallKit (already done by VoIP push handler)
     func handleIncomingCall(
         callId: String,
         from whisperId: String,
         isVideo: Bool,
         offer: String,
         nonce: String,
-        sig: String
+        sig: String,
+        callKitAlreadyReported: Bool = false
     ) async {
-        logger.info("Incoming call from \(whisperId), callId: \(callId)", category: .calls)
+        logger.info("Incoming call from \(whisperId), callId: \(callId), callKitReported: \(callKitAlreadyReported)", category: .calls)
 
         // Check if already in a call
         guard currentCall == nil else {
@@ -220,18 +222,25 @@ final class CallService: NSObject {
         UserDefaults.standard.set(offer, forKey: "pendingOffer_\(callId)")
         UserDefaults.standard.set(nonce, forKey: "pendingOfferNonce_\(callId)")
 
-        // Report to CallKit (shows native call UI)
-        let uuid = UUID(uuidString: callId) ?? UUID()
-        callKitService.reportIncomingCall(uuid: uuid, handle: whisperId, hasVideo: isVideo) { [weak self] error in
-            if let error = error {
-                logger.error(error, message: "Failed to report incoming call to CallKit", category: .calls)
-                self?.delegate?.callService(self!, didEncounterError: .webRTCFailed(reason: error.localizedDescription), for: callId)
-                return
-            }
+        if callKitAlreadyReported {
+            // CallKit was already reported by VoIP push handler
+            // Just update state and notify delegate
+            transitionState(to: .incomingRinging, for: callId)
+            delegate?.callService(self, didReceiveIncomingCall: callId, from: whisperId, isVideo: isVideo)
+        } else {
+            // Report to CallKit (shows native call UI)
+            let uuid = UUID(uuidString: callId) ?? UUID()
+            callKitService.reportIncomingCall(uuid: uuid, handle: whisperId, hasVideo: isVideo) { [weak self] error in
+                if let error = error {
+                    logger.error(error, message: "Failed to report incoming call to CallKit", category: .calls)
+                    self?.delegate?.callService(self!, didEncounterError: .webRTCFailed(reason: error.localizedDescription), for: callId)
+                    return
+                }
 
-            // Notify delegate
-            self?.transitionState(to: .incomingRinging, for: callId)
-            self?.delegate?.callService(self!, didReceiveIncomingCall: callId, from: whisperId, isVideo: isVideo)
+                // Notify delegate
+                self?.transitionState(to: .incomingRinging, for: callId)
+                self?.delegate?.callService(self!, didReceiveIncomingCall: callId, from: whisperId, isVideo: isVideo)
+            }
         }
 
         // Send ringing to caller
@@ -446,38 +455,331 @@ final class CallService: NSObject {
     // MARK: - Signaling Methods
 
     private func sendCallInitiate(callId: String, to whisperId: String, isVideo: Bool, offer: String) async throws {
-        // In real implementation:
-        // 1. Get recipient's public key
-        // 2. Encrypt the offer SDP
-        // 3. Sign the message
-        // 4. Send via WebSocket
-
-        // Placeholder - actual implementation depends on your WebSocket service
         logger.debug("Sending call_initiate to server", category: .calls)
 
-        // TODO: Implement actual WebSocket sending
-        // let payload = CallInitiatePayload(...)
-        // try await websocketService.send(type: .callInitiate, payload: payload)
+        let keychain = KeychainService.shared
+
+        guard let sessionToken = keychain.sessionToken,
+              let myWhisperId = keychain.whisperId,
+              let encPrivateKey = keychain.getData(forKey: Constants.StorageKey.encPrivateKey),
+              let signPrivateKey = keychain.getData(forKey: Constants.StorageKey.signPrivateKey) else {
+            throw CallError.notAuthenticated
+        }
+
+        // Get recipient's public key
+        guard let recipientPublicKey = await getRecipientPublicKey(whisperId) else {
+            throw CallError.webRTCFailed(reason: "Could not get recipient's public key")
+        }
+
+        let timestamp = Int64(Date().timeIntervalSince1970 * 1000)
+
+        // Encrypt the SDP offer
+        let offerData = Data(offer.utf8)
+        let (nonce, ciphertext) = try NaClBox.seal(
+            message: offerData,
+            recipientPublicKey: recipientPublicKey,
+            senderPrivateKey: encPrivateKey
+        )
+
+        // Sign using canonical format
+        let signature = try CanonicalSigning.signCanonical(
+            messageType: "call_initiate",
+            messageId: callId,
+            from: myWhisperId,
+            to: whisperId,
+            timestamp: timestamp,
+            nonce: nonce,
+            ciphertext: ciphertext,
+            privateKey: signPrivateKey
+        )
+
+        // Build payload
+        let payload: [String: Any] = [
+            "protocolVersion": Constants.protocolVersion,
+            "cryptoVersion": Constants.cryptoVersion,
+            "sessionToken": sessionToken,
+            "callId": callId,
+            "from": myWhisperId,
+            "to": whisperId,
+            "isVideo": isVideo,
+            "timestamp": timestamp,
+            "nonce": nonce.base64EncodedString(),
+            "ciphertext": ciphertext.base64EncodedString(),
+            "sig": signature.base64EncodedString()
+        ]
+
+        // Send via WebSocket
+        try await sendCallSignal(type: Constants.MessageType.callInitiate, payload: payload)
     }
 
     private func sendCallRinging(callId: String, to whisperId: String) async throws {
         logger.debug("Sending call_ringing to server", category: .calls)
-        // TODO: Implement actual WebSocket sending
+
+        let keychain = KeychainService.shared
+
+        guard let sessionToken = keychain.sessionToken,
+              let myWhisperId = keychain.whisperId,
+              let encPrivateKey = keychain.getData(forKey: Constants.StorageKey.encPrivateKey),
+              let signPrivateKey = keychain.getData(forKey: Constants.StorageKey.signPrivateKey) else {
+            throw CallError.notAuthenticated
+        }
+
+        guard let recipientPublicKey = await getRecipientPublicKey(whisperId) else {
+            throw CallError.webRTCFailed(reason: "Could not get recipient's public key")
+        }
+
+        let timestamp = Int64(Date().timeIntervalSince1970 * 1000)
+
+        // Encrypt empty ringing payload
+        let (nonce, ciphertext) = try NaClBox.seal(
+            message: Data("ringing".utf8),
+            recipientPublicKey: recipientPublicKey,
+            senderPrivateKey: encPrivateKey
+        )
+
+        let signature = try CanonicalSigning.signCanonical(
+            messageType: "call_ringing",
+            messageId: callId,
+            from: myWhisperId,
+            to: whisperId,
+            timestamp: timestamp,
+            nonce: nonce,
+            ciphertext: ciphertext,
+            privateKey: signPrivateKey
+        )
+
+        let payload: [String: Any] = [
+            "protocolVersion": Constants.protocolVersion,
+            "cryptoVersion": Constants.cryptoVersion,
+            "sessionToken": sessionToken,
+            "callId": callId,
+            "from": myWhisperId,
+            "to": whisperId,
+            "timestamp": timestamp,
+            "nonce": nonce.base64EncodedString(),
+            "ciphertext": ciphertext.base64EncodedString(),
+            "sig": signature.base64EncodedString()
+        ]
+
+        try await sendCallSignal(type: Constants.MessageType.callRinging, payload: payload)
     }
 
     private func sendCallAnswer(callId: String, to whisperId: String, answer: String) async throws {
         logger.debug("Sending call_answer to server", category: .calls)
-        // TODO: Implement actual WebSocket sending
+
+        let keychain = KeychainService.shared
+
+        guard let sessionToken = keychain.sessionToken,
+              let myWhisperId = keychain.whisperId,
+              let encPrivateKey = keychain.getData(forKey: Constants.StorageKey.encPrivateKey),
+              let signPrivateKey = keychain.getData(forKey: Constants.StorageKey.signPrivateKey) else {
+            throw CallError.notAuthenticated
+        }
+
+        guard let recipientPublicKey = await getRecipientPublicKey(whisperId) else {
+            throw CallError.webRTCFailed(reason: "Could not get recipient's public key")
+        }
+
+        let timestamp = Int64(Date().timeIntervalSince1970 * 1000)
+
+        // Encrypt the SDP answer
+        let answerData = Data(answer.utf8)
+        let (nonce, ciphertext) = try NaClBox.seal(
+            message: answerData,
+            recipientPublicKey: recipientPublicKey,
+            senderPrivateKey: encPrivateKey
+        )
+
+        let signature = try CanonicalSigning.signCanonical(
+            messageType: "call_answer",
+            messageId: callId,
+            from: myWhisperId,
+            to: whisperId,
+            timestamp: timestamp,
+            nonce: nonce,
+            ciphertext: ciphertext,
+            privateKey: signPrivateKey
+        )
+
+        let payload: [String: Any] = [
+            "protocolVersion": Constants.protocolVersion,
+            "cryptoVersion": Constants.cryptoVersion,
+            "sessionToken": sessionToken,
+            "callId": callId,
+            "from": myWhisperId,
+            "to": whisperId,
+            "timestamp": timestamp,
+            "nonce": nonce.base64EncodedString(),
+            "ciphertext": ciphertext.base64EncodedString(),
+            "sig": signature.base64EncodedString()
+        ]
+
+        try await sendCallSignal(type: Constants.MessageType.callAnswer, payload: payload)
     }
 
     private func sendCallEnd(callId: String, to whisperId: String, reason: CallEndReason) async throws {
         logger.debug("Sending call_end to server", category: .calls)
-        // TODO: Implement actual WebSocket sending
+
+        let keychain = KeychainService.shared
+
+        guard let sessionToken = keychain.sessionToken,
+              let myWhisperId = keychain.whisperId,
+              let encPrivateKey = keychain.getData(forKey: Constants.StorageKey.encPrivateKey),
+              let signPrivateKey = keychain.getData(forKey: Constants.StorageKey.signPrivateKey) else {
+            throw CallError.notAuthenticated
+        }
+
+        guard let recipientPublicKey = await getRecipientPublicKey(whisperId) else {
+            throw CallError.webRTCFailed(reason: "Could not get recipient's public key")
+        }
+
+        let timestamp = Int64(Date().timeIntervalSince1970 * 1000)
+
+        // Encrypt reason
+        let (nonce, ciphertext) = try NaClBox.seal(
+            message: Data(reason.rawValue.utf8),
+            recipientPublicKey: recipientPublicKey,
+            senderPrivateKey: encPrivateKey
+        )
+
+        let signature = try CanonicalSigning.signCanonical(
+            messageType: "call_end",
+            messageId: callId,
+            from: myWhisperId,
+            to: whisperId,
+            timestamp: timestamp,
+            nonce: nonce,
+            ciphertext: ciphertext,
+            privateKey: signPrivateKey
+        )
+
+        let payload: [String: Any] = [
+            "protocolVersion": Constants.protocolVersion,
+            "cryptoVersion": Constants.cryptoVersion,
+            "sessionToken": sessionToken,
+            "callId": callId,
+            "from": myWhisperId,
+            "to": whisperId,
+            "timestamp": timestamp,
+            "nonce": nonce.base64EncodedString(),
+            "ciphertext": ciphertext.base64EncodedString(),
+            "sig": signature.base64EncodedString(),
+            "reason": reason.rawValue
+        ]
+
+        try await sendCallSignal(type: Constants.MessageType.callEnd, payload: payload)
     }
 
     private func sendIceCandidate(callId: String, to whisperId: String, candidate: String) async throws {
         logger.debug("Sending call_ice_candidate to server", category: .calls)
-        // TODO: Implement actual WebSocket sending
+
+        let keychain = KeychainService.shared
+
+        guard let sessionToken = keychain.sessionToken,
+              let myWhisperId = keychain.whisperId,
+              let encPrivateKey = keychain.getData(forKey: Constants.StorageKey.encPrivateKey),
+              let signPrivateKey = keychain.getData(forKey: Constants.StorageKey.signPrivateKey) else {
+            throw CallError.notAuthenticated
+        }
+
+        guard let recipientPublicKey = await getRecipientPublicKey(whisperId) else {
+            throw CallError.webRTCFailed(reason: "Could not get recipient's public key")
+        }
+
+        let timestamp = Int64(Date().timeIntervalSince1970 * 1000)
+
+        // Encrypt the ICE candidate
+        let candidateData = Data(candidate.utf8)
+        let (nonce, ciphertext) = try NaClBox.seal(
+            message: candidateData,
+            recipientPublicKey: recipientPublicKey,
+            senderPrivateKey: encPrivateKey
+        )
+
+        let signature = try CanonicalSigning.signCanonical(
+            messageType: "call_ice_candidate",
+            messageId: callId,
+            from: myWhisperId,
+            to: whisperId,
+            timestamp: timestamp,
+            nonce: nonce,
+            ciphertext: ciphertext,
+            privateKey: signPrivateKey
+        )
+
+        let payload: [String: Any] = [
+            "protocolVersion": Constants.protocolVersion,
+            "cryptoVersion": Constants.cryptoVersion,
+            "sessionToken": sessionToken,
+            "callId": callId,
+            "from": myWhisperId,
+            "to": whisperId,
+            "timestamp": timestamp,
+            "nonce": nonce.base64EncodedString(),
+            "ciphertext": ciphertext.base64EncodedString(),
+            "sig": signature.base64EncodedString()
+        ]
+
+        try await sendCallSignal(type: Constants.MessageType.callIceCandidate, payload: payload)
+    }
+
+    // MARK: - Helper Methods
+
+    /// Get recipient's public key from cache or fetch from server
+    private func getRecipientPublicKey(_ whisperId: String) async -> Data? {
+        // Try to get from AppConnectionManager's cache
+        if let cachedKey = await MainActor.run(body: {
+            AppConnectionManager.shared.getCachedPublicKey(for: whisperId)
+        }) {
+            return Data(base64Encoded: cachedKey)
+        }
+
+        // Fetch from server
+        let keychain = KeychainService.shared
+        guard let sessionToken = keychain.sessionToken else { return nil }
+
+        let urlString = "\(Constants.Server.baseURL)/users/\(whisperId)/keys"
+        guard let url = URL(string: urlString) else { return nil }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 10
+        request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                return nil
+            }
+
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let encPublicKey = json["encPublicKey"] as? String else {
+                return nil
+            }
+
+            return Data(base64Encoded: encPublicKey)
+        } catch {
+            logger.error(error, message: "Failed to fetch public key for \(whisperId)", category: .calls)
+            return nil
+        }
+    }
+
+    /// Send call signal via WebSocket
+    @MainActor
+    private func sendCallSignal(type: String, payload: [String: Any]) async throws {
+        guard let wsClient = AppConnectionManager.shared.getWSClient() else {
+            throw CallError.notAuthenticated
+        }
+
+        // Send without waiting for response (fire-and-forget for call signaling)
+        var frame: [String: Any] = [
+            "type": type,
+            "payload": payload
+        ]
+        let data = try JSONSerialization.data(withJSONObject: frame)
+        try await wsClient.send(data)
     }
 }
 
@@ -552,5 +854,48 @@ extension CallService: CallKitServiceDelegate {
         Task {
             await cleanup()
         }
+    }
+}
+
+// MARK: - VoipPushServiceDelegate
+
+extension CallService: VoipPushServiceDelegate {
+    func voipPushService(_ service: VoipPushService, didReceiveToken token: String) {
+        logger.info("VoIP token received via delegate: \(token.prefix(8))...", category: .calls)
+        // Token is sent to server by VoipPushService
+    }
+
+    func voipPushService(_ service: VoipPushService, didReceiveIncomingCall payload: VoipCallPayload) {
+        logger.info("Incoming call via VoIP push: \(payload.callId) from \(payload.callerWhisperId)", category: .calls)
+
+        // CRITICAL: Report to CallKit IMMEDIATELY (synchronously)
+        // iOS requires CallKit notification before doing any other work
+        let uuid = UUID(uuidString: payload.callId) ?? UUID()
+        let handle = payload.callerName ?? payload.callerWhisperId
+
+        callKitService.reportIncomingCall(uuid: uuid, handle: handle, hasVideo: payload.isVideo) { [weak self] error in
+            if let error = error {
+                logger.error(error, message: "Failed to report incoming call to CallKit", category: .calls)
+                return
+            }
+
+            // Now handle the call details asynchronously
+            // Pass callKitAlreadyReported: true to avoid double-reporting
+            Task {
+                await self?.handleIncomingCall(
+                    callId: payload.callId,
+                    from: payload.callerWhisperId,
+                    isVideo: payload.isVideo,
+                    offer: payload.encryptedOffer ?? "",
+                    nonce: payload.nonce ?? "",
+                    sig: payload.signature ?? "",
+                    callKitAlreadyReported: true
+                )
+            }
+        }
+    }
+
+    func voipPushService(_ service: VoipPushService, didFailWithError error: Error) {
+        logger.error(error, message: "VoIP push service error", category: .calls)
     }
 }

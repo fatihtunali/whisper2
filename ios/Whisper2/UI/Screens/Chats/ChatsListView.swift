@@ -1,67 +1,58 @@
 import SwiftUI
 
-/// List of conversations
+/// List of conversations matching original Whisper UI
 struct ChatsListView: View {
-    @Bindable var viewModel: ChatsViewModel
-    @State private var selectedConversation: Conversation?
-    @State private var showingNewChat = false
+    @State private var viewModel = ChatsViewModel()
+    @State private var contactsViewModel = ContactsViewModel()
+    @EnvironmentObject var themeManager: ThemeManager
+    @State private var showingAddContact = false
+    @State private var selectedConversation: ConversationUI?
 
     var body: some View {
-        NavigationStack {
-            Group {
+        ZStack {
+            Color.whisperBackground.ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                // Header (matching Expo)
+                headerView
+
+                // Connection status banner
+                connectionStatusBanner
+
+                // Chat List
                 if viewModel.isLoading && viewModel.conversations.isEmpty {
-                    ChatListSkeletonView()
+                    loadingView
                 } else if viewModel.filteredConversations.isEmpty {
-                    emptyState
+                    emptyStateView
                 } else {
-                    conversationsList
-                }
-            }
-            .navigationTitle("Chats")
-            .searchable(text: $viewModel.searchText, prompt: "Search conversations")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        showingNewChat = true
-                    } label: {
-                        Image(systemName: "square.and.pencil")
+                    ScrollView {
+                        LazyVStack(spacing: WhisperSpacing.sm) {
+                            ForEach(viewModel.filteredConversations) { conversation in
+                                NavigationLink(value: conversation) {
+                                    ConversationRowView(conversation: conversation)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, WhisperSpacing.md)
+                        .padding(.top, WhisperSpacing.sm)
+                    }
+                    .refreshable {
+                        await viewModel.refreshConversations()
                     }
                 }
-
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Menu {
-                        Button {
-                            viewModel.sortOption = .recent
-                        } label: {
-                            Label("Recent", systemImage: viewModel.sortOption == .recent ? "checkmark" : "")
-                        }
-
-                        Button {
-                            viewModel.sortOption = .unread
-                        } label: {
-                            Label("Unread", systemImage: viewModel.sortOption == .unread ? "checkmark" : "")
-                        }
-
-                        Button {
-                            viewModel.sortOption = .alphabetical
-                        } label: {
-                            Label("A-Z", systemImage: viewModel.sortOption == .alphabetical ? "checkmark" : "")
-                        }
-                    } label: {
-                        Image(systemName: "arrow.up.arrow.down")
-                    }
-                }
-            }
-            .refreshable {
-                await viewModel.refreshConversations()
-            }
-            .sheet(isPresented: $showingNewChat) {
-                NewChatView()
-            }
-            .navigationDestination(item: $selectedConversation) { conversation in
-                ChatView(viewModel: ChatViewModel(conversation: conversation))
             }
         }
+        .navigationDestination(for: ConversationUI.self) { conversation in
+            ChatView(viewModel: ChatViewModel(conversation: conversation))
+                .onAppear {
+                    viewModel.markAsRead(conversation)
+                }
+        }
+        .sheet(isPresented: $showingAddContact) {
+            AddContactView(viewModel: contactsViewModel, isPresented: $showingAddContact)
+        }
+        .id(themeManager.themeMode) // Force view refresh when theme changes
         .onAppear {
             if viewModel.conversations.isEmpty {
                 viewModel.loadConversations()
@@ -77,156 +68,266 @@ struct ChatsListView: View {
         }
     }
 
-    private var conversationsList: some View {
-        List {
-            ForEach(viewModel.filteredConversations) { conversation in
-                ConversationRow(conversation: conversation)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        viewModel.markAsRead(conversation)
-                        selectedConversation = conversation
-                    }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button(role: .destructive) {
-                            viewModel.deleteConversation(conversation)
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
+    // MARK: - Connection Status Banner
 
-                        Button {
-                            viewModel.archiveConversation(conversation)
-                        } label: {
-                            Label("Archive", systemImage: "archivebox")
-                        }
-                        .tint(.orange)
-                    }
-                    .swipeActions(edge: .leading) {
-                        if conversation.unreadCount > 0 {
-                            Button {
-                                viewModel.markAsRead(conversation)
-                            } label: {
-                                Label("Read", systemImage: "envelope.open")
-                            }
-                            .tint(.blue)
-                        }
-                    }
+    @ViewBuilder
+    private var connectionStatusBanner: some View {
+        if !viewModel.isConnected && !viewModel.isLoading {
+            HStack(spacing: WhisperSpacing.sm) {
+                Image(systemName: "wifi.slash")
+                    .foregroundColor(.whisperTextSecondary)
+                Text("Disconnected")
+                    .font(.whisper(size: WhisperFontSize.sm))
+                    .foregroundColor(.whisperTextSecondary)
+                Spacer()
+                Button("Connect") {
+                    viewModel.loadConversations()
+                }
+                .font(.whisper(size: WhisperFontSize.sm, weight: .semibold))
+                .foregroundColor(.whisperPrimary)
             }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, WhisperSpacing.md)
+            .padding(.vertical, WhisperSpacing.sm)
+            .background(Color.whisperSurface)
         }
-        .listStyle(.plain)
     }
 
-    private var emptyState: some View {
-        Group {
-            if viewModel.searchText.isEmpty {
-                CenteredEmptyStateView(
-                    emptyState: .noChats {
-                        showingNewChat = true
-                    }
-                )
-            } else {
-                CenteredEmptyStateView(
-                    emptyState: .noSearchResults()
-                )
+    // MARK: - Header (Matching Expo ChatsScreen)
+
+    private var headerView: some View {
+        HStack {
+            Text("Chats")
+                .font(.whisper(size: WhisperFontSize.xxl, weight: .bold))
+                .foregroundColor(.whisperText)
+
+            Spacer()
+
+            // Add Contact Button
+            Button(action: { showingAddContact = true }) {
+                Image(systemName: "plus")
+                    .font(.whisper(size: WhisperFontSize.md, weight: .semibold))
+                    .foregroundColor(.whisperText)
+                    .frame(width: 36, height: 36)
+                    .background(Color.whisperPrimary)
+                    .clipShape(Circle())
             }
         }
+        .padding(.horizontal, WhisperSpacing.lg)
+        .padding(.vertical, WhisperSpacing.md)
+        .background(Color.whisperBackground)
+        .overlay(
+            Rectangle()
+                .fill(Color.whisperBorder)
+                .frame(height: 1),
+            alignment: .bottom
+        )
+    }
+
+    // MARK: - Loading View
+
+    private var loadingView: some View {
+        VStack(spacing: WhisperSpacing.md) {
+            Spacer()
+            ProgressView()
+                .scaleEffect(1.5)
+                .tint(.whisperPrimary)
+            Text("Loading conversations...")
+                .font(.whisper(size: WhisperFontSize.md))
+                .foregroundColor(.whisperTextSecondary)
+            Spacer()
+        }
+    }
+
+    // MARK: - Empty State (Matching Expo)
+
+    private var emptyStateView: some View {
+        VStack(spacing: WhisperSpacing.lg) {
+            Spacer()
+
+            Image(systemName: "message.fill")
+                .font(.system(size: 64))
+                .foregroundColor(.whisperTextMuted)
+
+            Text("No conversations yet")
+                .font(.whisper(size: WhisperFontSize.xl, weight: .semibold))
+                .foregroundColor(.whisperText)
+
+            Text("Add a contact to start messaging")
+                .font(.whisper(size: WhisperFontSize.md))
+                .foregroundColor(.whisperTextSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, WhisperSpacing.xl)
+
+            Button(action: { showingAddContact = true }) {
+                HStack(spacing: WhisperSpacing.sm) {
+                    Image(systemName: "plus")
+                    Text("Add Contact")
+                }
+                .font(.whisper(size: WhisperFontSize.md, weight: .semibold))
+                .foregroundColor(.whisperText)
+                .padding(.horizontal, WhisperSpacing.lg)
+                .padding(.vertical, WhisperSpacing.sm)
+                .background(Color.whisperPrimary)
+                .cornerRadius(WhisperRadius.md)
+            }
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
-// MARK: - Conversation Row
+// MARK: - Conversation Row (Matching Expo)
 
-private struct ConversationRow: View {
-    let conversation: Conversation
-
-    private var timeString: String {
-        guard let timestamp = conversation.lastMessageTimestamp else { return "" }
-
-        let calendar = Calendar.current
-        if calendar.isDateInToday(timestamp) {
-            return timestamp.formatted(date: .omitted, time: .shortened)
-        } else if calendar.isDateInYesterday(timestamp) {
-            return "Yesterday"
-        } else if let daysAgo = calendar.dateComponents([.day], from: timestamp, to: Date()).day, daysAgo < 7 {
-            return timestamp.formatted(.dateTime.weekday(.abbreviated))
-        } else {
-            return timestamp.formatted(date: .abbreviated, time: .omitted)
-        }
-    }
+struct ConversationRowView: View {
+    let conversation: ConversationUI
+    @EnvironmentObject var themeManager: ThemeManager
 
     var body: some View {
-        HStack(spacing: Theme.Spacing.sm) {
-            // Avatar
-            AvatarView(
-                name: conversation.participantName,
-                imageURL: conversation.participantAvatarURL,
-                size: Theme.AvatarSize.md,
-                showOnlineIndicator: true,
-                isOnline: conversation.isOnline
-            )
+        VStack(spacing: 0) {
+            // Top border line
+            Rectangle()
+                .fill(Color.whisperBorder)
+                .frame(height: 1)
 
-            // Content
-            VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
-                HStack {
-                    Text(conversation.participantName)
-                        .font(Theme.Typography.headline)
-                        .foregroundColor(Theme.Colors.textPrimary)
-                        .lineLimit(1)
+            // Main content
+            HStack(spacing: WhisperSpacing.md) {
+                // Avatar with gradient ring
+                avatarView
 
-                    Spacer()
+                // Content
+                VStack(alignment: .leading, spacing: WhisperSpacing.xs) {
+                    // Top row: Name + Time
+                    HStack(alignment: .center) {
+                        Text(conversation.participantName)
+                            .font(.whisper(size: WhisperFontSize.md, weight: .semibold))
+                            .foregroundColor(.whisperText)
+                            .lineLimit(1)
 
-                    Text(timeString)
-                        .font(Theme.Typography.caption1)
-                        .foregroundColor(
-                            conversation.unreadCount > 0
-                                ? Theme.Colors.primary
-                                : Theme.Colors.textTertiary
-                        )
-                }
+                        Spacer()
 
-                HStack {
-                    if conversation.isTyping {
-                        TypingIndicator()
-                    } else {
-                        Text(conversation.lastMessage ?? "No messages yet")
-                            .font(Theme.Typography.subheadline)
-                            .foregroundColor(Theme.Colors.textSecondary)
-                            .lineLimit(2)
+                        if let timestamp = conversation.lastMessageTimestamp {
+                            Text(formatTime(timestamp))
+                                .font(.whisper(size: WhisperFontSize.xs))
+                                .foregroundColor(conversation.unreadCount > 0 ? .whisperPrimary : .whisperTextMuted)
+                        }
                     }
 
-                    Spacer()
+                    // Bottom row: Message preview + Unread count
+                    HStack(alignment: .center) {
+                        if conversation.isTyping {
+                            TypingIndicatorView()
+                        } else {
+                            Text(conversation.lastMessage ?? "No messages yet")
+                                .font(.whisper(size: WhisperFontSize.sm))
+                                .foregroundColor(.whisperTextSecondary)
+                                .lineLimit(1)
+                        }
 
-                    if conversation.unreadCount > 0 {
-                        Text("\(conversation.unreadCount)")
-                            .font(Theme.Typography.caption2)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, Theme.Spacing.xs)
-                            .padding(.vertical, 2)
-                            .background(Theme.Colors.primary)
-                            .clipShape(Capsule())
+                        Spacer()
+
+                        if conversation.unreadCount > 0 {
+                            Text("\(conversation.unreadCount)")
+                                .font(.whisper(size: WhisperFontSize.xs, weight: .bold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 8)
+                                .frame(minWidth: 22, minHeight: 22)
+                                .background(Color.whisperPrimary)
+                                .clipShape(Capsule())
+                        }
                     }
                 }
             }
+            .padding(.horizontal, WhisperSpacing.md)
+            .padding(.vertical, WhisperSpacing.md)
+
+            // Bottom border line
+            Rectangle()
+                .fill(Color.whisperBorder)
+                .frame(height: 1)
         }
-        .padding(.vertical, Theme.Spacing.xs)
+        .background(Color.whisperSurface)
+        .cornerRadius(WhisperRadius.md)
+        .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 1)
+        .contentShape(Rectangle())
+    }
+
+    private var avatarView: some View {
+        ZStack {
+            Circle()
+                .stroke(
+                    LinearGradient(
+                        colors: [Color.whisperPrimary, Color.whisperPrimary.opacity(0.6)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 2
+                )
+                .frame(width: 54, height: 54)
+
+            Circle()
+                .fill(Color.whisperPrimary.opacity(0.15))
+                .frame(width: 48, height: 48)
+                .overlay {
+                    Text(String(conversation.participantName.prefix(1)).uppercased())
+                        .font(.whisper(size: WhisperFontSize.lg, weight: .bold))
+                        .foregroundColor(.whisperPrimary)
+                }
+
+            // Online indicator
+            if conversation.isOnline {
+                Circle()
+                    .fill(Color.whisperSuccess)
+                    .frame(width: 14, height: 14)
+                    .overlay(
+                        Circle()
+                            .stroke(Color.whisperSurface, lineWidth: 2)
+                    )
+                    .offset(x: 18, y: 18)
+            }
+        }
+    }
+
+    private func formatTime(_ date: Date) -> String {
+        let calendar = Calendar.current
+        let now = Date()
+
+        if calendar.isDateInToday(date) {
+            let formatter = DateFormatter()
+            formatter.timeStyle = .short
+            return formatter.string(from: date)
+        } else if calendar.isDateInYesterday(date) {
+            return "Yesterday"
+        } else if let daysAgo = calendar.dateComponents([.day], from: date, to: now).day, daysAgo < 7 {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "EEEE"
+            return formatter.string(from: date)
+        } else {
+            let formatter = DateFormatter()
+            formatter.dateStyle = .short
+            return formatter.string(from: date)
+        }
     }
 }
 
 // MARK: - Typing Indicator
 
-private struct TypingIndicator: View {
+private struct TypingIndicatorView: View {
     @State private var animationPhase = 0
 
     var body: some View {
         HStack(spacing: 3) {
             ForEach(0..<3, id: \.self) { index in
                 Circle()
-                    .fill(Theme.Colors.textTertiary)
+                    .fill(Color.whisperTextMuted)
                     .frame(width: 6, height: 6)
                     .scaleEffect(animationPhase == index ? 1.2 : 0.8)
             }
 
-            Text("typing")
-                .font(Theme.Typography.caption1)
-                .foregroundColor(Theme.Colors.textTertiary)
+            Text("typing...")
+                .font(.whisper(size: WhisperFontSize.sm))
+                .foregroundColor(.whisperTextMuted)
                 .italic()
         }
         .onAppear {
@@ -237,30 +338,9 @@ private struct TypingIndicator: View {
     }
 }
 
-// MARK: - New Chat View (placeholder)
-
-private struct NewChatView: View {
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            Text("Select a contact to start a new chat")
-                .foregroundColor(Theme.Colors.textSecondary)
-                .navigationTitle("New Chat")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarLeading) {
-                        Button("Cancel") {
-                            dismiss()
-                        }
-                    }
-                }
-        }
-    }
-}
-
 // MARK: - Preview
 
 #Preview {
-    ChatsListView(viewModel: ChatsViewModel())
+    ChatsListView()
+        .environmentObject(ThemeManager.shared)
 }

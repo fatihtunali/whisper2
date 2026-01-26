@@ -220,7 +220,7 @@ struct FullScreenIncomingCallView: View {
     @Bindable var viewModel: CallViewModel
 
     var body: some View {
-        Group {
+        SwiftUI.Group {
             switch viewModel.state {
             case .ringing where viewModel.direction == .incoming:
                 IncomingCallView(viewModel: viewModel)

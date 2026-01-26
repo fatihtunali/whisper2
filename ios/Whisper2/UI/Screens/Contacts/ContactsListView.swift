@@ -1,43 +1,130 @@
 import SwiftUI
 
-/// List of contacts
+/// List of contacts matching original Whisper UI
 struct ContactsListView: View {
-    @Bindable var viewModel: ContactsViewModel
+    @State private var viewModel = ContactsViewModel()
+    @EnvironmentObject var themeManager: ThemeManager
     @State private var showingAddContact = false
-    @State private var selectedContact: Contact?
+    @State private var showingQRCode = false
+    @State private var selectedContact: ContactUI?
+
+    // Call state
+    @State private var showingCallView = false
+    @State private var callViewModel = CallViewModel()
+
+    // Chat navigation
+    @State private var chatContact: ContactUI?
 
     var body: some View {
-        NavigationStack {
-            Group {
+        ZStack {
+            Color.whisperBackground.ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                // Header
+                headerView
+
+                // Contacts List
                 if viewModel.isLoading && viewModel.contacts.isEmpty {
-                    ChatListSkeletonView()
+                    loadingView
                 } else if viewModel.filteredContacts.isEmpty {
-                    emptyState
+                    emptyStateView
                 } else {
-                    contactsList
-                }
-            }
-            .navigationTitle("Contacts")
-            .searchable(text: $viewModel.searchText, prompt: "Search contacts")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        showingAddContact = true
-                    } label: {
-                        Image(systemName: "person.badge.plus")
+                    ScrollView {
+                        LazyVStack(spacing: WhisperSpacing.sm) {
+                            // Online count header
+                            if viewModel.onlineCount > 0 {
+                                HStack {
+                                    Circle()
+                                        .fill(Color.whisperSuccess)
+                                        .frame(width: 8, height: 8)
+                                    Text("\(viewModel.onlineCount) online")
+                                        .font(.whisper(size: WhisperFontSize.sm))
+                                        .foregroundColor(.whisperTextSecondary)
+                                }
+                                .padding(.horizontal, WhisperSpacing.md)
+                                .padding(.vertical, WhisperSpacing.sm)
+                            }
+
+                            ForEach(viewModel.filteredContacts) { contact in
+                                ContactRowView(contact: contact)
+                                    .onTapGesture {
+                                        selectedContact = contact
+                                    }
+                                    .contextMenu {
+                                        Button {
+                                            chatContact = contact
+                                        } label: {
+                                            Label("Send Message", systemImage: "message")
+                                        }
+
+                                        Button {
+                                            UIPasteboard.general.string = contact.whisperId
+                                        } label: {
+                                            Label("Copy Whisper ID", systemImage: "doc.on.doc")
+                                        }
+
+                                        Divider()
+
+                                        Button {
+                                            if contact.isBlocked {
+                                                viewModel.unblockContact(contact)
+                                            } else {
+                                                viewModel.blockContact(contact)
+                                            }
+                                        } label: {
+                                            Label(
+                                                contact.isBlocked ? "Unblock" : "Block",
+                                                systemImage: contact.isBlocked ? "hand.raised.slash" : "hand.raised"
+                                            )
+                                        }
+
+                                        Button(role: .destructive) {
+                                            viewModel.deleteContact(contact)
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
+                                        }
+                                    }
+                            }
+                        }
+                        .padding(.horizontal, WhisperSpacing.md)
+                        .padding(.top, WhisperSpacing.sm)
+                    }
+                    .refreshable {
+                        await viewModel.refreshContacts()
                     }
                 }
             }
-            .refreshable {
-                await viewModel.refreshContacts()
-            }
-            .sheet(isPresented: $showingAddContact) {
-                AddContactView(viewModel: viewModel, isPresented: $showingAddContact)
-            }
-            .sheet(item: $selectedContact) { contact in
-                ContactDetailView(contact: contact, viewModel: viewModel)
+        }
+        .sheet(isPresented: $showingAddContact) {
+            AddContactView(viewModel: viewModel, isPresented: $showingAddContact)
+        }
+        .sheet(item: $selectedContact) { contact in
+            ContactDetailView(contact: contact, viewModel: viewModel)
+        }
+        .sheet(isPresented: $showingQRCode) {
+            if let whisperId = KeychainService.shared.whisperId {
+                ShareWhisperIDView(whisperId: whisperId)
             }
         }
+        .sheet(item: $chatContact) { contact in
+            NavigationStack {
+                // Create a conversation for this contact and show ChatView
+                let conversation = ConversationUI(
+                    id: contact.whisperId,
+                    participantId: contact.whisperId,
+                    participantName: contact.displayName,
+                    participantAvatarURL: contact.avatarURL,
+                    lastMessage: nil,
+                    lastMessageTimestamp: nil,
+                    unreadCount: 0,
+                    isOnline: contact.isOnline,
+                    isTyping: false,
+                    participantEncPublicKey: contact.encPublicKey
+                )
+                ChatView(viewModel: ChatViewModel(conversation: conversation))
+            }
+        }
+        .id(themeManager.themeMode)
         .onAppear {
             if viewModel.contacts.isEmpty {
                 viewModel.loadContacts()
@@ -53,66 +140,103 @@ struct ContactsListView: View {
         }
     }
 
-    private var contactsList: some View {
-        List {
-            // Online count header
-            if viewModel.onlineCount > 0 {
-                Section {
-                    HStack {
-                        Circle()
-                            .fill(Theme.Colors.success)
-                            .frame(width: 8, height: 8)
-                        Text("\(viewModel.onlineCount) online")
-                            .font(Theme.Typography.caption1)
-                            .foregroundColor(Theme.Colors.textSecondary)
-                    }
-                }
+    // MARK: - Header
+
+    private var headerView: some View {
+        HStack {
+            Text("Contacts")
+                .font(.whisper(size: WhisperFontSize.xxl, weight: .bold))
+                .foregroundColor(.whisperText)
+
+            Spacer()
+
+            // QR Code Button
+            Button(action: { showingQRCode = true }) {
+                Image(systemName: "qrcode")
+                    .font(.whisper(size: WhisperFontSize.lg))
+                    .foregroundColor(.whisperText)
+                    .frame(width: 36, height: 36)
             }
 
-            // Grouped contacts
-            ForEach(viewModel.groupedContacts, id: \.0) { letter, contacts in
-                Section(header: Text(letter)) {
-                    ForEach(contacts) { contact in
-                        ContactRow(contact: contact)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                selectedContact = contact
-                            }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                Button(role: .destructive) {
-                                    viewModel.deleteContact(contact)
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
-                            }
-                    }
-                }
+            // Add Contact Button
+            Button(action: { showingAddContact = true }) {
+                Image(systemName: "plus")
+                    .font(.whisper(size: WhisperFontSize.md, weight: .semibold))
+                    .foregroundColor(.whisperText)
+                    .frame(width: 36, height: 36)
+                    .background(Color.whisperPrimary)
+                    .clipShape(Circle())
             }
         }
-        .listStyle(.insetGrouped)
+        .padding(.horizontal, WhisperSpacing.lg)
+        .padding(.vertical, WhisperSpacing.md)
+        .background(Color.whisperBackground)
+        .overlay(
+            Rectangle()
+                .fill(Color.whisperBorder)
+                .frame(height: 1),
+            alignment: .bottom
+        )
     }
 
-    private var emptyState: some View {
-        Group {
-            if viewModel.searchText.isEmpty {
-                CenteredEmptyStateView(
-                    emptyState: .noContacts {
-                        showingAddContact = true
-                    }
-                )
-            } else {
-                CenteredEmptyStateView(
-                    emptyState: .noSearchResults()
-                )
-            }
+    // MARK: - Loading View
+
+    private var loadingView: some View {
+        VStack(spacing: WhisperSpacing.md) {
+            Spacer()
+            ProgressView()
+                .scaleEffect(1.5)
+                .tint(.whisperPrimary)
+            Text("Loading contacts...")
+                .font(.whisper(size: WhisperFontSize.md))
+                .foregroundColor(.whisperTextSecondary)
+            Spacer()
         }
+    }
+
+    // MARK: - Empty State
+
+    private var emptyStateView: some View {
+        VStack(spacing: WhisperSpacing.lg) {
+            Spacer()
+
+            Text("👥")
+                .font(.system(size: 64))
+
+            Text("No contacts yet")
+                .font(.whisper(size: WhisperFontSize.xl, weight: .semibold))
+                .foregroundColor(.whisperText)
+
+            Text("Add contacts to start messaging")
+                .font(.whisper(size: WhisperFontSize.md))
+                .foregroundColor(.whisperTextSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, WhisperSpacing.xl)
+
+            Button(action: { showingAddContact = true }) {
+                HStack(spacing: WhisperSpacing.sm) {
+                    Image(systemName: "plus")
+                    Text("Add Contact")
+                }
+                .font(.whisper(size: WhisperFontSize.md, weight: .semibold))
+                .foregroundColor(.whisperText)
+                .padding(.horizontal, WhisperSpacing.lg)
+                .padding(.vertical, WhisperSpacing.sm)
+                .background(Color.whisperPrimary)
+                .cornerRadius(WhisperRadius.md)
+            }
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
-// MARK: - Contact Row
+// MARK: - Contact Row (Matching Expo)
 
-private struct ContactRow: View {
-    let contact: Contact
+struct ContactRowView: View {
+    let contact: ContactUI
+    @EnvironmentObject var themeManager: ThemeManager
 
     private var lastSeenString: String? {
         guard !contact.isOnline, let lastSeen = contact.lastSeen else { return nil }
@@ -128,131 +252,246 @@ private struct ContactRow: View {
     }
 
     var body: some View {
-        HStack(spacing: Theme.Spacing.sm) {
-            AvatarView(
-                name: contact.displayName,
-                imageURL: contact.avatarURL,
-                size: Theme.AvatarSize.md,
-                showOnlineIndicator: true,
-                isOnline: contact.isOnline
-            )
+        VStack(spacing: 0) {
+            // Top border line
+            Rectangle()
+                .fill(Color.whisperBorder)
+                .frame(height: 1)
 
-            VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
-                Text(contact.displayName)
-                    .font(Theme.Typography.headline)
-                    .foregroundColor(Theme.Colors.textPrimary)
+            // Main content
+            HStack(spacing: WhisperSpacing.md) {
+                // Avatar
+                avatarView
 
-                if contact.isOnline {
-                    Text("online")
-                        .font(Theme.Typography.caption1)
-                        .foregroundColor(Theme.Colors.success)
-                } else if let lastSeen = lastSeenString {
-                    Text(lastSeen)
-                        .font(Theme.Typography.caption1)
-                        .foregroundColor(Theme.Colors.textTertiary)
+                // Content
+                VStack(alignment: .leading, spacing: WhisperSpacing.xs) {
+                    Text(contact.displayName)
+                        .font(.whisper(size: WhisperFontSize.md, weight: .semibold))
+                        .foregroundColor(.whisperText)
+
+                    if contact.isOnline {
+                        Text("online")
+                            .font(.whisper(size: WhisperFontSize.sm))
+                            .foregroundColor(.whisperSuccess)
+                    } else if let lastSeen = lastSeenString {
+                        Text(lastSeen)
+                            .font(.whisper(size: WhisperFontSize.sm))
+                            .foregroundColor(.whisperTextMuted)
+                    }
                 }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.whisperTextMuted)
             }
+            .padding(.horizontal, WhisperSpacing.md)
+            .padding(.vertical, WhisperSpacing.md)
 
-            Spacer()
-
-            Image(systemName: "chevron.right")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundColor(Theme.Colors.textTertiary)
+            // Bottom border line
+            Rectangle()
+                .fill(Color.whisperBorder)
+                .frame(height: 1)
         }
-        .padding(.vertical, Theme.Spacing.xxs)
+        .background(Color.whisperSurface)
+        .cornerRadius(WhisperRadius.md)
+        .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 1)
+    }
+
+    private var avatarView: some View {
+        ZStack {
+            Circle()
+                .fill(gradientForName(contact.displayName))
+                .frame(width: 48, height: 48)
+
+            Text(String(contact.displayName.prefix(1)).uppercased())
+                .font(.whisper(size: WhisperFontSize.lg, weight: .medium))
+                .foregroundColor(.white)
+
+            // Online indicator
+            if contact.isOnline {
+                Circle()
+                    .fill(Color.whisperSuccess)
+                    .frame(width: 14, height: 14)
+                    .overlay(
+                        Circle()
+                            .stroke(Color.whisperSurface, lineWidth: 2)
+                    )
+                    .offset(x: 16, y: 16)
+            }
+        }
+    }
+
+    private func gradientForName(_ name: String) -> LinearGradient {
+        let hash = abs(name.hashValue)
+        let colorPairs: [[Color]] = [
+            [Color(red: 0.2, green: 0.6, blue: 0.9), Color(red: 0.1, green: 0.4, blue: 0.7)],
+            [Color(red: 0.9, green: 0.3, blue: 0.4), Color(red: 0.7, green: 0.2, blue: 0.3)],
+            [Color(red: 0.3, green: 0.8, blue: 0.5), Color(red: 0.2, green: 0.6, blue: 0.4)],
+            [Color(red: 0.9, green: 0.6, blue: 0.2), Color(red: 0.8, green: 0.4, blue: 0.1)],
+            [Color(red: 0.6, green: 0.3, blue: 0.9), Color(red: 0.4, green: 0.2, blue: 0.7)],
+            [Color(red: 0.3, green: 0.7, blue: 0.9), Color(red: 0.2, green: 0.5, blue: 0.7)],
+            [Color(red: 0.9, green: 0.4, blue: 0.6), Color(red: 0.7, green: 0.3, blue: 0.5)],
+            [Color(red: 0.4, green: 0.8, blue: 0.7), Color(red: 0.3, green: 0.6, blue: 0.5)]
+        ]
+        let colors = colorPairs[hash % colorPairs.count]
+        return LinearGradient(
+            colors: colors,
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
     }
 }
 
 // MARK: - Contact Detail View
 
-private struct ContactDetailView: View {
-    let contact: Contact
+struct ContactDetailView: View {
+    let contact: ContactUI
     @Bindable var viewModel: ContactsViewModel
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var themeManager: ThemeManager
     @State private var editingName = false
     @State private var newName: String = ""
 
+    // Call state
+    @State private var showingCallView = false
+    @State private var callViewModel = CallViewModel()
+
     var body: some View {
         NavigationStack {
-            List {
-                // Profile header
-                Section {
-                    VStack(spacing: Theme.Spacing.md) {
-                        AvatarView(
-                            name: contact.displayName,
-                            imageURL: contact.avatarURL,
-                            size: Theme.AvatarSize.xxl
-                        )
+            ZStack {
+                Color.whisperBackground.ignoresSafeArea()
 
-                        VStack(spacing: Theme.Spacing.xxs) {
+                ScrollView {
+                    VStack(spacing: WhisperSpacing.lg) {
+                        // Profile header
+                        VStack(spacing: WhisperSpacing.md) {
+                            // Avatar
+                            ZStack {
+                                Circle()
+                                    .fill(gradientForName(contact.displayName))
+                                    .frame(width: 100, height: 100)
+
+                                Text(String(contact.displayName.prefix(1)).uppercased())
+                                    .font(.system(size: 40, weight: .medium))
+                                    .foregroundColor(.white)
+                            }
+
                             Text(contact.displayName)
-                                .font(Theme.Typography.title2)
-                                .foregroundColor(Theme.Colors.textPrimary)
+                                .font(.whisper(size: WhisperFontSize.xxl, weight: .bold))
+                                .foregroundColor(.whisperText)
 
                             HStack {
                                 Circle()
-                                    .fill(contact.isOnline ? Theme.Colors.success : Theme.Colors.textTertiary)
+                                    .fill(contact.isOnline ? Color.whisperSuccess : Color.whisperTextMuted)
                                     .frame(width: 8, height: 8)
                                 Text(contact.isOnline ? "Online" : "Offline")
-                                    .font(Theme.Typography.caption1)
-                                    .foregroundColor(Theme.Colors.textSecondary)
+                                    .font(.whisper(size: WhisperFontSize.sm))
+                                    .foregroundColor(.whisperTextSecondary)
                             }
                         }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, Theme.Spacing.md)
-                }
-                .listRowBackground(Color.clear)
+                        .padding(.top, WhisperSpacing.xl)
 
-                // WhisperID
-                Section("WhisperID") {
-                    HStack {
-                        Text(contact.whisperId)
-                            .font(Theme.Typography.monospaced)
-                            .foregroundColor(Theme.Colors.textPrimary)
+                        // Quick Actions
+                        HStack(spacing: WhisperSpacing.xl) {
+                            ActionButton(icon: "message.fill", label: "Message") {
+                                dismiss()
+                            }
+
+                            ActionButton(icon: "phone.fill", label: "Voice") {
+                                startCall(isVideo: false)
+                            }
+
+                            ActionButton(icon: "video.fill", label: "Video") {
+                                startCall(isVideo: true)
+                            }
+                        }
+                        .padding(.vertical, WhisperSpacing.md)
+
+                        // WhisperID Section
+                        VStack(alignment: .leading, spacing: WhisperSpacing.sm) {
+                            Text("WHISPER ID")
+                                .font(.whisper(size: WhisperFontSize.xs, weight: .semibold))
+                                .foregroundColor(.whisperTextMuted)
+
+                            HStack {
+                                Text(contact.whisperId)
+                                    .font(.system(size: WhisperFontSize.md, design: .monospaced))
+                                    .foregroundColor(.whisperText)
+
+                                Spacer()
+
+                                Button {
+                                    UIPasteboard.general.string = contact.whisperId
+                                } label: {
+                                    Image(systemName: "doc.on.doc")
+                                        .foregroundColor(.whisperPrimary)
+                                }
+                            }
+                            .padding(WhisperSpacing.md)
+                            .background(Color.whisperSurface)
+                            .cornerRadius(WhisperRadius.md)
+                        }
+                        .padding(.horizontal, WhisperSpacing.md)
+
+                        // Actions
+                        VStack(spacing: WhisperSpacing.sm) {
+                            Button {
+                                newName = contact.displayName
+                                editingName = true
+                            } label: {
+                                HStack {
+                                    Label("Edit Nickname", systemImage: "pencil")
+                                        .foregroundColor(.whisperText)
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .foregroundColor(.whisperTextMuted)
+                                }
+                                .padding(WhisperSpacing.md)
+                                .background(Color.whisperSurface)
+                                .cornerRadius(WhisperRadius.md)
+                            }
+
+                            // Block/Unblock button
+                            Button {
+                                if contact.isBlocked {
+                                    viewModel.unblockContact(contact)
+                                } else {
+                                    viewModel.blockContact(contact)
+                                }
+                                dismiss()
+                            } label: {
+                                HStack {
+                                    Label(
+                                        contact.isBlocked ? "Unblock Contact" : "Block Contact",
+                                        systemImage: contact.isBlocked ? "hand.raised.slash" : "hand.raised"
+                                    )
+                                    .foregroundColor(contact.isBlocked ? .whisperSuccess : .whisperWarning)
+                                    Spacer()
+                                }
+                                .padding(WhisperSpacing.md)
+                                .background(Color.whisperSurface)
+                                .cornerRadius(WhisperRadius.md)
+                            }
+
+                            Button(role: .destructive) {
+                                viewModel.deleteContact(contact)
+                                dismiss()
+                            } label: {
+                                HStack {
+                                    Label("Delete Contact", systemImage: "trash")
+                                        .foregroundColor(.whisperError)
+                                    Spacer()
+                                }
+                                .padding(WhisperSpacing.md)
+                                .background(Color.whisperSurface)
+                                .cornerRadius(WhisperRadius.md)
+                            }
+                        }
+                        .padding(.horizontal, WhisperSpacing.md)
 
                         Spacer()
-
-                        Button {
-                            UIPasteboard.general.string = contact.whisperId
-                        } label: {
-                            Image(systemName: "doc.on.doc")
-                                .foregroundColor(Theme.Colors.primary)
-                        }
-                    }
-                }
-
-                // Actions
-                Section {
-                    Button {
-                        // Start chat
-                        dismiss()
-                    } label: {
-                        Label("Send Message", systemImage: "message")
-                    }
-
-                    Button {
-                        // Start call
-                    } label: {
-                        Label("Voice Call", systemImage: "phone")
-                    }
-
-                    Button {
-                        newName = contact.displayName
-                        editingName = true
-                    } label: {
-                        Label("Edit Name", systemImage: "pencil")
-                    }
-                }
-
-                // Danger zone
-                Section {
-                    Button(role: .destructive) {
-                        viewModel.deleteContact(contact)
-                        dismiss()
-                    } label: {
-                        Label("Delete Contact", systemImage: "trash")
-                            .foregroundColor(Theme.Colors.error)
                     }
                 }
             }
@@ -263,10 +502,11 @@ private struct ContactDetailView: View {
                     Button("Done") {
                         dismiss()
                     }
+                    .foregroundColor(.whisperPrimary)
                 }
             }
-            .alert("Edit Name", isPresented: $editingName) {
-                TextField("Display Name", text: $newName)
+            .alert("Edit Nickname", isPresented: $editingName) {
+                TextField("Nickname", text: $newName)
                 Button("Cancel", role: .cancel) {}
                 Button("Save") {
                     if !newName.isEmpty {
@@ -274,7 +514,66 @@ private struct ContactDetailView: View {
                     }
                 }
             } message: {
-                Text("Enter a new display name for this contact")
+                Text("Enter a nickname for this contact")
+            }
+            .fullScreenCover(isPresented: $showingCallView) {
+                CallView(viewModel: callViewModel)
+            }
+        }
+    }
+
+    private func startCall(isVideo: Bool) {
+        // Set up call view model
+        callViewModel.participantId = contact.whisperId
+        callViewModel.participantName = contact.displayName
+        callViewModel.participantAvatarURL = nil
+
+        // Show call screen
+        showingCallView = true
+
+        // Initiate call
+        callViewModel.initiateCall(
+            to: contact.whisperId,
+            name: contact.displayName,
+            avatarURL: nil,
+            isVideo: isVideo
+        )
+    }
+
+    private func gradientForName(_ name: String) -> LinearGradient {
+        let hash = abs(name.hashValue)
+        let colorPairs: [[Color]] = [
+            [Color(red: 0.2, green: 0.6, blue: 0.9), Color(red: 0.1, green: 0.4, blue: 0.7)],
+            [Color(red: 0.9, green: 0.3, blue: 0.4), Color(red: 0.7, green: 0.2, blue: 0.3)],
+            [Color(red: 0.3, green: 0.8, blue: 0.5), Color(red: 0.2, green: 0.6, blue: 0.4)],
+            [Color(red: 0.9, green: 0.6, blue: 0.2), Color(red: 0.8, green: 0.4, blue: 0.1)],
+            [Color(red: 0.6, green: 0.3, blue: 0.9), Color(red: 0.4, green: 0.2, blue: 0.7)],
+        ]
+        let colors = colorPairs[hash % colorPairs.count]
+        return LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+}
+
+// MARK: - Action Button
+
+private struct ActionButton: View {
+    let icon: String
+    let label: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: WhisperSpacing.sm) {
+                Image(systemName: icon)
+                    .font(.system(size: 24))
+                    .foregroundColor(.whisperPrimary)
+                    .frame(width: 56, height: 56)
+                    .background(Color.whisperPrimary.opacity(0.15))
+                    .clipShape(Circle())
+
+                Text(label)
+                    .font(.whisper(size: WhisperFontSize.sm))
+                    .foregroundColor(.whisperTextSecondary)
             }
         }
     }
@@ -283,5 +582,6 @@ private struct ContactDetailView: View {
 // MARK: - Preview
 
 #Preview {
-    ContactsListView(viewModel: ContactsViewModel())
+    ContactsListView()
+        .environmentObject(ThemeManager.shared)
 }

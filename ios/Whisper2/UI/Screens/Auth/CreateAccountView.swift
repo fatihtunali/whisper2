@@ -5,27 +5,54 @@ struct CreateAccountView: View {
     @Bindable var viewModel: AuthViewModel
     @Environment(\.dismiss) private var dismiss
 
+    // WhatsApp color palette
+    private let primaryGreen = Color(red: 7/255, green: 94/255, blue: 84/255)
+    private let secondaryGreen = Color(red: 18/255, green: 140/255, blue: 126/255)
+    private let accentGreen = Color(red: 37/255, green: 211/255, blue: 102/255)
+    private let lightGreen = Color(red: 220/255, green: 248/255, blue: 198/255)
+
     var body: some View {
-        VStack {
-            switch viewModel.currentStep {
-            case .generateMnemonic:
-                MnemonicDisplayView(viewModel: viewModel)
-            case .confirmMnemonic:
-                MnemonicConfirmView(viewModel: viewModel)
-            case .registering:
-                RegistrationProgressView()
-            case .complete:
-                AccountCreatedView(viewModel: viewModel)
-            default:
-                EmptyView()
+        GeometryReader { geo in
+            ZStack {
+                // Background gradient
+                LinearGradient(
+                    colors: [primaryGreen, secondaryGreen],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
+
+                // Content
+                switch viewModel.currentStep {
+                case .generateMnemonic:
+                    mnemonicDisplayContent(geo: geo)
+                case .confirmMnemonic:
+                    mnemonicConfirmContent(geo: geo)
+                case .registering:
+                    registrationProgressContent()
+                case .complete:
+                    accountCreatedContent(geo: geo)
+                default:
+                    EmptyView()
+                }
             }
         }
+        .ignoresSafeArea()
         .navigationBarBackButtonHidden(viewModel.currentStep != .generateMnemonic)
+        .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar {
             if viewModel.currentStep == .confirmMnemonic {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Back") {
+                    Button {
                         viewModel.currentStep = .generateMnemonic
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 16, weight: .semibold))
+                            Text("Back")
+                                .font(.system(size: 16, weight: .medium))
+                        }
+                        .foregroundColor(.white)
                     }
                 }
             }
@@ -39,345 +66,477 @@ struct CreateAccountView: View {
             Text(viewModel.error ?? "")
         }
     }
-}
 
-// MARK: - Mnemonic Display View
+    // MARK: - Mnemonic Display Content
 
-private struct MnemonicDisplayView: View {
-    @Bindable var viewModel: AuthViewModel
-    @State private var hasCopied = false
+    @ViewBuilder
+    private func mnemonicDisplayContent(geo: GeometryProxy) -> some View {
+        let padding = max(16, geo.size.width * 0.05)
 
-    var body: some View {
-        ScrollView {
-            VStack(spacing: Theme.Spacing.xl) {
-                // Header
-                VStack(spacing: Theme.Spacing.sm) {
-                    Image(systemName: "key.fill")
-                        .font(.system(size: 48))
-                        .foregroundColor(Theme.Colors.primary)
+        ScrollView(showsIndicators: false) {
+            VStack(spacing: 0) {
+                // Top safe area
+                Color.clear.frame(height: geo.safeAreaInsets.top + 16)
 
-                    Text("Your Recovery Phrase")
-                        .font(Theme.Typography.title2)
-                        .foregroundColor(Theme.Colors.textPrimary)
+                // Header Card
+                VStack(spacing: 12) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.white.opacity(0.15))
+                            .frame(width: 72, height: 72)
 
-                    Text("Write down these 12 words in order. This is the only way to recover your account.")
-                        .font(Theme.Typography.subheadline)
-                        .foregroundColor(Theme.Colors.textSecondary)
+                        Image(systemName: "key.fill")
+                            .font(.system(size: 32, weight: .medium))
+                            .foregroundColor(.white)
+                    }
+
+                    Text("Recovery Phrase")
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundColor(.white)
+
+                    Text("Write down these 12 words in order.\nYou'll need them to recover your account.")
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundColor(.white.opacity(0.85))
                         .multilineTextAlignment(.center)
+                        .lineSpacing(3)
+                        .padding(.horizontal, 8)
                 }
-                .padding(.top, Theme.Spacing.xl)
+                .padding(.top, 8)
+                .padding(.bottom, 20)
 
-                // Warning
-                HStack(spacing: Theme.Spacing.sm) {
+                // Warning Banner
+                HStack(spacing: 10) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(Theme.Colors.warning)
+                        .font(.system(size: 16))
+                        .foregroundColor(.orange)
 
-                    Text("Never share this phrase. Anyone with it can access your account.")
-                        .font(Theme.Typography.caption1)
-                        .foregroundColor(Theme.Colors.textSecondary)
-                }
-                .padding(Theme.Spacing.md)
-                .background(Theme.Colors.warning.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.md))
-
-                // Mnemonic grid
-                if viewModel.isLoading {
-                    ProgressView()
-                        .padding(Theme.Spacing.xxl)
-                } else {
-                    MnemonicGridView(words: viewModel.generatedMnemonic)
-                }
-
-                // Copy button
-                Button {
-                    UIPasteboard.general.string = viewModel.generatedMnemonic.joined(separator: " ")
-                    hasCopied = true
-
-                    // Clear clipboard after 60 seconds
-                    Task {
-                        try? await Task.sleep(for: .seconds(60))
-                        if UIPasteboard.general.string == viewModel.generatedMnemonic.joined(separator: " ") {
-                            UIPasteboard.general.string = ""
-                        }
-                    }
-                } label: {
-                    HStack {
-                        Image(systemName: hasCopied ? "checkmark" : "doc.on.doc")
-                        Text(hasCopied ? "Copied!" : "Copy to Clipboard")
-                    }
-                    .font(Theme.Typography.subheadline)
-                }
-                .disabled(viewModel.generatedMnemonic.isEmpty)
-
-                Spacer(minLength: Theme.Spacing.xl)
-
-                // Continue button
-                Button {
-                    viewModel.proceedToConfirmation()
-                } label: {
-                    Text("I've Written It Down")
-                }
-                .buttonStyle(.primary)
-                .disabled(!viewModel.canProceed)
-            }
-            .padding(.horizontal, Theme.Spacing.xl)
-        }
-        .background(Theme.Colors.background)
-        .navigationTitle("Create Account")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-// MARK: - Mnemonic Grid
-
-private struct MnemonicGridView: View {
-    let words: [String]
-    var highlightIndices: Set<Int> = []
-
-    private let columns = [
-        GridItem(.flexible()),
-        GridItem(.flexible())
-    ]
-
-    var body: some View {
-        LazyVGrid(columns: columns, spacing: Theme.Spacing.sm) {
-            ForEach(Array(words.enumerated()), id: \.offset) { index, word in
-                HStack(spacing: Theme.Spacing.xs) {
-                    Text("\(index + 1).")
-                        .font(Theme.Typography.caption1)
-                        .foregroundColor(Theme.Colors.textTertiary)
-                        .frame(width: 24, alignment: .trailing)
-
-                    Text(word)
-                        .font(Theme.Typography.monospaced)
-                        .foregroundColor(
-                            highlightIndices.contains(index)
-                                ? Theme.Colors.primary
-                                : Theme.Colors.textPrimary
-                        )
+                    Text("Never share this phrase with anyone")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.white)
 
                     Spacer()
                 }
-                .padding(Theme.Spacing.sm)
+                .padding(14)
                 .background(
-                    highlightIndices.contains(index)
-                        ? Theme.Colors.primary.opacity(0.1)
-                        : Theme.Colors.surface
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.black.opacity(0.25))
                 )
-                .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.sm))
+                .padding(.horizontal, padding)
+                .padding(.bottom, 16)
+
+                // Mnemonic Words Card
+                if viewModel.isLoading {
+                    VStack {
+                        ProgressView()
+                            .tint(.white)
+                            .scaleEffect(1.3)
+                    }
+                    .frame(height: 240)
+                } else {
+                    mnemonicWordsCard(geo: geo, padding: padding)
+                }
+
+                // Copy Button
+                copyButton
+                    .padding(.top, 16)
+
+                Spacer(minLength: 24)
+
+                // Continue Button
+                continueButton(geo: geo, padding: padding) {
+                    viewModel.proceedToConfirmation()
+                }
+
+                // Bottom safe area
+                Color.clear.frame(height: max(geo.safeAreaInsets.bottom, 16) + 8)
             }
         }
     }
-}
 
-// MARK: - Mnemonic Confirm View
+    @ViewBuilder
+    private func mnemonicWordsCard(geo: GeometryProxy, padding: CGFloat) -> some View {
+        let columns = [
+            GridItem(.flexible(), spacing: 8),
+            GridItem(.flexible(), spacing: 8)
+        ]
 
-private struct MnemonicConfirmView: View {
-    @Bindable var viewModel: AuthViewModel
-    @State private var selectedWords: [Int: String] = [:]
+        VStack(spacing: 0) {
+            LazyVGrid(columns: columns, spacing: 8) {
+                ForEach(Array(viewModel.generatedMnemonic.enumerated()), id: \.offset) { index, word in
+                    HStack(spacing: 8) {
+                        Text("\(index + 1)")
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .foregroundColor(.white.opacity(0.5))
+                            .frame(width: 20, alignment: .trailing)
 
-    var body: some View {
-        ScrollView {
-            VStack(spacing: Theme.Spacing.xl) {
+                        Text(word)
+                            .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.white)
+
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(Color.white.opacity(0.12))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                            )
+                    )
+                }
+            }
+        }
+        .padding(padding)
+        .background(
+            RoundedRectangle(cornerRadius: 20)
+                .fill(Color.white.opacity(0.08))
+        )
+        .padding(.horizontal, padding)
+    }
+
+    @ViewBuilder
+    private var copyButton: some View {
+        Button {
+            UIPasteboard.general.string = viewModel.generatedMnemonic.joined(separator: " ")
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+
+            // Auto-clear clipboard after 60 seconds
+            Task {
+                try? await Task.sleep(for: .seconds(60))
+                if UIPasteboard.general.string == viewModel.generatedMnemonic.joined(separator: " ") {
+                    UIPasteboard.general.string = ""
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "doc.on.doc")
+                    .font(.system(size: 13, weight: .medium))
+                Text("Copy to Clipboard")
+                    .font(.system(size: 13, weight: .semibold))
+            }
+            .foregroundColor(.white.opacity(0.9))
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+            .background(
+                Capsule()
+                    .fill(Color.white.opacity(0.15))
+                    .overlay(
+                        Capsule()
+                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                    )
+            )
+        }
+        .disabled(viewModel.generatedMnemonic.isEmpty)
+    }
+
+    // MARK: - Mnemonic Confirm Content
+
+    @ViewBuilder
+    private func mnemonicConfirmContent(geo: GeometryProxy) -> some View {
+        let padding = max(16, geo.size.width * 0.05)
+
+        ScrollView(showsIndicators: false) {
+            VStack(spacing: 0) {
+                // Top safe area
+                Color.clear.frame(height: geo.safeAreaInsets.top + 16)
+
                 // Header
-                VStack(spacing: Theme.Spacing.sm) {
-                    Image(systemName: "checkmark.shield.fill")
-                        .font(.system(size: 48))
-                        .foregroundColor(Theme.Colors.primary)
+                VStack(spacing: 12) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.white.opacity(0.15))
+                            .frame(width: 72, height: 72)
 
-                    Text("Confirm Your Phrase")
-                        .font(Theme.Typography.title2)
-                        .foregroundColor(Theme.Colors.textPrimary)
+                        Image(systemName: "checkmark.shield.fill")
+                            .font(.system(size: 32, weight: .medium))
+                            .foregroundColor(.white)
+                    }
 
-                    Text("Select the correct words to verify you've saved your recovery phrase.")
-                        .font(Theme.Typography.subheadline)
-                        .foregroundColor(Theme.Colors.textSecondary)
+                    Text("Verify Your Phrase")
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundColor(.white)
+
+                    Text("Select the correct words to confirm\nyou've saved your recovery phrase.")
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundColor(.white.opacity(0.85))
                         .multilineTextAlignment(.center)
+                        .lineSpacing(3)
                 }
-                .padding(.top, Theme.Spacing.xl)
+                .padding(.top, 8)
+                .padding(.bottom, 24)
 
-                // Confirmation prompts
-                VStack(spacing: Theme.Spacing.md) {
-                    ForEach(viewModel.confirmationIndices, id: \.self) { index in
-                        ConfirmationWordRow(
-                            wordNumber: index + 1,
-                            correctWord: viewModel.generatedMnemonic[index],
-                            allWords: viewModel.generatedMnemonic.shuffled(),
-                            selectedWord: selectedWords[index],
-                            onSelect: { word in
-                                selectedWords[index] = word
-                                viewModel.selectConfirmationWord(at: index, word: word)
-                            }
-                        )
-                    }
-                }
+                // Word Selection Cards
+                WordSelectionView(
+                    viewModel: viewModel,
+                    accentGreen: accentGreen,
+                    padding: padding
+                )
 
-                Spacer(minLength: Theme.Spacing.xl)
+                Spacer(minLength: 24)
 
-                // Continue button
-                Button {
+                // Create Account Button
+                continueButton(geo: geo, padding: padding, title: "Create Account", enabled: viewModel.canProceed) {
                     viewModel.completeAccountCreation()
-                } label: {
-                    Text("Create Account")
                 }
-                .buttonStyle(.primary)
-                .disabled(!viewModel.canProceed)
+
+                // Bottom safe area
+                Color.clear.frame(height: max(geo.safeAreaInsets.bottom, 16) + 8)
             }
-            .padding(.horizontal, Theme.Spacing.xl)
         }
-        .background(Theme.Colors.background)
-        .navigationTitle("Confirm Phrase")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-// MARK: - Confirmation Word Row
-
-private struct ConfirmationWordRow: View {
-    let wordNumber: Int
-    let correctWord: String
-    let allWords: [String]
-    let selectedWord: String?
-    let onSelect: (String) -> Void
-
-    @State private var isExpanded = false
-
-    private var isCorrect: Bool {
-        selectedWord == correctWord
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            Text("Word #\(wordNumber)")
-                .font(Theme.Typography.caption1)
-                .foregroundColor(Theme.Colors.textSecondary)
+    // MARK: - Registration Progress Content
 
-            Menu {
-                ForEach(allWords.prefix(6), id: \.self) { word in
-                    Button(word) {
-                        onSelect(word)
-                    }
-                }
+    @ViewBuilder
+    private func registrationProgressContent() -> some View {
+        VStack(spacing: 24) {
+            Spacer()
+
+            ZStack {
+                Circle()
+                    .fill(Color.white.opacity(0.1))
+                    .frame(width: 100, height: 100)
+
+                ProgressView()
+                    .tint(.white)
+                    .scaleEffect(1.5)
+            }
+
+            VStack(spacing: 8) {
+                Text("Creating Account")
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundColor(.white)
+
+                Text("Connecting securely...")
+                    .font(.system(size: 15, weight: .regular))
+                    .foregroundColor(.white.opacity(0.8))
+            }
+
+            Spacer()
+        }
+    }
+
+    // MARK: - Account Created Content
+
+    @ViewBuilder
+    private func accountCreatedContent(geo: GeometryProxy) -> some View {
+        let padding = max(16, geo.size.width * 0.05)
+
+        VStack(spacing: 0) {
+            Spacer()
+
+            // Success Icon
+            ZStack {
+                Circle()
+                    .fill(accentGreen.opacity(0.2))
+                    .frame(width: 120, height: 120)
+
+                Circle()
+                    .fill(accentGreen)
+                    .frame(width: 90, height: 90)
+
+                Image(systemName: "checkmark")
+                    .font(.system(size: 44, weight: .bold))
+                    .foregroundColor(.white)
+            }
+            .padding(.bottom, 24)
+
+            Text("You're All Set!")
+                .font(.system(size: 26, weight: .bold))
+                .foregroundColor(.white)
+                .padding(.bottom, 8)
+
+            Text("Your secure identity is ready")
+                .font(.system(size: 15, weight: .regular))
+                .foregroundColor(.white.opacity(0.8))
+                .padding(.bottom, 32)
+
+            // WhisperID Card
+            if let whisperId = viewModel.whisperId {
+                whisperIdCard(whisperId: whisperId, padding: padding)
+            }
+
+            Spacer()
+
+            // Get Started Button
+            continueButton(geo: geo, padding: padding, title: "Get Started") {
+                // Already authenticated
+            }
+
+            // Bottom safe area
+            Color.clear.frame(height: max(geo.safeAreaInsets.bottom, 16) + 8)
+        }
+    }
+
+    @ViewBuilder
+    private func whisperIdCard(whisperId: String, padding: CGFloat) -> some View {
+        VStack(spacing: 8) {
+            Text("YOUR WHISPER ID")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.white.opacity(0.6))
+                .tracking(1)
+
+            Button {
+                UIPasteboard.general.string = whisperId
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             } label: {
                 HStack {
-                    Text(selectedWord ?? "Select word...")
-                        .font(Theme.Typography.body)
-                        .foregroundColor(
-                            selectedWord == nil
-                                ? Theme.Colors.textTertiary
-                                : (isCorrect ? Theme.Colors.success : Theme.Colors.error)
-                        )
+                    Text(whisperId)
+                        .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white)
 
                     Spacer()
 
-                    if let _ = selectedWord {
-                        Image(systemName: isCorrect ? "checkmark.circle.fill" : "xmark.circle.fill")
-                            .foregroundColor(isCorrect ? Theme.Colors.success : Theme.Colors.error)
-                    } else {
-                        Image(systemName: "chevron.down")
-                            .foregroundColor(Theme.Colors.textTertiary)
-                    }
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 14))
+                        .foregroundColor(.white.opacity(0.6))
                 }
-                .padding(Theme.Spacing.md)
-                .background(Theme.Colors.surface)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.md))
+                .padding(16)
+                .background(
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(Color.white.opacity(0.12))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14)
+                                .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                        )
+                )
             }
         }
+        .padding(.horizontal, padding)
+    }
+
+    // MARK: - Shared Components
+
+    @ViewBuilder
+    private func continueButton(geo: GeometryProxy, padding: CGFloat, title: String = "Continue", enabled: Bool = true, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundColor(primaryGreen)
+                .frame(maxWidth: .infinity)
+                .frame(height: 54)
+                .background(
+                    Capsule()
+                        .fill(enabled ? Color.white : Color.white.opacity(0.5))
+                )
+        }
+        .disabled(!enabled)
+        .padding(.horizontal, padding)
     }
 }
 
-// MARK: - Registration Progress View
+// MARK: - Word Selection View
 
-private struct RegistrationProgressView: View {
-    var body: some View {
-        VStack(spacing: Theme.Spacing.xl) {
-            Spacer()
-
-            ProgressView()
-                .scaleEffect(2)
-
-            VStack(spacing: Theme.Spacing.sm) {
-                Text("Creating Your Account")
-                    .font(Theme.Typography.title3)
-                    .foregroundColor(Theme.Colors.textPrimary)
-
-                Text("Generating keys and registering with the server...")
-                    .font(Theme.Typography.subheadline)
-                    .foregroundColor(Theme.Colors.textSecondary)
-                    .multilineTextAlignment(.center)
-            }
-
-            Spacer()
-        }
-        .padding(Theme.Spacing.xl)
-        .background(Theme.Colors.background)
-    }
-}
-
-// MARK: - Account Created View
-
-private struct AccountCreatedView: View {
+private struct WordSelectionView: View {
     @Bindable var viewModel: AuthViewModel
+    let accentGreen: Color
+    let padding: CGFloat
+
+    @State private var selectedWords: [Int: String] = [:]
+    @State private var wordOptions: [Int: [String]] = [:]
 
     var body: some View {
-        VStack(spacing: Theme.Spacing.xl) {
-            Spacer()
-
-            // Success icon
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 80))
-                .foregroundColor(Theme.Colors.success)
-
-            // Title
-            VStack(spacing: Theme.Spacing.sm) {
-                Text("Account Created!")
-                    .font(Theme.Typography.title2)
-                    .foregroundColor(Theme.Colors.textPrimary)
-
-                Text("Your secure identity is ready")
-                    .font(Theme.Typography.subheadline)
-                    .foregroundColor(Theme.Colors.textSecondary)
+        VStack(spacing: 12) {
+            ForEach(viewModel.confirmationIndices, id: \.self) { index in
+                wordSelectionCard(for: index)
             }
+        }
+        .padding(.horizontal, padding)
+        .onAppear {
+            generateWordOptions()
+        }
+    }
 
-            // WhisperID display
-            if let whisperId = viewModel.whisperId {
-                VStack(spacing: Theme.Spacing.xs) {
-                    Text("Your WhisperID")
-                        .font(Theme.Typography.caption1)
-                        .foregroundColor(Theme.Colors.textSecondary)
+    @ViewBuilder
+    private func wordSelectionCard(for index: Int) -> some View {
+        let correctWord = viewModel.generatedMnemonic[index]
+        let options = wordOptions[index] ?? []
+        let selected = selectedWords[index]
 
-                    Text(whisperId)
-                        .font(Theme.Typography.monospaced)
-                        .foregroundColor(Theme.Colors.primary)
-                        .padding(Theme.Spacing.md)
-                        .background(Theme.Colors.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.md))
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Word #\(index + 1)")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.7))
 
-                    Button {
-                        UIPasteboard.general.string = whisperId
-                    } label: {
-                        HStack {
-                            Image(systemName: "doc.on.doc")
-                            Text("Copy")
-                        }
-                        .font(Theme.Typography.caption1)
+                Spacer()
+
+                if let selected = selected {
+                    if selected == correctWord {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 16))
+                            .foregroundColor(accentGreen)
+                    } else {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 16))
+                            .foregroundColor(.red)
                     }
                 }
             }
 
-            Spacer()
-
-            // Continue button
-            Button {
-                // Navigate to main app
-            } label: {
-                Text("Get Started")
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                ForEach(options, id: \.self) { word in
+                    wordOptionButton(word: word, correctWord: correctWord, selected: selected, index: index)
+                }
             }
-            .buttonStyle(.primary)
         }
-        .padding(Theme.Spacing.xl)
-        .background(Theme.Colors.background)
-        .navigationBarBackButtonHidden(true)
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color.black.opacity(0.2))
+        )
+    }
+
+    @ViewBuilder
+    private func wordOptionButton(word: String, correctWord: String, selected: String?, index: Int) -> some View {
+        let isSelected = selected == word
+        let isCorrect = word == correctWord
+
+        Button {
+            selectedWords[index] = word
+            viewModel.selectConfirmationWord(at: index, word: word)
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        } label: {
+            Text(word)
+                .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 44)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(backgroundColor(isSelected: isSelected, isCorrect: isCorrect))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(borderColor(isSelected: isSelected, isCorrect: isCorrect), lineWidth: 2)
+                )
+        }
+    }
+
+    private func backgroundColor(isSelected: Bool, isCorrect: Bool) -> Color {
+        if isSelected {
+            return isCorrect ? accentGreen : Color.red.opacity(0.7)
+        }
+        return Color.white.opacity(0.1)
+    }
+
+    private func borderColor(isSelected: Bool, isCorrect: Bool) -> Color {
+        if isSelected {
+            return isCorrect ? accentGreen : Color.red
+        }
+        return Color.clear
+    }
+
+    private func generateWordOptions() {
+        for index in viewModel.confirmationIndices {
+            let correctWord = viewModel.generatedMnemonic[index]
+            let otherWords = viewModel.generatedMnemonic.filter { $0 != correctWord }.shuffled().prefix(3)
+            var options = Array(otherWords) + [correctWord]
+            options.shuffle()
+            wordOptions[index] = options
+        }
     }
 }
 

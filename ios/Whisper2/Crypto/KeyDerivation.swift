@@ -13,10 +13,12 @@ enum KeyDerivation {
 
     // MARK: - Generate Mnemonic
 
-    /// Generate a new 24-word mnemonic phrase
+    /// Generate a new 12-word mnemonic phrase
+    /// 128 bits of entropy = 12 words (standard for most wallets)
     static func generateMnemonic() -> String {
-        var randomBytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, 32, &randomBytes)
+        // 16 bytes = 128 bits entropy → 12 words
+        var randomBytes = [UInt8](repeating: 0, count: 16)
+        _ = SecRandomCopyBytes(kSecRandomDefault, 16, &randomBytes)
         return mnemonicFromEntropy(Data(randomBytes))
     }
 
@@ -24,7 +26,10 @@ enum KeyDerivation {
     private static func mnemonicFromEntropy(_ entropy: Data) -> String {
         // SHA256 checksum
         let hash = SHA256.hash(data: entropy)
-        let hashByte = hash.first!
+        let hashData = Data(hash)
+        guard let hashByte = hashData.first else {
+            return "" // Should never happen with valid entropy
+        }
 
         // Combine entropy + checksum bits
         var bits = entropy.map { byte -> String in

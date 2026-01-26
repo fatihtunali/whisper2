@@ -14,8 +14,8 @@ enum GroupRole: String, Codable {
     case member
 }
 
-/// Group member
-struct GroupMember: Codable, Equatable {
+/// Group member (service model)
+struct ServiceGroupMember: Codable, Equatable {
     let whisperId: String
     var role: GroupRole
     let joinedAt: Int64
@@ -26,20 +26,20 @@ struct GroupMember: Codable, Equatable {
     }
 }
 
-/// Group model
-struct Group: Codable, Identifiable, Equatable {
+/// Group model (service model)
+struct ServiceGroup: Codable, Identifiable, Equatable {
     let id: String          // groupId
     var title: String
     let ownerId: String
     let createdAt: Int64
     var updatedAt: Int64
-    var members: [GroupMember]
+    var members: [ServiceGroupMember]
 
     /// Group ID (alias for SwiftUI)
     var groupId: String { id }
 
     /// Get active members only
-    var activeMembers: [GroupMember] {
+    var activeMembers: [ServiceGroupMember] {
         members.filter { $0.isActive }
     }
 
@@ -87,16 +87,16 @@ struct GroupEvent: Codable {
         var removedAt: Int64?
     }
 
-    /// Convert to Group model
-    func toGroup() -> Group {
-        Group(
+    /// Convert to ServiceGroup model
+    func toGroup() -> ServiceGroup {
+        ServiceGroup(
             id: group.groupId,
             title: group.title,
             ownerId: group.ownerId,
             createdAt: group.createdAt,
             updatedAt: group.updatedAt,
             members: group.members.map { member in
-                GroupMember(
+                ServiceGroupMember(
                     whisperId: member.whisperId,
                     role: GroupRole(rawValue: member.role) ?? .member,
                     joinedAt: member.joinedAt,
@@ -131,11 +131,11 @@ final class GroupService {
     static let shared = GroupService()
 
     private let keychain = KeychainService.shared
-    private var groups: [String: Group] = [:]
+    private var groups: [String: ServiceGroup] = [:]
     private var groupsLock = NSLock()
 
     /// Publisher for group events
-    let groupEventPublisher = PassthroughSubject<(GroupEventType, Group), Never>()
+    let groupEventPublisher = PassthroughSubject<(GroupEventType, ServiceGroup), Never>()
 
     private init() {}
 
@@ -146,7 +146,7 @@ final class GroupService {
     ///   - title: Group title (1-64 chars)
     ///   - members: Member whisperIds (excluding self)
     /// - Returns: Created group
-    func createGroup(title: String, members: [String]) async throws -> Group {
+    func createGroup(title: String, members: [String]) async throws -> ServiceGroup {
         logger.info("Creating group: \(title) with \(members.count) members", category: .messaging)
 
         guard let sessionToken = keychain.sessionToken else {
@@ -198,12 +198,12 @@ final class GroupService {
         }
 
         // Build payload
-        var payload = GroupUpdatePayload(
+        let payload = GroupUpdatePayload(
             sessionToken: sessionToken,
             groupId: groupId,
+            title: changes.title,
             addMembers: changes.addMembers,
-            removeMembers: changes.removeMembers,
-            title: changes.title
+            removeMembers: changes.removeMembers
         )
 
         // Note: roleChanges would need to be added to GroupUpdatePayload if needed
@@ -334,21 +334,21 @@ final class GroupService {
     // MARK: - Local Storage
 
     /// Get a group by ID.
-    func getGroup(_ groupId: String) -> Group? {
+    func getGroup(_ groupId: String) -> ServiceGroup? {
         groupsLock.lock()
         defer { groupsLock.unlock() }
         return groups[groupId]
     }
 
     /// Get all groups.
-    func getAllGroups() -> [Group] {
+    func getAllGroups() -> [ServiceGroup] {
         groupsLock.lock()
         defer { groupsLock.unlock() }
         return Array(groups.values)
     }
 
     /// Store a group locally.
-    func storeGroup(_ group: Group) {
+    func storeGroup(_ group: ServiceGroup) {
         groupsLock.lock()
         defer { groupsLock.unlock() }
         groups[group.groupId] = group
@@ -444,20 +444,40 @@ final class GroupService {
     }
 
     /// Send request via WebSocket and wait for response.
-    /// This is a placeholder - actual implementation depends on WebSocket manager.
+    /// Uses AppConnectionManager's shared WebSocket connection.
     private func sendWebSocketRequest<T: Encodable>(
         type: String,
         payload: T
     ) async throws -> [String: Any] {
-        // TODO: Implement WebSocket request/response handling
-        // This should:
-        // 1. Generate requestId
-        // 2. Send frame via WebSocket
-        // 3. Wait for response with matching requestId
-        // 4. Return response payload
+        // Get the WSClient from AppConnectionManager
+        guard let wsClient = await getWebSocketClient() else {
+            throw NetworkError.connectionFailed
+        }
 
-        // Placeholder - actual implementation depends on WebSocket manager
-        throw NetworkError.connectionFailed
+        // Convert payload to dictionary
+        let encoder = JSONEncoder()
+        let payloadData = try encoder.encode(payload)
+        guard let payloadDict = try JSONSerialization.jsonObject(with: payloadData) as? [String: Any] else {
+            throw NetworkError.encodingFailed
+        }
+
+        // Send and wait for response
+        let response = try await wsClient.sendAndWait(
+            type: type,
+            payload: payloadDict,
+            expectedResponseType: type == Constants.MessageType.groupCreate ? Constants.MessageType.groupEvent : Constants.MessageType.messageAccepted,
+            timeout: 30
+        )
+
+        return response
+    }
+
+    /// Get the active WebSocket client from AppConnectionManager
+    @MainActor
+    private func getWebSocketClient() async -> WSClient? {
+        // Access AppConnectionManager's internal wsClient
+        // We need to add a method to AppConnectionManager for this
+        return AppConnectionManager.shared.getWSClient()
     }
 }
 
@@ -490,6 +510,7 @@ private struct UserKeysResponse: Codable {
 // MARK: - Group Crypto
 
 /// Crypto operations for group messaging.
+/// Uses NaClBox for encryption and CanonicalSigning for signatures.
 final class GroupCrypto {
 
     static let shared = GroupCrypto()
@@ -514,20 +535,11 @@ final class GroupCrypto {
         recipientPublicKey: Data,
         senderPrivateKey: Data
     ) throws -> (nonce: Data, ciphertext: Data) {
-        guard recipientPublicKey.count == Constants.Crypto.publicKeyLength else {
-            throw CryptoError.invalidPublicKey
-        }
-        guard senderPrivateKey.count == Constants.Crypto.secretKeyLength else {
-            throw CryptoError.invalidPrivateKey
-        }
-
-        let nonce = try randomBytes(Constants.Crypto.nonceLength)
-
-        // TODO: Implement actual NaCl box_seal
-        // crypto_box_easy(c, m, mlen, n, pk, sk)
-
-        // Placeholder - needs real crypto implementation
-        throw CryptoError.encryptionFailed
+        return try NaClBox.seal(
+            message: plaintext,
+            recipientPublicKey: recipientPublicKey,
+            senderPrivateKey: senderPrivateKey
+        )
     }
 
     /// Decrypt data with box.
@@ -537,25 +549,16 @@ final class GroupCrypto {
         senderPublicKey: Data,
         recipientPrivateKey: Data
     ) throws -> Data {
-        guard senderPublicKey.count == Constants.Crypto.publicKeyLength else {
-            throw CryptoError.invalidPublicKey
-        }
-        guard recipientPrivateKey.count == Constants.Crypto.secretKeyLength else {
-            throw CryptoError.invalidPrivateKey
-        }
-        guard nonce.count == Constants.Crypto.nonceLength else {
-            throw CryptoError.invalidNonce
-        }
-
-        // TODO: Implement actual NaCl box_open
-        // crypto_box_open_easy(m, c, clen, n, pk, sk)
-
-        // Placeholder - needs real crypto implementation
-        throw CryptoError.decryptionFailed
+        return try NaClBox.open(
+            ciphertext: ciphertext,
+            nonce: nonce,
+            senderPublicKey: senderPublicKey,
+            recipientPrivateKey: recipientPrivateKey
+        )
     }
 
-    /// Sign message using Ed25519.
-    /// Uses canonical signing format matching server implementation.
+    /// Sign message using Ed25519 with canonical v1 format.
+    /// Uses CanonicalSigning to match server implementation exactly.
     func sign(
         privateKey: Data,
         messageType: String,
@@ -566,57 +569,47 @@ final class GroupCrypto {
         nonce: String,
         ciphertext: String
     ) throws -> Data {
-        guard privateKey.count == Constants.Crypto.secretKeyLength else {
-            throw CryptoError.invalidPrivateKey
+        // Decode nonce and ciphertext from base64 for CanonicalSigning
+        guard let nonceData = Data(base64Encoded: nonce),
+              let ciphertextData = Data(base64Encoded: ciphertext) else {
+            throw CryptoError.invalidBase64
         }
 
-        // Build canonical signing message (matches server)
-        let signingMessage = [
-            "messageType": messageType,
-            "messageId": messageId,
-            "from": from,
-            "toOrGroupId": toOrGroupId,
-            "timestamp": String(timestamp),
-            "nonce": nonce,
-            "ciphertext": ciphertext
-        ]
-
-        // Sort keys and serialize
-        let sortedKeys = signingMessage.keys.sorted()
-        var parts: [String] = []
-        for key in sortedKeys {
-            parts.append("\(key):\(signingMessage[key]!)")
-        }
-        let canonicalMessage = parts.joined(separator: "|")
-
-        guard let messageData = canonicalMessage.data(using: .utf8) else {
-            throw CryptoError.signatureFailed
-        }
-
-        // TODO: Implement actual Ed25519 signing
-        // crypto_sign_detached(sig, siglen, m, mlen, sk)
-
-        // Placeholder - needs real crypto implementation
-        throw CryptoError.signatureFailed
+        // Use CanonicalSigning which builds the proper v1\n format
+        return try CanonicalSigning.signCanonical(
+            messageType: messageType,
+            messageId: messageId,
+            from: from,
+            to: toOrGroupId,
+            timestamp: timestamp,
+            nonce: nonceData,
+            ciphertext: ciphertextData,
+            privateKey: privateKey
+        )
     }
 
-    /// Verify Ed25519 signature.
+    /// Verify Ed25519 signature using canonical v1 format.
     func verify(
         publicKey: Data,
         signature: Data,
-        message: Data
-    ) throws -> Bool {
-        guard publicKey.count == Constants.Crypto.publicKeyLength else {
-            throw CryptoError.invalidPublicKey
-        }
-        guard signature.count == Constants.Crypto.signatureLength else {
-            throw CryptoError.signatureVerificationFailed
-        }
-
-        // TODO: Implement actual Ed25519 verification
-        // crypto_sign_verify_detached(sig, m, mlen, pk)
-
-        // Placeholder - needs real crypto implementation
-        throw CryptoError.signatureVerificationFailed
+        messageType: String,
+        messageId: String,
+        from: String,
+        toOrGroupId: String,
+        timestamp: Int64,
+        nonce: Data,
+        ciphertext: Data
+    ) -> Bool {
+        return CanonicalSigning.verifyCanonical(
+            signature: signature,
+            messageType: messageType,
+            messageId: messageId,
+            from: from,
+            to: toOrGroupId,
+            timestamp: timestamp,
+            nonce: nonce,
+            ciphertext: ciphertext,
+            publicKey: publicKey
+        )
     }
 }

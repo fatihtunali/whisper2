@@ -1,6 +1,8 @@
 import Foundation
 import WebRTC
 
+// Import for KeychainService and AppConnectionManager access
+
 // MARK: - TURN Credentials
 
 /// TURN server credentials returned from the server
@@ -54,10 +56,7 @@ final class TurnService {
 
         logger.debug("Fetching TURN credentials from server", category: .calls)
 
-        // In a real implementation, this would call the WebSocket service
-        // to send get_turn_credentials and wait for turn_credentials response
-
-        // For now, create a placeholder that will be replaced with actual implementation
+        // Fetch TURN credentials via WebSocket
         let credentials = try await fetchFromServer()
 
         // Cache the credentials (expire 30 seconds before TTL)
@@ -79,40 +78,45 @@ final class TurnService {
     // MARK: - Private Methods
 
     private func fetchFromServer() async throws -> TurnCredentials {
-        // TODO: Implement actual WebSocket call
-        // This is a placeholder that shows the expected message flow
+        let keychain = KeychainService.shared
 
-        /*
-        let request = TurnCredentialsRequest(
-            protocolVersion: Constants.protocolVersion,
-            cryptoVersion: Constants.cryptoVersion,
-            sessionToken: sessionToken
-        )
+        guard let sessionToken = keychain.sessionToken else {
+            throw CallError.notAuthenticated
+        }
 
-        let response = try await websocketService.sendAndWait(
+        // Get WebSocket client from AppConnectionManager
+        guard let wsClient = await MainActor.run(body: { AppConnectionManager.shared.getWSClient() }) else {
+            throw CallError.turnCredentialsFailed
+        }
+
+        let payload: [String: Any] = [
+            "protocolVersion": Constants.protocolVersion,
+            "cryptoVersion": Constants.cryptoVersion,
+            "sessionToken": sessionToken
+        ]
+
+        // Send request and wait for response
+        let response = try await wsClient.sendAndWait(
             type: Constants.MessageType.getTurnCredentials,
-            payload: request,
-            expectType: Constants.MessageType.turnCredentials
+            payload: payload,
+            expectedResponseType: Constants.MessageType.turnCredentials,
+            timeout: 10
         )
+
+        // Parse response
+        guard let urls = response["urls"] as? [String],
+              let username = response["username"] as? String,
+              let credential = response["credential"] as? String,
+              let ttl = response["ttl"] as? Int else {
+            throw CallError.turnCredentialsFailed
+        }
 
         return TurnCredentials(
-            urls: response.urls,
-            username: response.username,
-            credential: response.credential,
-            ttl: response.ttl
+            urls: urls,
+            username: username,
+            credential: credential,
+            ttl: ttl
         )
-        */
-
-        // Placeholder: throw error until WebSocket integration is complete
-        throw CallError.turnCredentialsFailed
-
-        // For testing, you could return mock credentials:
-        // return TurnCredentials(
-        //     urls: Self.defaultTurnUrls,
-        //     username: "test",
-        //     credential: "test",
-        //     ttl: 600
-        // )
     }
 }
 

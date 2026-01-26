@@ -27,12 +27,12 @@ final class CryptoService: ObservableObject {
 
     /// Initialize from existing keychain data
     func initializeFromKeychain() async throws {
-        guard let encPrivate = KeychainService.shared.getData(Constants.StorageKey.encPrivateKey),
-              let encPublic = KeychainService.shared.getData(Constants.StorageKey.encPublicKey),
-              let signPrivate = KeychainService.shared.getData(Constants.StorageKey.signPrivateKey),
-              let signPublic = KeychainService.shared.getData(Constants.StorageKey.signPublicKey),
-              let contactsKeyData = KeychainService.shared.getData(Constants.StorageKey.contactsKey),
-              let whisperIdString = KeychainService.shared.getString(Constants.StorageKey.whisperId) else {
+        guard let encPrivate = KeychainService.shared.getData(forKey: Constants.StorageKey.encPrivateKey),
+              let encPublic = KeychainService.shared.getData(forKey: Constants.StorageKey.encPublicKey),
+              let signPrivate = KeychainService.shared.getData(forKey: Constants.StorageKey.signPrivateKey),
+              let signPublic = KeychainService.shared.getData(forKey: Constants.StorageKey.signPublicKey),
+              let contactsKeyData = KeychainService.shared.getData(forKey: Constants.StorageKey.contactsKey),
+              let whisperIdString = KeychainService.shared.whisperId else {
             throw AuthError.notAuthenticated
         }
 
@@ -85,7 +85,7 @@ final class CryptoService: ObservableObject {
             throw CryptoError.invalidWhisperId
         }
         self.whisperId = whisperId
-        try KeychainService.shared.setString(whisperId, forKey: Constants.StorageKey.whisperId)
+        KeychainService.shared.whisperId = whisperId
         logger.info("WhisperID set: \(whisperId)", category: .crypto)
     }
 
@@ -265,12 +265,12 @@ final class CryptoService: ObservableObject {
         isInitialized = false
 
         // Clear from keychain
-        KeychainService.shared.delete(Constants.StorageKey.encPrivateKey)
-        KeychainService.shared.delete(Constants.StorageKey.encPublicKey)
-        KeychainService.shared.delete(Constants.StorageKey.signPrivateKey)
-        KeychainService.shared.delete(Constants.StorageKey.signPublicKey)
-        KeychainService.shared.delete(Constants.StorageKey.contactsKey)
-        KeychainService.shared.delete(Constants.StorageKey.whisperId)
+        KeychainService.shared.delete(forKey: Constants.StorageKey.encPrivateKey)
+        KeychainService.shared.delete(forKey: Constants.StorageKey.encPublicKey)
+        KeychainService.shared.delete(forKey: Constants.StorageKey.signPrivateKey)
+        KeychainService.shared.delete(forKey: Constants.StorageKey.signPublicKey)
+        KeychainService.shared.delete(forKey: Constants.StorageKey.contactsKey)
+        KeychainService.shared.delete(forKey: Constants.StorageKey.whisperId)
 
         logger.info("CryptoService cleared", category: .crypto)
     }

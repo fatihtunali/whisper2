@@ -9,15 +9,8 @@ import Foundation
 /// 3. Process each message through MessagingService
 /// 4. Continue fetching until no more pages
 
-// MARK: - Pending Messages Response
-
-/// Response payload from fetch_pending
-struct PendingMessagesPayload: Decodable {
-    let messages: [MessageReceivedPayload]
-    let nextCursor: String?
-}
-
 // MARK: - PendingFetcher
+// Note: PendingMessagesPayload is defined in WSModels.swift
 
 /// Actor responsible for fetching pending messages
 actor PendingFetcher {
@@ -138,8 +131,6 @@ actor PendingFetcher {
     /// Fetch a single page of pending messages
     private func fetchPage(sessionToken: String, cursor: String?) async -> PendingMessagesPayload? {
         let payload = FetchPendingPayload(
-            protocolVersion: 1,
-            cryptoVersion: 1,
             sessionToken: sessionToken,
             cursor: cursor,
             limit: pageLimit

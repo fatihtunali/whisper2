@@ -6,7 +6,7 @@ import SwiftData
 /// Represents a contact in the user's address book
 @Model
 final class ContactEntity {
-    /// The contact's Whisper ID (e.g., "WH2-xxxx")
+    /// The contact's Whisper ID (e.g., "WSP-XXXX-XXXX-XXXX")
     @Attribute(.unique) var whisperId: String
 
     /// Contact's X25519 public key for encryption (base64)
@@ -478,124 +478,96 @@ final class OutboxQueueItem {
 
 /// Commonly used SwiftData queries
 enum DataQueries {
-    /// Fetch all contacts sorted by display name
-    static var allContactsSorted: FetchDescriptor<ContactEntity> {
-        var descriptor = FetchDescriptor<ContactEntity>(
-            sortBy: [
-                SortDescriptor(\.isPinned, order: .reverse),
-                SortDescriptor(\.displayName, order: .forward)
-            ]
-        )
-        return descriptor
+    /// Fetch all contacts (sorting should be done after fetch)
+    static var allContacts: FetchDescriptor<ContactEntity> {
+        FetchDescriptor<ContactEntity>()
     }
 
     /// Fetch non-blocked contacts
     static var activeContacts: FetchDescriptor<ContactEntity> {
-        var descriptor = FetchDescriptor<ContactEntity>(
-            predicate: #Predicate { !$0.isBlocked },
-            sortBy: [
-                SortDescriptor(\.isPinned, order: .reverse),
-                SortDescriptor(\.displayName, order: .forward)
-            ]
+        FetchDescriptor<ContactEntity>(
+            predicate: #Predicate<ContactEntity> { contact in !contact.isBlocked }
         )
-        return descriptor
     }
 
-    /// Fetch all conversations sorted by last message
-    static var allConversationsSorted: FetchDescriptor<ConversationEntity> {
-        var descriptor = FetchDescriptor<ConversationEntity>(
-            sortBy: [
-                SortDescriptor(\.isPinned, order: .reverse),
-                SortDescriptor(\.lastMessageAt, order: .reverse)
-            ]
-        )
-        return descriptor
+    /// Fetch all conversations (sorting should be done after fetch)
+    static var allConversations: FetchDescriptor<ConversationEntity> {
+        FetchDescriptor<ConversationEntity>()
     }
 
     /// Fetch conversations with unread messages
     static var unreadConversations: FetchDescriptor<ConversationEntity> {
-        var descriptor = FetchDescriptor<ConversationEntity>(
-            predicate: #Predicate { $0.unreadCount > 0 },
-            sortBy: [SortDescriptor(\.lastMessageAt, order: .reverse)]
+        FetchDescriptor<ConversationEntity>(
+            predicate: #Predicate<ConversationEntity> { conv in conv.unreadCount > 0 }
         )
-        return descriptor
     }
 
     /// Fetch non-archived conversations
     static var activeConversations: FetchDescriptor<ConversationEntity> {
-        var descriptor = FetchDescriptor<ConversationEntity>(
-            predicate: #Predicate { !$0.isArchived },
-            sortBy: [
-                SortDescriptor(\.isPinned, order: .reverse),
-                SortDescriptor(\.lastMessageAt, order: .reverse)
-            ]
+        FetchDescriptor<ConversationEntity>(
+            predicate: #Predicate<ConversationEntity> { conv in !conv.isArchived }
         )
-        return descriptor
     }
 
     /// Fetch messages for a conversation
     static func messagesForConversation(_ conversationId: String, limit: Int = 50) -> FetchDescriptor<MessageEntity> {
         var descriptor = FetchDescriptor<MessageEntity>(
-            predicate: #Predicate { $0.conversationId == conversationId && !$0.isDeleted },
-            sortBy: [SortDescriptor(\.timestamp, order: .reverse)]
+            predicate: #Predicate<MessageEntity> { msg in msg.conversationId == conversationId && !msg.isDeleted }
         )
         descriptor.fetchLimit = limit
         return descriptor
     }
 
     /// Fetch pending outbox items ready to retry
-    static var pendingOutboxItems: FetchDescriptor<OutboxQueueItem> {
+    static func pendingOutboxItems() -> FetchDescriptor<OutboxQueueItem> {
         let now = Date()
-        var descriptor = FetchDescriptor<OutboxQueueItem>(
-            predicate: #Predicate {
-                !$0.isProcessing &&
-                $0.nextRetryAt <= now &&
-                $0.attempts < Constants.Limits.outboxMaxRetries
-            },
-            sortBy: [SortDescriptor(\.createdAt, order: .forward)]
+        let maxRetries = Constants.Limits.outboxMaxRetries
+        return FetchDescriptor<OutboxQueueItem>(
+            predicate: #Predicate<OutboxQueueItem> { item in
+                !item.isProcessing &&
+                item.nextRetryAt <= now &&
+                item.attempts < maxRetries
+            }
         )
-        return descriptor
     }
 
     /// Fetch all groups
     static var allGroups: FetchDescriptor<GroupEntity> {
-        FetchDescriptor<GroupEntity>(
-            sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
-        )
+        FetchDescriptor<GroupEntity>()
     }
 
     /// Contact by Whisper ID
     static func contact(whisperId: String) -> FetchDescriptor<ContactEntity> {
         FetchDescriptor<ContactEntity>(
-            predicate: #Predicate { $0.whisperId == whisperId }
+            predicate: #Predicate<ContactEntity> { contact in contact.whisperId == whisperId }
         )
     }
 
     /// Conversation by ID
     static func conversation(id: String) -> FetchDescriptor<ConversationEntity> {
         FetchDescriptor<ConversationEntity>(
-            predicate: #Predicate { $0.id == id }
+            predicate: #Predicate<ConversationEntity> { conv in conv.id == id }
         )
     }
 
     /// Group by ID
     static func group(groupId: String) -> FetchDescriptor<GroupEntity> {
         FetchDescriptor<GroupEntity>(
-            predicate: #Predicate { $0.groupId == groupId }
+            predicate: #Predicate<GroupEntity> { group in group.groupId == groupId }
         )
     }
 
     /// Message by ID
     static func message(messageId: String) -> FetchDescriptor<MessageEntity> {
         FetchDescriptor<MessageEntity>(
-            predicate: #Predicate { $0.messageId == messageId }
+            predicate: #Predicate<MessageEntity> { msg in msg.messageId == messageId }
         )
     }
 
     /// Outbox item by message ID
     static func outboxItem(messageId: String) -> FetchDescriptor<OutboxQueueItem> {
         FetchDescriptor<OutboxQueueItem>(
-            predicate: #Predicate { $0.messageId == messageId }
+            predicate: #Predicate<OutboxQueueItem> { item in item.messageId == messageId }
         )
     }
 }

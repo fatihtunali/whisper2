@@ -93,6 +93,27 @@ actor WSClient {
         await performConnect()
     }
 
+    /// Connect and wait for connection to be established
+    /// Returns true if connected, false if failed
+    func connectAndWait(timeout: TimeInterval = 10) async -> Bool {
+        await connect()
+
+        // Wait for connection with timeout
+        let startTime = Date()
+        while Date().timeIntervalSince(startTime) < timeout {
+            if connectionState == .connected {
+                return true
+            }
+            if connectionState == .disconnected {
+                return false
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+        }
+
+        logger.error("Connection timeout after \(timeout)s", category: .network)
+        return false
+    }
+
     /// Disconnect from the WebSocket server
     func disconnect() async {
         isManualDisconnect = true
@@ -137,7 +158,7 @@ actor WSClient {
     }
 
     /// Send a typed message frame
-    func send<T: Encodable>(type: String, payload: T, requestId: String? = nil) async throws {
+    func send<T: Codable>(type: String, payload: T, requestId: String? = nil) async throws {
         let frame = WSFrame(type: type, payload: payload, requestId: requestId)
         let encoder = JSONEncoder()
         encoder.keyEncodingStrategy = .useDefaultKeys
@@ -181,24 +202,22 @@ actor WSClient {
         // Start receiving messages
         await startReceiving()
 
-        // Wait briefly to confirm connection
-        do {
-            try await Task.sleep(nanoseconds: 100_000_000) // 100ms
+        // Wait briefly for WebSocket handshake to complete
+        try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
 
-            // Send initial ping to verify connection
-            try await sendPing()
-
-            // Connection successful
-            await reconnectPolicy.didConnect()
-            connectionState = .connected
-            logger.info("WebSocket connected", category: .network)
-
-            // Start ping/pong keepalive
-            await startPingPong()
-        } catch {
-            logger.error("Connection failed: \(error.localizedDescription)", category: .network)
-            await handleDisconnection()
+        // Check if task is still valid (not cancelled)
+        guard webSocketTask != nil, !isManualDisconnect else {
+            logger.warning("Connection was cancelled during setup", category: .network)
+            return
         }
+
+        // Mark connection as successful - the receive loop is running
+        await reconnectPolicy.didConnect()
+        connectionState = .connected
+        logger.info("WebSocket connected", category: .network)
+
+        // Start ping/pong keepalive (non-blocking)
+        await startPingPong()
     }
 
     private func handleDisconnection() async {
@@ -275,6 +294,15 @@ actor WSClient {
 
     private func handleReceivedData(_ data: Data) async {
         logger.debug("Received \(data.count) bytes", category: .network)
+
+        // Try to parse as JSON to check for requestId (response to a request)
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let requestId = json["requestId"] as? String {
+            // This is a response to a pending request
+            let payload = json["payload"] as? [String: Any] ?? json
+            WSClient.handleResponse(requestId: requestId, payload: payload)
+            return
+        }
 
         // Check for pong response
         if let pong = try? JSONDecoder().decode(WSFrame<PongPayload>.self, from: data),
@@ -391,5 +419,108 @@ extension WSClient {
     /// Check if currently connected
     var isConnected: Bool {
         get async { connectionState.isConnected }
+    }
+}
+
+// MARK: - Request/Response Pattern
+
+extension WSClient {
+    /// Pending response continuations keyed by requestId
+    private static var pendingResponses: [String: CheckedContinuation<[String: Any], Error>] = [:]
+    private static let responseLock = NSLock()
+
+    /// Send a message and wait for a specific response type
+    func sendAndWait(
+        type: String,
+        payload: [String: Any],
+        expectedResponseType: String,
+        timeout: TimeInterval
+    ) async throws -> [String: Any] {
+        let requestId = UUID().uuidString
+
+        // Create frame with requestId
+        var frame: [String: Any] = [
+            "type": type,
+            "requestId": requestId,
+            "payload": payload
+        ]
+
+        let data = try JSONSerialization.data(withJSONObject: frame)
+
+        // Set up continuation for response
+        return try await withCheckedThrowingContinuation { continuation in
+            Self.responseLock.lock()
+            Self.pendingResponses[requestId] = continuation
+            Self.responseLock.unlock()
+
+            // Send the message
+            Task {
+                do {
+                    try await self.send(data)
+
+                    // Set up timeout
+                    Task {
+                        try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                        Self.responseLock.lock()
+                        if let cont = Self.pendingResponses.removeValue(forKey: requestId) {
+                            Self.responseLock.unlock()
+                            cont.resume(throwing: NetworkError.timeout)
+                        } else {
+                            Self.responseLock.unlock()
+                        }
+                    }
+                } catch {
+                    Self.responseLock.lock()
+                    Self.pendingResponses.removeValue(forKey: requestId)
+                    Self.responseLock.unlock()
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    /// Handle incoming response (called from message handler)
+    static func handleResponse(requestId: String, payload: [String: Any]) {
+        responseLock.lock()
+        if let continuation = pendingResponses.removeValue(forKey: requestId) {
+            responseLock.unlock()
+            continuation.resume(returning: payload)
+        } else {
+            responseLock.unlock()
+        }
+    }
+}
+
+// MARK: - WebSocketConnection Adapter
+
+/// Adapter to make WSClient conform to WebSocketConnection protocol
+final class WSClientConnectionAdapter: WebSocketConnection {
+    private let client: WSClient
+
+    init(client: WSClient) {
+        self.client = client
+    }
+
+    func sendAndWait(
+        type: String,
+        payload: [String: Any],
+        expectedResponseType: String,
+        timeout: TimeInterval
+    ) async throws -> [String: Any] {
+        try await client.sendAndWait(
+            type: type,
+            payload: payload,
+            expectedResponseType: expectedResponseType,
+            timeout: timeout
+        )
+    }
+
+    func send(type: String, payload: [String: Any]) async throws {
+        var frame: [String: Any] = [
+            "type": type,
+            "payload": payload
+        ]
+        let data = try JSONSerialization.data(withJSONObject: frame)
+        try await client.send(data)
     }
 }

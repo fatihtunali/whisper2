@@ -13,14 +13,17 @@ enum Constants {
     enum Server {
         static let baseURL = "https://whisper2.aiakademiturkiye.com"
         static let wsURL = "wss://whisper2.aiakademiturkiye.com"
-        static let port = 3051
+        // Port 443 is handled by nginx, which proxies to internal port 3051
+        static let port = 443
 
         static var httpBaseURL: URL {
-            URL(string: "\(baseURL):\(port)")!
+            // Use default HTTPS port (443) - no need to specify
+            URL(string: baseURL)!
         }
 
         static var webSocketURL: URL {
-            URL(string: "\(wsURL):\(port)")!
+            // Use default WSS port (443) - nginx proxies to internal port
+            URL(string: "\(wsURL)/ws")!
         }
     }
 
@@ -149,6 +152,7 @@ enum Constants {
         static let pushToken = "whisper2.push.token"
         static let voipToken = "whisper2.voip.token"
         static let appLockEnabled = "whisper2.app.lock"
+        static let mnemonic = "whisper2.mnemonic"
     }
 
     // MARK: - Limits

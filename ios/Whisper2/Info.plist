@@ -2,60 +2,57 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- App Display Name -->
-	<key>CFBundleDisplayName</key>
-	<string>Whisper2</string>
-
-	<!-- Bundle Name -->
-	<key>CFBundleName</key>
-	<string>Whisper2</string>
-
-	<!-- Bundle Identifier (set in Xcode project) -->
-	<key>CFBundleIdentifier</key>
-	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
-
-	<!-- Bundle Version -->
-	<key>CFBundleVersion</key>
-	<string>$(CURRENT_PROJECT_VERSION)</string>
-
-	<!-- Short Version String -->
-	<key>CFBundleShortVersionString</key>
-	<string>$(MARKETING_VERSION)</string>
-
-	<!-- Executable -->
-	<key>CFBundleExecutable</key>
-	<string>$(EXECUTABLE_NAME)</string>
-
-	<!-- Development Region -->
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
-
-	<!-- Package Type -->
-	<key>CFBundlePackageType</key>
-	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
-
-	<!-- Info Plist Version -->
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
-
-	<!-- Launch Screen -->
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Whisper needs access to your camera to take photos and video calls.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Whisper can help you find friends and share contacts in chats.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Whisper uses Face ID to secure your messages.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Whisper needs your location to share it with your contacts.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Whisper needs access to your microphone for voice calls.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Whisper needs permission to save photos to your library.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Whisper needs access to your photos to share images in chats.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>voip</string>
+		<string>fetch</string>
+		<string>remote-notification</string>
+		<string>bluetooth-central</string>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>
 		<string>LaunchScreenBackground</string>
-		<key>UIImageName</key>
-		<string>LaunchLogo</string>
 	</dict>
-
-	<!-- Supported Interface Orientations (iPhone) -->
+	<key>UIStatusBarStyle</key>
+	<string>UIStatusBarStyleLightContent</string>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-
-	<!-- Supported Interface Orientations (iPad) -->
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
@@ -63,116 +60,7 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-
-	<!-- Background Modes -->
-	<key>UIBackgroundModes</key>
-	<array>
-		<!-- VoIP for incoming calls via PushKit -->
-		<string>voip</string>
-		<!-- Remote notifications for message delivery -->
-		<string>remote-notification</string>
-		<!-- Background fetch for periodic sync -->
-		<string>fetch</string>
-		<!-- Audio for active voice/video calls -->
-		<string>audio</string>
-	</array>
-
-	<!-- Privacy - Microphone Usage Description -->
-	<key>NSMicrophoneUsageDescription</key>
-	<string>Whisper2 needs microphone access to make voice and video calls.</string>
-
-	<!-- Privacy - Camera Usage Description -->
-	<key>NSCameraUsageDescription</key>
-	<string>Whisper2 needs camera access for video calls and sending photos.</string>
-
-	<!-- Privacy - Photo Library Usage Description -->
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Whisper2 needs photo library access to send and save photos.</string>
-
-	<!-- Privacy - Photo Library Add Usage Description -->
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Whisper2 needs permission to save photos to your library.</string>
-
-	<!-- Privacy - Contacts Usage Description -->
-	<key>NSContactsUsageDescription</key>
-	<string>Whisper2 can find your contacts who also use Whisper2 for easier messaging.</string>
-
-	<!-- Privacy - Face ID Usage Description -->
-	<key>NSFaceIDUsageDescription</key>
-	<string>Whisper2 uses Face ID to protect your messages with App Lock.</string>
-
-	<!-- URL Schemes -->
-	<key>CFBundleURLTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleURLName</key>
-			<string>com.whisper2.app</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>whisper2</string>
-			</array>
-		</dict>
-	</array>
-
-	<!-- App Transport Security -->
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<!-- Allow arbitrary loads disabled for security -->
-		<key>NSAllowsArbitraryLoads</key>
-		<false/>
-		<!-- Exception for local development if needed -->
-		<key>NSExceptionDomains</key>
-		<dict>
-			<key>localhost</key>
-			<dict>
-				<key>NSExceptionAllowsInsecureHTTPLoads</key>
-				<true/>
-				<key>NSIncludesSubdomains</key>
-				<false/>
-			</dict>
-		</dict>
-	</dict>
-
-	<!-- Requires Full Screen -->
-	<key>UIRequiresFullScreen</key>
-	<true/>
-
-	<!-- Status Bar Style -->
-	<key>UIStatusBarStyle</key>
-	<string>UIStatusBarStyleDefault</string>
-
-	<!-- View Controller Based Status Bar Appearance -->
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
-
-	<!-- Application Scene Manifest -->
-	<key>UIApplicationSceneManifest</key>
-	<dict>
-		<key>UIApplicationSupportsMultipleScenes</key>
-		<false/>
-		<key>UISceneConfigurations</key>
-		<dict/>
-	</dict>
-
-	<!-- ITSAppUsesNonExemptEncryption -->
-	<!-- Set to NO if only using standard system encryption (HTTPS, etc.) -->
-	<key>ITSAppUsesNonExemptEncryption</key>
-	<true/>
-	<key>ITSEncryptionExportComplianceCode</key>
-	<string></string>
-
-	<!-- Minimum OS Version -->
-	<key>MinimumOSVersion</key>
-	<string>17.0</string>
-
-	<!-- Required Device Capabilities -->
-	<key>UIRequiredDeviceCapabilities</key>
-	<array>
-		<string>armv7</string>
-	</array>
-
-	<!-- App Category -->
-	<key>LSApplicationCategoryType</key>
-	<string>public.app-category.social-networking</string>
 </dict>
 </plist>

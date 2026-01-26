@@ -1,43 +1,51 @@
 import SwiftUI
 
-/// List of groups
+/// List of groups matching original Whisper UI
 struct GroupsListView: View {
-    @Bindable var viewModel: GroupViewModel
+    @State private var viewModel = GroupViewModel()
+    @EnvironmentObject var themeManager: ThemeManager
     @State private var showingCreateGroup = false
-    @State private var selectedGroup: Group?
+    @State private var selectedGroup: GroupUI?
 
     var body: some View {
-        NavigationStack {
-            Group {
+        ZStack {
+            Color.whisperBackground.ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                // Header (matching Expo)
+                headerView
+
+                // Groups List
                 if viewModel.isLoading && viewModel.groups.isEmpty {
-                    ChatListSkeletonView()
+                    loadingView
                 } else if viewModel.filteredGroups.isEmpty {
-                    emptyState
+                    emptyStateView
                 } else {
-                    groupsList
-                }
-            }
-            .navigationTitle("Groups")
-            .searchable(text: $viewModel.searchText, prompt: "Search groups")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        showingCreateGroup = true
-                    } label: {
-                        Image(systemName: "plus.circle")
+                    ScrollView {
+                        LazyVStack(spacing: WhisperSpacing.sm) {
+                            ForEach(viewModel.filteredGroups) { group in
+                                NavigationLink(value: group) {
+                                    GroupRowView(group: group)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, WhisperSpacing.md)
+                        .padding(.top, WhisperSpacing.sm)
+                    }
+                    .refreshable {
+                        await viewModel.refreshGroups()
                     }
                 }
             }
-            .refreshable {
-                await viewModel.refreshGroups()
-            }
-            .sheet(isPresented: $showingCreateGroup) {
-                CreateGroupView(viewModel: viewModel, isPresented: $showingCreateGroup)
-            }
-            .navigationDestination(item: $selectedGroup) { group in
-                GroupChatView(viewModel: viewModel, group: group)
-            }
         }
+        .navigationDestination(for: GroupUI.self) { group in
+            GroupChatView(viewModel: viewModel, group: group)
+        }
+        .sheet(isPresented: $showingCreateGroup) {
+            CreateGroupView(viewModel: viewModel, isPresented: $showingCreateGroup)
+        }
+        .id(themeManager.themeMode)
         .onAppear {
             if viewModel.groups.isEmpty {
                 viewModel.loadGroups()
@@ -53,47 +61,96 @@ struct GroupsListView: View {
         }
     }
 
-    private var groupsList: some View {
-        List {
-            ForEach(viewModel.filteredGroups) { group in
-                GroupRow(group: group)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        selectedGroup = group
-                    }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        Button(role: .destructive) {
-                            viewModel.leaveGroup(group)
-                        } label: {
-                            Label("Leave", systemImage: "rectangle.portrait.and.arrow.right")
-                        }
-                    }
+    // MARK: - Header
+
+    private var headerView: some View {
+        HStack {
+            Text("Groups")
+                .font(.whisper(size: WhisperFontSize.xxl, weight: .bold))
+                .foregroundColor(.whisperText)
+
+            Spacer()
+
+            // Create Group Button
+            Button(action: { showingCreateGroup = true }) {
+                Image(systemName: "plus")
+                    .font(.whisper(size: WhisperFontSize.md, weight: .semibold))
+                    .foregroundColor(.whisperText)
+                    .frame(width: 36, height: 36)
+                    .background(Color.whisperPrimary)
+                    .clipShape(Circle())
             }
         }
-        .listStyle(.plain)
+        .padding(.horizontal, WhisperSpacing.lg)
+        .padding(.vertical, WhisperSpacing.md)
+        .background(Color.whisperBackground)
+        .overlay(
+            Rectangle()
+                .fill(Color.whisperBorder)
+                .frame(height: 1),
+            alignment: .bottom
+        )
     }
 
-    private var emptyState: some View {
-        Group {
-            if viewModel.searchText.isEmpty {
-                CenteredEmptyStateView(
-                    emptyState: .noGroups {
-                        showingCreateGroup = true
-                    }
-                )
-            } else {
-                CenteredEmptyStateView(
-                    emptyState: .noSearchResults()
-                )
-            }
+    // MARK: - Loading View
+
+    private var loadingView: some View {
+        VStack(spacing: WhisperSpacing.md) {
+            Spacer()
+            ProgressView()
+                .scaleEffect(1.5)
+                .tint(.whisperPrimary)
+            Text("Loading groups...")
+                .font(.whisper(size: WhisperFontSize.md))
+                .foregroundColor(.whisperTextSecondary)
+            Spacer()
         }
+    }
+
+    // MARK: - Empty State
+
+    private var emptyStateView: some View {
+        VStack(spacing: WhisperSpacing.lg) {
+            Spacer()
+
+            Image(systemName: "person.3.fill")
+                .font(.system(size: 64))
+                .foregroundColor(.whisperTextMuted)
+
+            Text("No groups yet")
+                .font(.whisper(size: WhisperFontSize.xl, weight: .semibold))
+                .foregroundColor(.whisperText)
+
+            Text("Create a group to start messaging with multiple people")
+                .font(.whisper(size: WhisperFontSize.md))
+                .foregroundColor(.whisperTextSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, WhisperSpacing.xl)
+
+            Button(action: { showingCreateGroup = true }) {
+                HStack(spacing: WhisperSpacing.sm) {
+                    Image(systemName: "plus")
+                    Text("Create Group")
+                }
+                .font(.whisper(size: WhisperFontSize.md, weight: .semibold))
+                .foregroundColor(.whisperText)
+                .padding(.horizontal, WhisperSpacing.lg)
+                .padding(.vertical, WhisperSpacing.sm)
+                .background(Color.whisperPrimary)
+                .cornerRadius(WhisperRadius.md)
+            }
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
-// MARK: - Group Row
+// MARK: - Group Row (Matching Expo)
 
-private struct GroupRow: View {
-    let group: Group
+struct GroupRowView: View {
+    let group: GroupUI
+    @EnvironmentObject var themeManager: ThemeManager
 
     private var timeString: String {
         guard let timestamp = group.lastMessageTimestamp else { return "" }
@@ -113,66 +170,92 @@ private struct GroupRow: View {
     }
 
     var body: some View {
-        HStack(spacing: Theme.Spacing.sm) {
-            // Group avatar
-            GroupAvatarView(
-                memberNames: group.members.map { $0.displayName },
-                size: Theme.AvatarSize.md
-            )
+        VStack(spacing: 0) {
+            // Top border line
+            Rectangle()
+                .fill(Color.whisperBorder)
+                .frame(height: 1)
 
-            // Content
-            VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
-                HStack {
-                    Text(group.title)
-                        .font(Theme.Typography.headline)
-                        .foregroundColor(Theme.Colors.textPrimary)
-                        .lineLimit(1)
+            // Main content
+            HStack(spacing: WhisperSpacing.md) {
+                // Group avatar
+                groupAvatarView
 
-                    Spacer()
+                // Content
+                VStack(alignment: .leading, spacing: WhisperSpacing.xs) {
+                    // Top row: Name + Time
+                    HStack(alignment: .center) {
+                        Text(group.title)
+                            .font(.whisper(size: WhisperFontSize.md, weight: .semibold))
+                            .foregroundColor(.whisperText)
+                            .lineLimit(1)
 
-                    Text(timeString)
-                        .font(Theme.Typography.caption1)
-                        .foregroundColor(
-                            group.unreadCount > 0
-                                ? Theme.Colors.primary
-                                : Theme.Colors.textTertiary
-                        )
-                }
+                        Spacer()
 
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        if let lastMessage = group.lastMessage {
-                            Text(lastMessage)
-                                .font(Theme.Typography.subheadline)
-                                .foregroundColor(Theme.Colors.textSecondary)
-                                .lineLimit(1)
-                        }
-
-                        Text("\(group.memberCount) members \(onlineCount > 0 ? "(\(onlineCount) online)" : "")")
-                            .font(Theme.Typography.caption2)
-                            .foregroundColor(Theme.Colors.textTertiary)
+                        Text(timeString)
+                            .font(.whisper(size: WhisperFontSize.xs))
+                            .foregroundColor(group.unreadCount > 0 ? .whisperPrimary : .whisperTextMuted)
                     }
 
-                    Spacer()
+                    // Bottom row: Message preview + Unread count
+                    HStack(alignment: .center) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            if let lastMessage = group.lastMessage {
+                                Text(lastMessage)
+                                    .font(.whisper(size: WhisperFontSize.sm))
+                                    .foregroundColor(.whisperTextSecondary)
+                                    .lineLimit(1)
+                            }
 
-                    if group.unreadCount > 0 {
-                        Text("\(group.unreadCount)")
-                            .font(Theme.Typography.caption2)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, Theme.Spacing.xs)
-                            .padding(.vertical, 2)
-                            .background(Theme.Colors.primary)
-                            .clipShape(Capsule())
+                            Text("\(group.memberCount) members")
+                                .font(.whisper(size: WhisperFontSize.xs))
+                                .foregroundColor(.whisperTextMuted)
+                        }
+
+                        Spacer()
+
+                        if group.unreadCount > 0 {
+                            Text("\(group.unreadCount)")
+                                .font(.whisper(size: WhisperFontSize.xs, weight: .bold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 8)
+                                .frame(minWidth: 22, minHeight: 22)
+                                .background(Color.whisperPrimary)
+                                .clipShape(Capsule())
+                        }
                     }
                 }
             }
+            .padding(.horizontal, WhisperSpacing.md)
+            .padding(.vertical, WhisperSpacing.md)
+
+            // Bottom border line
+            Rectangle()
+                .fill(Color.whisperBorder)
+                .frame(height: 1)
         }
-        .padding(.vertical, Theme.Spacing.xs)
+        .background(Color.whisperSurface)
+        .cornerRadius(WhisperRadius.md)
+        .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 1)
+        .contentShape(Rectangle())
+    }
+
+    private var groupAvatarView: some View {
+        ZStack {
+            Circle()
+                .fill(Color.whisperSurfaceLight)
+                .frame(width: 54, height: 54)
+
+            Image(systemName: "person.3.fill")
+                .font(.system(size: 24))
+                .foregroundColor(.whisperTextMuted)
+        }
     }
 }
 
 // MARK: - Preview
 
 #Preview {
-    GroupsListView(viewModel: GroupViewModel())
+    GroupsListView()
+        .environmentObject(ThemeManager.shared)
 }

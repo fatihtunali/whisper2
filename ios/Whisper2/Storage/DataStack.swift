@@ -81,7 +81,7 @@ final class DataStack: ObservableObject {
 
     /// Fetch all contacts
     func fetchAllContacts() -> [ContactEntity] {
-        let descriptor = DataQueries.allContactsSorted
+        let descriptor = DataQueries.allContacts
         return (try? mainContext.fetch(descriptor)) ?? []
     }
 
@@ -126,7 +126,7 @@ final class DataStack: ObservableObject {
 
     /// Fetch all conversations
     func fetchAllConversations() -> [ConversationEntity] {
-        let descriptor = DataQueries.allConversationsSorted
+        let descriptor = DataQueries.allConversations
         return (try? mainContext.fetch(descriptor)) ?? []
     }
 
@@ -314,7 +314,7 @@ final class DataStack: ObservableObject {
 
     /// Fetch pending outbox items
     func fetchPendingOutboxItems() -> [OutboxQueueItem] {
-        let descriptor = DataQueries.pendingOutboxItems
+        let descriptor = DataQueries.pendingOutboxItems()
         return (try? mainContext.fetch(descriptor)) ?? []
     }
 
@@ -375,7 +375,7 @@ final class DataStack: ObservableObject {
 
     /// Get pending outbox count
     func pendingOutboxCount() -> Int {
-        let descriptor = DataQueries.pendingOutboxItems
+        let descriptor = DataQueries.pendingOutboxItems()
         return (try? mainContext.fetch(descriptor))?.count ?? 0
     }
 }
@@ -411,16 +411,16 @@ extension DataStack {
     static var preview: DataStack {
         let stack = DataStack()
 
-        // Add sample data for previews
+        // Add sample data for previews (using proper WSP format)
         let _ = stack.insertContact(
-            whisperId: "WH2-preview1234",
+            whisperId: "WSP-PREV-1234-ABCD",
             encPublicKey: "base64enckey==",
             signPublicKey: "base64signkey==",
             displayName: "Alice"
         )
 
         let _ = stack.insertContact(
-            whisperId: "WH2-preview5678",
+            whisperId: "WSP-PREV-5678-EFGH",
             encPublicKey: "base64enckey2==",
             signPublicKey: "base64signkey2==",
             displayName: "Bob"

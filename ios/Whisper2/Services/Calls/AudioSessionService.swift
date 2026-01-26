@@ -87,7 +87,7 @@ final class AudioSessionService {
 
     /// Activate the audio session
     func activateAudioSession() throws {
-        guard isConfigured else {
+        if !isConfigured {
             try configureForVoIP()
         }
 

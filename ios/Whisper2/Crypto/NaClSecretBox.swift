@@ -1,5 +1,5 @@
 import Foundation
-import TweetNaClx
+import TweetNacl
 
 /// NaCl SecretBox (XSalsa20-Poly1305) implementation
 /// Symmetric authenticated encryption for attachments and backups
@@ -68,19 +68,16 @@ enum NaClSecretBox {
             throw CryptoError.invalidNonce
         }
 
-        let messageBytes = [UInt8](message)
-        let nonceBytes = [UInt8](nonce)
-        let keyBytes = [UInt8](key)
-
-        guard let ciphertext = TweetNaCl.secretBox(
-            message: messageBytes,
-            nonce: nonceBytes,
-            key: keyBytes
-        ) else {
+        do {
+            let ciphertext = try NaclSecretBox.secretBox(
+                message: message,
+                nonce: nonce,
+                key: key
+            )
+            return ciphertext
+        } catch {
             throw CryptoError.encryptionFailed
         }
-
-        return Data(ciphertext)
     }
 
     // MARK: - Decryption
@@ -102,19 +99,16 @@ enum NaClSecretBox {
             throw CryptoError.decryptionFailed
         }
 
-        let ciphertextBytes = [UInt8](ciphertext)
-        let nonceBytes = [UInt8](nonce)
-        let keyBytes = [UInt8](key)
-
-        guard let plaintext = TweetNaCl.secretBoxOpen(
-            box: ciphertextBytes,
-            nonce: nonceBytes,
-            key: keyBytes
-        ) else {
+        do {
+            let plaintext = try NaclSecretBox.open(
+                box: ciphertext,
+                nonce: nonce,
+                key: key
+            )
+            return plaintext
+        } catch {
             throw CryptoError.decryptionFailed
         }
-
-        return Data(plaintext)
     }
 
     // MARK: - Convenience

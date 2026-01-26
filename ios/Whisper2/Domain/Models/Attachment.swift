@@ -84,7 +84,7 @@ struct Attachment: Codable, Equatable {
     /// Full URL to the file in storage
     var remoteUrl: URL? {
         // Construct URL from base storage URL + object key
-        let baseUrl = "\(Constants.Server.baseURL):\(Constants.Server.port)/files"
+        let baseUrl = "\(Constants.Server.baseURL)/files"
         return URL(string: "\(baseUrl)/\(objectKey)")
     }
 

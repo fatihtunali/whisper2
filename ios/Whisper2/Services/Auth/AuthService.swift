@@ -73,9 +73,9 @@ final class AuthService {
         // Get keys for registration payload
         guard let encPublicKey = crypto.encryptionPublicKey,
               let signPublicKey = crypto.signingPublicKey,
-              let encPrivateKey = keychain.getData(Constants.StorageKey.encPrivateKey),
-              let signPrivateKey = keychain.getData(Constants.StorageKey.signPrivateKey),
-              let contactsKey = keychain.getData(Constants.StorageKey.contactsKey) else {
+              let encPrivateKey = keychain.getData(forKey: Constants.StorageKey.encPrivateKey),
+              let signPrivateKey = keychain.getData(forKey: Constants.StorageKey.signPrivateKey),
+              let contactsKey = keychain.getData(forKey: Constants.StorageKey.contactsKey) else {
             throw AuthError.registrationFailed(reason: "Failed to initialize keys")
         }
 
@@ -376,7 +376,7 @@ struct RegistrationResult {
 
 /// Protocol for WebSocket communication
 /// To be implemented by the actual WebSocket client
-protocol WebSocketConnection {
+protocol WebSocketConnection: AnyObject {
     /// Send a message and wait for a specific response type
     func sendAndWait(
         type: String,

@@ -6,19 +6,49 @@ struct RecoverAccountView: View {
     @Environment(\.dismiss) private var dismiss
     @FocusState private var focusedField: Int?
 
+    private let primaryGreen = Color(red: 7/255, green: 94/255, blue: 84/255)
+    private let secondaryGreen = Color(red: 18/255, green: 140/255, blue: 126/255)
+    private let accentGreen = Color(red: 37/255, green: 211/255, blue: 102/255)
+
     var body: some View {
-        Group {
-            switch viewModel.currentStep {
-            case .enterMnemonic:
-                mnemonicEntryView
-            case .registering:
-                RecoveryProgressView()
-            case .complete:
-                AccountRecoveredView(viewModel: viewModel)
-            default:
-                EmptyView()
+        GeometryReader { geometry in
+            ZStack {
+                // WhatsApp-style gradient background
+                LinearGradient(
+                    colors: [primaryGreen, secondaryGreen],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea(.all)
+
+                VStack(spacing: 0) {
+                    switch viewModel.currentStep {
+                    case .enterMnemonic:
+                        MnemonicEntryView(
+                            viewModel: viewModel,
+                            primaryGreen: primaryGreen,
+                            accentGreen: accentGreen,
+                            focusedField: $focusedField,
+                            safeAreaBottom: geometry.safeAreaInsets.bottom
+                        )
+                    case .registering:
+                        RecoveryProgressView()
+                    case .complete:
+                        AccountRecoveredView(
+                            viewModel: viewModel,
+                            primaryGreen: primaryGreen,
+                            accentGreen: accentGreen,
+                            safeAreaBottom: geometry.safeAreaInsets.bottom
+                        )
+                    default:
+                        EmptyView()
+                    }
+                }
             }
         }
+        .ignoresSafeArea(.all)
+        .navigationBarBackButtonHidden(false)
+        .toolbarBackground(.hidden, for: .navigationBar)
         .alert("Error", isPresented: Binding(
             get: { viewModel.error != nil },
             set: { if !$0 { viewModel.clearError() } }
@@ -28,78 +58,104 @@ struct RecoverAccountView: View {
             Text(viewModel.error ?? "")
         }
     }
+}
 
-    private var mnemonicEntryView: some View {
-        ScrollView {
-            VStack(spacing: Theme.Spacing.xl) {
+// MARK: - Mnemonic Entry View
+
+private struct MnemonicEntryView: View {
+    @Bindable var viewModel: AuthViewModel
+    let primaryGreen: Color
+    let accentGreen: Color
+    var focusedField: FocusState<Int?>.Binding
+    let safeAreaBottom: CGFloat
+
+    var body: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(spacing: 20) {
+                // Top spacing
+                Spacer()
+                    .frame(height: 60)
+
                 // Header
-                VStack(spacing: Theme.Spacing.sm) {
+                VStack(spacing: 10) {
                     Image(systemName: "arrow.counterclockwise.circle.fill")
-                        .font(.system(size: 48))
-                        .foregroundColor(Theme.Colors.primary)
+                        .font(.system(size: 50, weight: .medium))
+                        .foregroundColor(.white)
 
                     Text("Recover Your Account")
-                        .font(Theme.Typography.title2)
-                        .foregroundColor(Theme.Colors.textPrimary)
+                        .font(.system(size: 24, weight: .bold))
+                        .foregroundColor(.white)
 
-                    Text("Enter your 12-word recovery phrase to restore your account.")
-                        .font(Theme.Typography.subheadline)
-                        .foregroundColor(Theme.Colors.textSecondary)
+                    Text("Enter your 12-word recovery phrase\nto restore your account.")
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundColor(.white.opacity(0.85))
                         .multilineTextAlignment(.center)
+                        .lineSpacing(2)
                 }
-                .padding(.top, Theme.Spacing.xl)
 
                 // Paste button
                 Button {
                     pasteFromClipboard()
                 } label: {
-                    HStack {
+                    HStack(spacing: 6) {
                         Image(systemName: "doc.on.clipboard")
                         Text("Paste from Clipboard")
                     }
-                    .font(Theme.Typography.subheadline)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 10)
+                    .background(Color.white.opacity(0.2))
+                    .clipShape(Capsule())
                 }
 
                 // Word entry grid
                 MnemonicEntryGrid(
                     words: $viewModel.enteredMnemonic,
-                    focusedField: $focusedField
+                    focusedField: focusedField,
+                    accentGreen: accentGreen
                 )
 
                 // Clear button
                 if viewModel.enteredMnemonic.contains(where: { !$0.isEmpty }) {
                     Button {
                         viewModel.enteredMnemonic = Array(repeating: "", count: 12)
-                        focusedField = 0
+                        focusedField.wrappedValue = 0
                     } label: {
-                        HStack {
+                        HStack(spacing: 4) {
                             Image(systemName: "xmark.circle")
                             Text("Clear All")
                         }
-                        .font(Theme.Typography.caption1)
-                        .foregroundColor(Theme.Colors.error)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.red.opacity(0.9))
                     }
                 }
 
-                Spacer(minLength: Theme.Spacing.xl)
+                Spacer()
+                    .frame(height: 20)
 
                 // Recover button
                 Button {
-                    focusedField = nil
+                    focusedField.wrappedValue = nil
                     viewModel.recoverAccount()
                 } label: {
                     Text("Recover Account")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundColor(primaryGreen)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 50)
+                        .background(viewModel.canProceed ? Color.white : Color.white.opacity(0.5))
+                        .clipShape(Capsule())
                 }
-                .buttonStyle(.primary)
                 .disabled(!viewModel.canProceed)
+
+                Spacer()
+                    .frame(height: safeAreaBottom + 20)
             }
-            .padding(.horizontal, Theme.Spacing.xl)
+            .padding(.horizontal, 24)
         }
-        .background(Theme.Colors.background)
-        .navigationTitle("Recover Account")
-        .navigationBarTitleDisplayMode(.inline)
         .onTapGesture {
-            focusedField = nil
+            focusedField.wrappedValue = nil
         }
     }
 
@@ -116,6 +172,8 @@ struct RecoverAccountView: View {
         for (index, word) in words.enumerated() {
             viewModel.enteredMnemonic[index] = word
         }
+
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     }
 }
 
@@ -124,19 +182,21 @@ struct RecoverAccountView: View {
 private struct MnemonicEntryGrid: View {
     @Binding var words: [String]
     var focusedField: FocusState<Int?>.Binding
+    let accentGreen: Color
 
     private let columns = [
-        GridItem(.flexible()),
-        GridItem(.flexible())
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10)
     ]
 
     var body: some View {
-        LazyVGrid(columns: columns, spacing: Theme.Spacing.sm) {
+        LazyVGrid(columns: columns, spacing: 8) {
             ForEach(0..<12, id: \.self) { index in
                 MnemonicWordField(
                     wordNumber: index + 1,
                     word: $words[index],
                     isFocused: focusedField.wrappedValue == index,
+                    accentGreen: accentGreen,
                     onSubmit: {
                         if index < 11 {
                             focusedField.wrappedValue = index + 1
@@ -157,33 +217,32 @@ private struct MnemonicWordField: View {
     let wordNumber: Int
     @Binding var word: String
     let isFocused: Bool
+    let accentGreen: Color
     let onSubmit: () -> Void
 
     var body: some View {
-        HStack(spacing: Theme.Spacing.xs) {
-            Text("\(wordNumber).")
-                .font(Theme.Typography.caption1)
-                .foregroundColor(Theme.Colors.textTertiary)
-                .frame(width: 24, alignment: .trailing)
+        HStack(spacing: 6) {
+            Text("\(wordNumber)")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundColor(.white.opacity(0.6))
+                .frame(width: 18)
 
             TextField("", text: $word)
-                .font(Theme.Typography.monospaced)
-                .foregroundColor(Theme.Colors.textPrimary)
+                .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                .foregroundColor(.white)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .submitLabel(wordNumber < 12 ? .next : .done)
                 .onSubmit(onSubmit)
         }
-        .padding(Theme.Spacing.sm)
-        .background(Theme.Colors.surface)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 12)
+        .background(Color.white.opacity(0.15))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(
-            RoundedRectangle(cornerRadius: Theme.CornerRadius.sm)
-                .stroke(
-                    isFocused ? Theme.Colors.primary : Color.clear,
-                    lineWidth: 2
-                )
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(isFocused ? accentGreen : Color.clear, lineWidth: 2)
         )
-        .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.sm))
     }
 }
 
@@ -191,27 +250,26 @@ private struct MnemonicWordField: View {
 
 private struct RecoveryProgressView: View {
     var body: some View {
-        VStack(spacing: Theme.Spacing.xl) {
+        VStack(spacing: 24) {
             Spacer()
 
             ProgressView()
-                .scaleEffect(2)
+                .scaleEffect(1.5)
+                .tint(.white)
 
-            VStack(spacing: Theme.Spacing.sm) {
+            VStack(spacing: 8) {
                 Text("Recovering Your Account")
-                    .font(Theme.Typography.title3)
-                    .foregroundColor(Theme.Colors.textPrimary)
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundColor(.white)
 
-                Text("Verifying your recovery phrase and restoring your identity...")
-                    .font(Theme.Typography.subheadline)
-                    .foregroundColor(Theme.Colors.textSecondary)
-                    .multilineTextAlignment(.center)
+                Text("Verifying your recovery phrase...")
+                    .font(.system(size: 15, weight: .regular))
+                    .foregroundColor(.white.opacity(0.85))
             }
 
             Spacer()
         }
-        .padding(Theme.Spacing.xl)
-        .background(Theme.Colors.background)
+        .padding(24)
     }
 }
 
@@ -219,55 +277,84 @@ private struct RecoveryProgressView: View {
 
 private struct AccountRecoveredView: View {
     @Bindable var viewModel: AuthViewModel
+    let primaryGreen: Color
+    let accentGreen: Color
+    let safeAreaBottom: CGFloat
+    @State private var copied = false
 
     var body: some View {
-        VStack(spacing: Theme.Spacing.xl) {
+        VStack(spacing: 24) {
             Spacer()
 
-            // Success icon
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 80))
-                .foregroundColor(Theme.Colors.success)
+                .foregroundColor(accentGreen)
 
-            // Title
-            VStack(spacing: Theme.Spacing.sm) {
+            VStack(spacing: 8) {
                 Text("Account Recovered!")
-                    .font(Theme.Typography.title2)
-                    .foregroundColor(Theme.Colors.textPrimary)
+                    .font(.system(size: 26, weight: .bold))
+                    .foregroundColor(.white)
 
                 Text("Welcome back to Whisper2")
-                    .font(Theme.Typography.subheadline)
-                    .foregroundColor(Theme.Colors.textSecondary)
+                    .font(.system(size: 15, weight: .regular))
+                    .foregroundColor(.white.opacity(0.85))
             }
 
-            // WhisperID display
             if let whisperId = viewModel.whisperId {
-                VStack(spacing: Theme.Spacing.xs) {
+                VStack(spacing: 10) {
                     Text("Your WhisperID")
-                        .font(Theme.Typography.caption1)
-                        .foregroundColor(Theme.Colors.textSecondary)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.7))
 
-                    Text(whisperId)
-                        .font(Theme.Typography.monospaced)
-                        .foregroundColor(Theme.Colors.primary)
-                        .padding(Theme.Spacing.md)
-                        .background(Theme.Colors.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: Theme.CornerRadius.md))
+                    Button {
+                        UIPasteboard.general.string = whisperId
+                        copied = true
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    } label: {
+                        HStack {
+                            Text(whisperId)
+                                .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                                .foregroundColor(.white)
+
+                            Spacer()
+
+                            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                                .font(.system(size: 14))
+                                .foregroundColor(.white.opacity(0.7))
+                        }
+                        .padding(14)
+                        .background(Color.white.opacity(0.15))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+
+                    if copied {
+                        Text("Copied!")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(accentGreen)
+                    }
                 }
+                .padding(.horizontal, 24)
             }
 
             Spacer()
 
-            // Continue button
             Button {
-                // Navigate to main app
+                // Ensure state is authenticated to trigger transition
+                viewModel.state = .authenticated
             } label: {
                 Text("Continue")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(primaryGreen)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 50)
+                    .background(Color.white)
+                    .clipShape(Capsule())
             }
-            .buttonStyle(.primary)
+            .padding(.horizontal, 24)
+
+            Spacer()
+                .frame(height: safeAreaBottom + 20)
         }
-        .padding(Theme.Spacing.xl)
-        .background(Theme.Colors.background)
         .navigationBarBackButtonHidden(true)
     }
 }

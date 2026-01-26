@@ -34,7 +34,7 @@ struct AvatarView: View {
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             // Main avatar
-            Group {
+            SwiftUI.Group {
                 if let url = imageURL {
                     AsyncImage(url: url) { phase in
                         switch phase {

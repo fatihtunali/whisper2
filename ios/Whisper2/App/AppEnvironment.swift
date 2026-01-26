@@ -147,8 +147,10 @@ final class AppEnvironment {
         let wsProvider = WSClientAdapter(wsClient: wsClient)
 
         // Create outbox and deduper
-        let outbox = OutboxQueue(webSocket: wsProvider)
-        let deduper = Deduper()
+        let outboxPersistence = InMemoryOutboxPersistence()
+        let outbox = OutboxQueue(persistence: outboxPersistence, webSocket: wsProvider)
+        let dedupPersistence = InMemoryDedupPersistence()
+        let deduper = Deduper(persistence: dedupPersistence)
 
         let service = MessagingService(
             crypto: cryptoProvider,
@@ -171,7 +173,7 @@ final class AppEnvironment {
 
         logger.info("Creating ContactsBackupService", category: .storage)
 
-        let service = ContactsBackupService()
+        let service = ContactsBackupService.shared
         _contactsBackupService = service
         return service
     }
@@ -206,8 +208,7 @@ final class AppEnvironment {
     private func updateServerTokens(pushToken: String? = nil, voipToken: String? = nil) async {
         guard sessionManager.isAuthenticated else { return }
 
-        // Store tokens locally for now
-        // Actual server update happens via WebSocket update_tokens message
+        // Store tokens locally
         if let pushToken = pushToken {
             UserDefaults.standard.set(pushToken, forKey: Constants.StorageKey.pushToken)
         }
@@ -215,9 +216,31 @@ final class AppEnvironment {
             UserDefaults.standard.set(voipToken, forKey: Constants.StorageKey.voipToken)
         }
 
-        logger.info("Tokens stored locally", category: .auth)
+        // Send update_tokens message via WebSocket
+        guard let sessionToken = KeychainService.shared.sessionToken else {
+            logger.warning("Cannot send tokens - no session token", category: .auth)
+            return
+        }
 
-        // TODO: Send update_tokens message via WebSocket
+        let payload: [String: Any] = [
+            "protocolVersion": Constants.protocolVersion,
+            "cryptoVersion": Constants.cryptoVersion,
+            "sessionToken": sessionToken,
+            "pushToken": pushToken ?? UserDefaults.standard.string(forKey: Constants.StorageKey.pushToken) ?? "",
+            "voipToken": voipToken ?? UserDefaults.standard.string(forKey: Constants.StorageKey.voipToken) ?? ""
+        ]
+
+        do {
+            let frame: [String: Any] = [
+                "type": Constants.MessageType.updateTokens,
+                "payload": payload
+            ]
+            let data = try JSONSerialization.data(withJSONObject: frame)
+            try await wsClient.send(data)
+            logger.info("Sent token update to server", category: .auth)
+        } catch {
+            logger.error("Failed to send token update: \(error.localizedDescription)", category: .auth)
+        }
     }
 
     // MARK: - Public Methods
@@ -260,12 +283,7 @@ final class AppEnvironment {
     }
 }
 
-// MARK: - Notification Names
-
-extension Notification.Name {
-    static let authForceLogout = Notification.Name("authForceLogout")
-    static let authSessionExpired = Notification.Name("authSessionExpired")
-}
+// NOTE: Notification.Name extensions are defined in Services/Auth/AuthService.swift
 
 // MARK: - WebSocket Provider Adapter
 
@@ -311,102 +329,5 @@ struct AnyEncodable: Encodable {
     }
 }
 
-// MARK: - Deduper
-
-/// Message deduplication helper
-actor Deduper {
-    private var processedMessages: Set<String> = []
-    private let maxCacheSize = 10000
-
-    /// Check if a message has already been processed
-    func isDuplicate(messageId: String, conversationId: String) -> Bool {
-        let key = "\(conversationId):\(messageId)"
-        return processedMessages.contains(key)
-    }
-
-    /// Mark a message as processed
-    func markProcessed(messageId: String, conversationId: String) {
-        let key = "\(conversationId):\(messageId)"
-        processedMessages.insert(key)
-
-        // Trim cache if too large
-        if processedMessages.count > maxCacheSize {
-            // Remove oldest entries (this is a simple approach)
-            let toRemove = processedMessages.count - maxCacheSize
-            for _ in 0..<toRemove {
-                if let first = processedMessages.first {
-                    processedMessages.remove(first)
-                }
-            }
-        }
-    }
-
-    /// Clear all processed messages
-    func clear() {
-        processedMessages.removeAll()
-    }
-}
-
-// MARK: - Contacts Backup Service
-
-/// Handles encrypted backup and restore of contacts
-final class ContactsBackupService: @unchecked Sendable {
-    // MARK: - Dependencies
-
-    private let keychain = KeychainService.shared
-    private let session = SessionManager.shared
-
-    // MARK: - API Endpoints
-
-    private let backupEndpoint = "/api/contacts/backup"
-    private let restoreEndpoint = "/api/contacts/restore"
-
-    // MARK: - Public Methods
-
-    /// Backup contacts to server
-    /// - Parameter contacts: Encrypted contacts data
-    func backup(_ contacts: Data) async throws {
-        guard session.isAuthenticated,
-              let token = session.sessionToken else {
-            throw AuthError.notAuthenticated
-        }
-
-        var request = URLRequest(url: Constants.Server.httpBaseURL.appendingPathComponent(backupEndpoint))
-        request.httpMethod = "PUT"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-        request.httpBody = contacts
-
-        let (_, response) = try await URLSession.shared.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse,
-              (200...299).contains(httpResponse.statusCode) else {
-            throw NetworkError.httpError(statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0, message: nil)
-        }
-
-        logger.info("Contacts backup successful", category: .storage)
-    }
-
-    /// Restore contacts from server
-    /// - Returns: Encrypted contacts data
-    func restore() async throws -> Data {
-        guard session.isAuthenticated,
-              let token = session.sessionToken else {
-            throw AuthError.notAuthenticated
-        }
-
-        var request = URLRequest(url: Constants.Server.httpBaseURL.appendingPathComponent(restoreEndpoint))
-        request.httpMethod = "GET"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse,
-              (200...299).contains(httpResponse.statusCode) else {
-            throw NetworkError.httpError(statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0, message: nil)
-        }
-
-        logger.info("Contacts restore successful, \(data.count) bytes", category: .storage)
-        return data
-    }
-}
+// NOTE: Deduper is defined in Services/Messaging/Deduper.swift
+// NOTE: ContactsBackupService is defined in Services/Contacts/ContactsBackupService.swift

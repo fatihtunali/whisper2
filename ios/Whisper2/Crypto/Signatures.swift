@@ -1,5 +1,5 @@
 import Foundation
-import TweetNaClx
+import TweetNacl
 
 /// Ed25519 digital signatures
 /// Uses TweetNaCl for server-compatible crypto (libsodium compatible)
@@ -35,26 +35,22 @@ enum Signatures {
             throw CryptoError.invalidSeed
         }
 
-        let seedBytes = [UInt8](seed.prefix(seedLength))
-        guard let keyPair = TweetNaCl.signKeyPair(fromSeed: seedBytes) else {
-            throw CryptoError.keyDerivationFailed
-        }
+        let seedData = seed.prefix(seedLength)
+        let keyPair = try NaclSign.KeyPair.keyPair(fromSeed: Data(seedData))
 
         return SigningKeyPair(
-            publicKey: Data(keyPair.publicKey),
-            privateKey: Data(keyPair.secretKey)
+            publicKey: keyPair.publicKey,
+            privateKey: keyPair.secretKey
         )
     }
 
     /// Generate random Ed25519 signing key pair
     static func generateKeyPair() throws -> SigningKeyPair {
-        guard let keyPair = TweetNaCl.signKeyPair() else {
-            throw CryptoError.keyDerivationFailed
-        }
+        let keyPair = try NaclSign.KeyPair.keyPair()
 
         return SigningKeyPair(
-            publicKey: Data(keyPair.publicKey),
-            privateKey: Data(keyPair.secretKey)
+            publicKey: keyPair.publicKey,
+            privateKey: keyPair.secretKey
         )
     }
 
@@ -70,17 +66,15 @@ enum Signatures {
             throw CryptoError.invalidPrivateKey
         }
 
-        let messageBytes = [UInt8](message)
-        let secretKeyBytes = [UInt8](privateKey)
-
-        guard let signature = TweetNaCl.signDetached(
-            message: messageBytes,
-            secretKey: secretKeyBytes
-        ) else {
+        do {
+            let signature = try NaclSign.signDetached(
+                message: message,
+                secretKey: privateKey
+            )
+            return signature
+        } catch {
             throw CryptoError.signatureFailed
         }
-
-        return Data(signature)
     }
 
     /// Sign message and return base64-encoded signature
@@ -105,15 +99,15 @@ enum Signatures {
             return false
         }
 
-        let signatureBytes = [UInt8](signature)
-        let messageBytes = [UInt8](message)
-        let publicKeyBytes = [UInt8](publicKey)
-
-        return TweetNaCl.signDetachedVerify(
-            signature: signatureBytes,
-            message: messageBytes,
-            publicKey: publicKeyBytes
-        )
+        do {
+            return try NaclSign.signDetachedVerify(
+                message: message,
+                sig: signature,
+                publicKey: publicKey
+            )
+        } catch {
+            return false
+        }
     }
 
     /// Verify base64-encoded signature
