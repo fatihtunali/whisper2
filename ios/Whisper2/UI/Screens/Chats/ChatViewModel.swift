@@ -86,6 +86,9 @@ final class ChatViewModel {
     // across different entry points (contacts vs chats list)
     private var localStorageKey: String { "whisper2.messages.\(participantId)" }
 
+    // Alternative storage key (for migration from old conversationId-based storage)
+    private var alternativeStorageKey: String { "whisper2.messages.\(conversationId)" }
+
     // MARK: - Init
 
     init(
@@ -266,8 +269,23 @@ final class ChatViewModel {
     // MARK: - Local Storage
 
     private func loadMessagesFromLocalStorage() {
-        guard let data = UserDefaults.standard.data(forKey: localStorageKey),
-              let stored = try? JSONDecoder().decode([StoredMessage].self, from: data) else {
+        // Try primary storage key first (participantId-based)
+        var data = UserDefaults.standard.data(forKey: localStorageKey)
+
+        // If not found and keys are different, try alternative key (conversationId-based) for migration
+        if data == nil && localStorageKey != alternativeStorageKey {
+            data = UserDefaults.standard.data(forKey: alternativeStorageKey)
+            // If found with alternative key, migrate to new key
+            if data != nil {
+                UserDefaults.standard.set(data, forKey: localStorageKey)
+                UserDefaults.standard.removeObject(forKey: alternativeStorageKey)
+                UserDefaults.standard.synchronize()
+                logger.info("Migrated messages from \(alternativeStorageKey) to \(localStorageKey)", category: .storage)
+            }
+        }
+
+        guard let messageData = data,
+              let stored = try? JSONDecoder().decode([StoredMessage].self, from: messageData) else {
             return
         }
 
