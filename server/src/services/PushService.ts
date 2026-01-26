@@ -14,6 +14,7 @@ import * as redis from '../db/redis';
 import { RedisKeys, TTL } from '../db/redis-keys';
 import { connectionManager } from './ConnectionManager';
 import { logger } from '../utils/logger';
+import { sendFcmMessage, isFirebaseReady } from './firebase';
 
 // =============================================================================
 // TYPES
@@ -350,7 +351,7 @@ export class PushService {
 
   /**
    * Send FCM push (Android).
-   * NOTE: This is a stub - in production, integrate with Firebase Cloud Messaging.
+   * Uses firebase-admin SDK for real push delivery.
    */
   private async sendFcm(
     device: DeviceInfo,
@@ -361,28 +362,63 @@ export class PushService {
       return { sent: false, skipped: true, reason: 'no_token' };
     }
 
-    // TODO: Integrate with actual FCM (firebase-admin SDK)
-    // For now, this is a stub that simulates success
+    // Check if Firebase is configured
+    if (!isFirebaseReady()) {
+      logger.debug(
+        { deviceId: device.deviceId, platform: 'android', reason },
+        'FCM push skipped: Firebase not configured'
+      );
+      return { sent: false, skipped: true, reason: 'firebase_not_configured' };
+    }
 
-    // In production:
-    // - Use firebase-admin
-    // - Send to device.pushToken
-    // - Handle "NOT_REGISTERED" / "INVALID_ARGUMENT" → call handleInvalidToken()
-    // - Use "calls" channel for calls (high priority)
-    // - Use "messages" channel for messages (default priority)
+    // Determine channel and priority based on reason
+    const channelId = reason === 'call' ? 'whisper2_calls' : 'whisper2_messages';
+    const priority = reason === 'call' ? 'high' : 'normal';
 
-    const channel = reason === 'call' ? 'calls' : 'messages';
+    // Build data payload (wake-only, no content)
+    const data: Record<string, string> = {
+      type: payload.type,
+      reason: payload.reason,
+      whisperId: payload.whisperId,
+    };
+    if (payload.hint) {
+      data.hint = payload.hint;
+    }
 
-    logger.debug(
-      { deviceId: device.deviceId, platform: 'android', reason, channel },
-      'FCM push simulated (stub)'
-    );
+    // Send via Firebase
+    const result = await sendFcmMessage(device.pushToken, data, {
+      priority,
+      channelId,
+      ttl: reason === 'call' ? 30 : 60, // Calls need faster delivery
+    });
+
+    if (result.success) {
+      logger.debug(
+        { deviceId: device.deviceId, platform: 'android', reason, messageId: result.messageId },
+        'FCM push sent'
+      );
+      return {
+        sent: true,
+        skipped: false,
+        provider: 'fcm',
+        ticketId: result.messageId,
+      };
+    }
+
+    // Handle invalid token
+    if (result.shouldInvalidateToken) {
+      logger.warn(
+        { deviceId: device.deviceId, whisperId: payload.whisperId },
+        'FCM token invalid, clearing from database'
+      );
+      await this.handleInvalidToken(payload.whisperId, device.deviceId, 'push');
+    }
 
     return {
-      sent: true,
+      sent: false,
       skipped: false,
+      reason: result.error || 'fcm_error',
       provider: 'fcm',
-      ticketId: `fcm_${Date.now()}`,
     };
   }
 

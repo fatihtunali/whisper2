@@ -1,0 +1,26 @@
+# Gradle
+.gradle/
+build/
+*/build/
+
+# IDE
+.idea/
+*.iml
+local.properties
+
+# Generated
+.cxx/
+captures/
+.externalNativeBuild/
+
+# Keystore (keep safe, don't commit)
+*.jks
+*.keystore
+
+# Local settings
+.claude/settings.local.json
+
+# OS
+.DS_Store
+Thumbs.db
+android/app/google-services.json

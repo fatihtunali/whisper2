@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Primary - Indigo -->
+    <color name="primary">#6366F1</color>
+    <color name="primary_dark">#4F46E5</color>
+    <color name="primary_light">#818CF8</color>
+
+    <!-- Background - Dark -->
+    <color name="background">#030712</color>
+    <color name="surface">#111827</color>
+    <color name="surface_light">#1F2937</color>
+
+    <!-- Text -->
+    <color name="text_primary">#FFFFFF</color>
+    <color name="text_secondary">#9CA3AF</color>
+    <color name="text_muted">#6B7280</color>
+
+    <!-- Border -->
+    <color name="border">#374151</color>
+    <color name="border_light">#4B5563</color>
+
+    <!-- Status colors -->
+    <color name="success">#22C55E</color>
+    <color name="warning">#F59E0B</color>
+    <color name="error">#EF4444</color>
+
+    <!-- Message bubbles -->
+    <color name="message_sent">#6366F1</color>
+    <color name="message_received">#1F2937</color>
+</resources>
