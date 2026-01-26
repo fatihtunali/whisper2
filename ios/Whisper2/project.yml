@@ -28,6 +28,18 @@ targets:
       - path: Storage
       - path: UI
       - path: Resources
+    preBuildScripts:
+      - name: Auto Increment Build Number
+        script: |
+          # Auto-increment build number on each build
+          PLIST="${PROJECT_DIR}/Info.plist"
+          if [ -f "$PLIST" ]; then
+            BUILD_NUM=$(/usr/libexec/PlistBuddy -c "Print CFBundleVersion" "$PLIST")
+            BUILD_NUM=$((BUILD_NUM + 1))
+            /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUM" "$PLIST"
+            echo "Build number incremented to $BUILD_NUM"
+          fi
+        shell: /bin/bash
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.aiakademiturkiye.whisper2
