@@ -46,16 +46,14 @@ struct ContactsListView: View {
                             }
 
                             ForEach(viewModel.filteredContacts) { contact in
-                                ContactRowView(contact: contact)
-                                    .onTapGesture {
-                                        // Directly open chat when tapping a contact
-                                        chatContact = contact
-                                    }
-                                    .onLongPressGesture {
-                                        // Long press shows contact detail
-                                        selectedContact = contact
-                                    }
-                                    .contextMenu {
+                                Button {
+                                    // Directly open chat when tapping a contact
+                                    chatContact = contact
+                                } label: {
+                                    ContactRowView(contact: contact)
+                                }
+                                .buttonStyle(.plain)
+                                .contextMenu {
                                         Button {
                                             chatContact = contact
                                         } label: {
