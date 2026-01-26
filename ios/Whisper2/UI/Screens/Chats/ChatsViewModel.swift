@@ -115,7 +115,8 @@ final class ChatsViewModel {
     }
 
     private func handleConversationRead(_ conversationId: String) {
-        if let index = conversations.firstIndex(where: { $0.id == conversationId }) {
+        // Match by either id or participantId for flexibility
+        if let index = conversations.firstIndex(where: { $0.id == conversationId || $0.participantId == conversationId }) {
             conversations[index].unreadCount = 0
             filterConversations()
             saveConversationsToLocalStorage()
@@ -123,14 +124,18 @@ final class ChatsViewModel {
     }
 
     private func handleMessageSent(_ info: MessageSentInfo) {
-        if let index = conversations.firstIndex(where: { $0.id == info.conversationId }) {
+        // Always use participantId as the conversation id for consistency
+        // This ensures messages are stored/retrieved with the same key regardless of entry point
+        let conversationId = info.participantId
+
+        if let index = conversations.firstIndex(where: { $0.participantId == info.participantId }) {
             // Update existing conversation
             conversations[index].lastMessage = info.lastMessage
             conversations[index].lastMessageTimestamp = info.timestamp
         } else {
-            // Create new conversation
+            // Create new conversation - use participantId as id for consistency
             let newConversation = ConversationUI(
-                id: info.conversationId,
+                id: conversationId,
                 participantId: info.participantId,
                 participantName: info.participantName,
                 participantAvatarURL: info.participantAvatarURL,
@@ -282,19 +287,20 @@ final class ChatsViewModel {
     }
 
     func markAsRead(_ conversation: ConversationUI) {
-        guard let index = conversations.firstIndex(where: { $0.id == conversation.id }) else { return }
+        // Match by participantId for consistency
+        guard let index = conversations.firstIndex(where: { $0.participantId == conversation.participantId }) else { return }
         conversations[index].unreadCount = 0
         filterConversations()
         saveConversationsToLocalStorage()
     }
 
     func deleteConversation(_ conversation: ConversationUI) {
-        conversations.removeAll { $0.id == conversation.id }
+        conversations.removeAll { $0.participantId == conversation.participantId }
         filterConversations()
         saveConversationsToLocalStorage()
 
-        // Also delete messages for this conversation
-        let messagesKey = "whisper2.messages.\(conversation.id)"
+        // Also delete messages for this conversation (use participantId as that's the storage key)
+        let messagesKey = "whisper2.messages.\(conversation.participantId)"
         UserDefaults.standard.removeObject(forKey: messagesKey)
     }
 

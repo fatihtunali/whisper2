@@ -130,6 +130,19 @@ struct ContactsListView: View {
                     participantEncPublicKey: contact.encPublicKey
                 )
                 ChatView(viewModel: ChatViewModel(conversation: conversation))
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarLeading) {
+                            Button {
+                                chatContact = nil
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "chevron.left")
+                                    Text("Back")
+                                }
+                                .foregroundColor(.whisperPrimary)
+                            }
+                        }
+                    }
             }
         }
         .id(themeManager.themeMode)
