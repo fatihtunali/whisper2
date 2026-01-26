@@ -48,6 +48,11 @@ struct ContactsListView: View {
                             ForEach(viewModel.filteredContacts) { contact in
                                 ContactRowView(contact: contact)
                                     .onTapGesture {
+                                        // Directly open chat when tapping a contact
+                                        chatContact = contact
+                                    }
+                                    .onLongPressGesture {
+                                        // Long press shows contact detail
                                         selectedContact = contact
                                     }
                                     .contextMenu {
@@ -96,10 +101,15 @@ struct ContactsListView: View {
             }
         }
         .sheet(isPresented: $showingAddContact) {
-            AddContactView(viewModel: viewModel, isPresented: $showingAddContact)
+            AddContactView(viewModel: viewModel, isPresented: $showingAddContact) { addedContact in
+                // Open chat with the newly added contact
+                chatContact = addedContact
+            }
         }
         .sheet(item: $selectedContact) { contact in
-            ContactDetailView(contact: contact, viewModel: viewModel)
+            ContactDetailView(contact: contact, viewModel: viewModel) { chatWith in
+                chatContact = chatWith
+            }
         }
         .sheet(isPresented: $showingQRCode) {
             if let whisperId = KeychainService.shared.whisperId {
@@ -349,6 +359,7 @@ struct ContactRowView: View {
 struct ContactDetailView: View {
     let contact: ContactUI
     @Bindable var viewModel: ContactsViewModel
+    var onStartChat: ((ContactUI) -> Void)?
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var themeManager: ThemeManager
     @State private var editingName = false
@@ -357,6 +368,12 @@ struct ContactDetailView: View {
     // Call state
     @State private var showingCallView = false
     @State private var callViewModel = CallViewModel()
+
+    init(contact: ContactUI, viewModel: ContactsViewModel, onStartChat: ((ContactUI) -> Void)? = nil) {
+        self.contact = contact
+        self.viewModel = viewModel
+        self.onStartChat = onStartChat
+    }
 
     var body: some View {
         NavigationStack {
@@ -397,6 +414,7 @@ struct ContactDetailView: View {
                         HStack(spacing: WhisperSpacing.xl) {
                             ActionButton(icon: "message.fill", label: "Message") {
                                 dismiss()
+                                onStartChat?(contact)
                             }
 
                             ActionButton(icon: "phone.fill", label: "Voice") {

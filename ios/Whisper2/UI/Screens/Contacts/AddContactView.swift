@@ -7,12 +7,19 @@ import CoreImage.CIFilterBuiltins
 struct AddContactView: View {
     @Bindable var viewModel: ContactsViewModel
     @Binding var isPresented: Bool
+    var onContactAdded: ((ContactUI) -> Void)?
     @FocusState private var focusedField: Field?
     @State private var showingQRScanner = false
 
     enum Field {
         case whisperId
         case displayName
+    }
+
+    init(viewModel: ContactsViewModel, isPresented: Binding<Bool>, onContactAdded: ((ContactUI) -> Void)? = nil) {
+        self.viewModel = viewModel
+        self._isPresented = isPresented
+        self.onContactAdded = onContactAdded
     }
 
     var body: some View {
@@ -104,7 +111,14 @@ struct AddContactView: View {
             .onChange(of: viewModel.contacts.count) { oldValue, newValue in
                 // Contact was added successfully
                 if newValue > oldValue && !viewModel.isAddingContact {
-                    isPresented = false
+                    // Get the newly added contact (last one in the list)
+                    if let newContact = viewModel.contacts.last {
+                        isPresented = false
+                        // Callback to open chat with the new contact
+                        onContactAdded?(newContact)
+                    } else {
+                        isPresented = false
+                    }
                 }
             }
             .onAppear {
