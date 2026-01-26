@@ -82,8 +82,9 @@ final class ChatViewModel {
     private let keychain = KeychainService.shared
     private let dataStack = DataStack.shared
 
-    // Local storage key for messages
-    private var localStorageKey: String { "whisper2.messages.\(conversationId)" }
+    // Local storage key for messages - use participantId to ensure consistency
+    // across different entry points (contacts vs chats list)
+    private var localStorageKey: String { "whisper2.messages.\(participantId)" }
 
     // MARK: - Init
 
