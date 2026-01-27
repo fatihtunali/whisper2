@@ -1,6 +1,7 @@
 import SwiftUI
 import MapKit
 import UIKit
+import AVKit
 
 /// Message bubble component - supports text, audio, location, and attachments
 struct MessageBubble: View {
@@ -431,6 +432,8 @@ struct ImageMessageBubble: View {
 
     @State private var image: UIImage?
     @State private var showFullImage = false
+    @State private var isDownloading = false
+    @State private var downloadError: String?
 
     var body: some View {
         VStack {
@@ -439,16 +442,57 @@ struct ImageMessageBubble: View {
                     .resizable()
                     .aspectRatio(contentMode: .fill)
                     .frame(maxWidth: 200, maxHeight: 200)
+                    .clipped()
                     .cornerRadius(12)
                     .onTapGesture {
                         showFullImage = true
+                    }
+            } else if isDownloading {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.gray.opacity(0.3))
+                    .frame(width: 200, height: 150)
+                    .overlay {
+                        VStack(spacing: 8) {
+                            ProgressView()
+                            Text("Downloading...")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+                    }
+            } else if let error = downloadError {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.gray.opacity(0.3))
+                    .frame(width: 200, height: 150)
+                    .overlay {
+                        VStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .font(.title)
+                                .foregroundColor(.orange)
+                            Text(error)
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                            Button("Retry") {
+                                loadImage()
+                            }
+                            .font(.caption)
+                        }
                     }
             } else {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(Color.gray.opacity(0.3))
                     .frame(width: 200, height: 150)
                     .overlay {
-                        ProgressView()
+                        VStack(spacing: 8) {
+                            Image(systemName: "photo")
+                                .font(.title)
+                                .foregroundColor(.gray)
+                            Text("Tap to load")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+                    }
+                    .onTapGesture {
+                        loadImage()
                     }
             }
         }
@@ -463,13 +507,63 @@ struct ImageMessageBubble: View {
     }
 
     private func loadImage() {
-        // Load from URL or local file
-        if let url = URL(string: message.content) {
+        // Already loaded or downloading
+        guard image == nil && !isDownloading else { return }
+
+        // Check if we have an attachment to download
+        if let attachment = message.attachment {
+            // For outgoing, we can't decrypt (encrypted for recipient)
+            if isOutgoing {
+                downloadError = "Image unavailable"
+                return
+            }
+
+            // Get sender's public key
+            guard let senderPublicKey = ContactsService.shared.getPublicKey(for: message.from) else {
+                downloadError = "Missing sender key"
+                return
+            }
+
+            isDownloading = true
+            downloadError = nil
+
+            Task {
+                do {
+                    let url = try await AttachmentService.shared.downloadFile(attachment, senderPublicKey: senderPublicKey)
+                    if let data = try? Data(contentsOf: url),
+                       let loadedImage = UIImage(data: data) {
+                        await MainActor.run {
+                            image = loadedImage
+                            isDownloading = false
+                        }
+                    } else {
+                        await MainActor.run {
+                            downloadError = "Invalid image"
+                            isDownloading = false
+                        }
+                    }
+                } catch {
+                    await MainActor.run {
+                        downloadError = "Download failed"
+                        isDownloading = false
+                        print("[ImageMessage] Download error: \(error)")
+                    }
+                }
+            }
+        } else if let url = URL(string: message.content) {
+            // Legacy: direct URL in content
+            isDownloading = true
             Task {
                 if let data = try? Data(contentsOf: url),
                    let loadedImage = UIImage(data: data) {
                     await MainActor.run {
                         image = loadedImage
+                        isDownloading = false
+                    }
+                } else {
+                    await MainActor.run {
+                        downloadError = "Failed to load"
+                        isDownloading = false
                     }
                 }
             }
@@ -481,24 +575,114 @@ struct ImageMessageBubble: View {
 struct ImageViewer: View {
     let image: UIImage
     @Environment(\.dismiss) private var dismiss
+    @State private var scale: CGFloat = 1.0
+    @State private var lastScale: CGFloat = 1.0
+    @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
+    @State private var showSaveSuccess = false
 
     var body: some View {
         NavigationView {
-            Image(uiImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .background(Color.black)
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Close") {
-                            dismiss()
+            ZStack {
+                Color.black.ignoresSafeArea()
+
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .scaleEffect(scale)
+                    .offset(offset)
+                    .gesture(
+                        MagnificationGesture()
+                            .onChanged { value in
+                                let delta = value / lastScale
+                                lastScale = value
+                                scale = min(max(scale * delta, 1), 5)
+                            }
+                            .onEnded { _ in
+                                lastScale = 1.0
+                                if scale < 1 {
+                                    withAnimation {
+                                        scale = 1
+                                        offset = .zero
+                                    }
+                                }
+                            }
+                    )
+                    .simultaneousGesture(
+                        DragGesture()
+                            .onChanged { value in
+                                if scale > 1 {
+                                    offset = CGSize(
+                                        width: lastOffset.width + value.translation.width,
+                                        height: lastOffset.height + value.translation.height
+                                    )
+                                }
+                            }
+                            .onEnded { _ in
+                                lastOffset = offset
+                            }
+                    )
+                    .onTapGesture(count: 2) {
+                        withAnimation {
+                            if scale > 1 {
+                                scale = 1
+                                offset = .zero
+                                lastOffset = .zero
+                            } else {
+                                scale = 2
+                            }
                         }
                     }
-                    ToolbarItem(placement: .primaryAction) {
-                        ShareLink(item: Image(uiImage: image), preview: SharePreview("Image"))
+
+                if showSaveSuccess {
+                    VStack {
+                        Spacer()
+                        Text("Saved to Photos")
+                            .padding()
+                            .background(Color.green.opacity(0.9))
+                            .cornerRadius(10)
+                            .foregroundColor(.white)
+                            .padding(.bottom, 50)
+                    }
+                    .transition(.opacity)
+                }
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") {
+                        dismiss()
+                    }
+                    .foregroundColor(.white)
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    HStack(spacing: 16) {
+                        // Save to Photos
+                        Button(action: saveToPhotos) {
+                            Image(systemName: "square.and.arrow.down")
+                                .foregroundColor(.white)
+                        }
+                        // Share
+                        ShareLink(item: Image(uiImage: image), preview: SharePreview("Image")) {
+                            Image(systemName: "square.and.arrow.up")
+                                .foregroundColor(.white)
+                        }
                     }
                 }
+            }
+            .toolbarBackground(.hidden, for: .navigationBar)
+        }
+    }
+
+    private func saveToPhotos() {
+        UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
+        withAnimation {
+            showSaveSuccess = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            withAnimation {
+                showSaveSuccess = false
+            }
         }
     }
 }
@@ -508,16 +692,200 @@ struct VideoMessageBubble: View {
     let message: Message
     let isOutgoing: Bool
 
+    @State private var videoURL: URL?
+    @State private var thumbnail: UIImage?
+    @State private var isDownloading = false
+    @State private var downloadError: String?
+    @State private var showPlayer = false
+
     var body: some View {
         VStack {
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color.gray.opacity(0.3))
-                .frame(width: 200, height: 150)
-                .overlay {
-                    Image(systemName: "play.circle.fill")
-                        .font(.system(size: 44))
-                        .foregroundColor(.white)
+            ZStack {
+                if let thumb = thumbnail {
+                    Image(uiImage: thumb)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 200, height: 150)
+                        .clipped()
+                        .cornerRadius(12)
+                } else {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.gray.opacity(0.3))
+                        .frame(width: 200, height: 150)
                 }
+
+                // Overlay content
+                if isDownloading {
+                    VStack(spacing: 8) {
+                        ProgressView()
+                        Text("Downloading...")
+                            .font(.caption)
+                            .foregroundColor(.white)
+                    }
+                    .frame(width: 200, height: 150)
+                    .background(Color.black.opacity(0.5))
+                    .cornerRadius(12)
+                } else if let error = downloadError {
+                    VStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.title)
+                            .foregroundColor(.orange)
+                        Text(error)
+                            .font(.caption)
+                            .foregroundColor(.white)
+                        Button("Retry") {
+                            downloadVideo()
+                        }
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                    }
+                    .frame(width: 200, height: 150)
+                    .background(Color.black.opacity(0.5))
+                    .cornerRadius(12)
+                } else if videoURL != nil {
+                    // Ready to play
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: 50))
+                        .foregroundColor(.white)
+                        .shadow(radius: 4)
+                } else {
+                    // Not downloaded yet
+                    VStack(spacing: 8) {
+                        Image(systemName: "video")
+                            .font(.title)
+                            .foregroundColor(.white)
+                        Text("Tap to load")
+                            .font(.caption)
+                            .foregroundColor(.white)
+                    }
+                }
+            }
+            .onTapGesture {
+                if let _ = videoURL {
+                    showPlayer = true
+                } else if !isDownloading {
+                    downloadVideo()
+                }
+            }
+        }
+        .onAppear {
+            downloadVideo()
+        }
+        .fullScreenCover(isPresented: $showPlayer) {
+            if let url = videoURL {
+                VideoPlayerView(url: url)
+            }
+        }
+    }
+
+    private func downloadVideo() {
+        guard videoURL == nil && !isDownloading else { return }
+
+        if let attachment = message.attachment {
+            // For outgoing, we can't decrypt
+            if isOutgoing {
+                downloadError = "Video unavailable"
+                return
+            }
+
+            guard let senderPublicKey = ContactsService.shared.getPublicKey(for: message.from) else {
+                downloadError = "Missing sender key"
+                return
+            }
+
+            isDownloading = true
+            downloadError = nil
+
+            Task {
+                do {
+                    let url = try await AttachmentService.shared.downloadFile(attachment, senderPublicKey: senderPublicKey)
+
+                    // Generate thumbnail
+                    let thumbImage = await generateThumbnail(from: url)
+
+                    await MainActor.run {
+                        videoURL = url
+                        thumbnail = thumbImage
+                        isDownloading = false
+                    }
+                } catch {
+                    await MainActor.run {
+                        downloadError = "Download failed"
+                        isDownloading = false
+                        print("[VideoMessage] Download error: \(error)")
+                    }
+                }
+            }
+        } else if let url = URL(string: message.content) {
+            videoURL = url
+            Task {
+                let thumbImage = await generateThumbnail(from: url)
+                await MainActor.run {
+                    thumbnail = thumbImage
+                }
+            }
+        }
+    }
+
+    private func generateThumbnail(from url: URL) async -> UIImage? {
+        let asset = AVAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 400, height: 400)
+
+        do {
+            let cgImage = try generator.copyCGImage(at: .zero, actualTime: nil)
+            return UIImage(cgImage: cgImage)
+        } catch {
+            print("[VideoMessage] Thumbnail error: \(error)")
+            return nil
+        }
+    }
+}
+
+// MARK: - Video Player View
+struct VideoPlayerView: View {
+    let url: URL
+    @Environment(\.dismiss) private var dismiss
+    @State private var player: AVPlayer?
+
+    var body: some View {
+        NavigationView {
+            ZStack {
+                Color.black.ignoresSafeArea()
+
+                if let player = player {
+                    VideoPlayer(player: player)
+                        .ignoresSafeArea()
+                } else {
+                    ProgressView()
+                }
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") {
+                        player?.pause()
+                        dismiss()
+                    }
+                    .foregroundColor(.white)
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    ShareLink(item: url) {
+                        Image(systemName: "square.and.arrow.up")
+                            .foregroundColor(.white)
+                    }
+                }
+            }
+            .toolbarBackground(.hidden, for: .navigationBar)
+        }
+        .onAppear {
+            player = AVPlayer(url: url)
+            player?.play()
+        }
+        .onDisappear {
+            player?.pause()
+            player = nil
         }
     }
 }
@@ -527,33 +895,167 @@ struct FileMessageBubble: View {
     let message: Message
     let isOutgoing: Bool
 
+    @State private var fileURL: URL?
+    @State private var isDownloading = false
+    @State private var downloadError: String?
+    @State private var showShareSheet = false
+
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "doc.fill")
-                .font(.title2)
-                .foregroundColor(isOutgoing ? .white : .blue)
+            // File icon or progress
+            ZStack {
+                if isDownloading {
+                    ProgressView()
+                        .frame(width: 24, height: 24)
+                } else {
+                    Image(systemName: fileIcon)
+                        .font(.title2)
+                        .foregroundColor(isOutgoing ? .white : .blue)
+                }
+            }
+            .frame(width: 30)
 
-            VStack(alignment: .leading) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(fileName)
                     .font(.caption.bold())
                     .foregroundColor(isOutgoing ? .white : .primary)
-                Text(fileSize)
-                    .font(.caption2)
-                    .foregroundColor(isOutgoing ? .white.opacity(0.7) : .gray)
+                    .lineLimit(1)
+
+                if let error = downloadError {
+                    Text(error)
+                        .font(.caption2)
+                        .foregroundColor(.red)
+                } else if fileURL != nil {
+                    Text("Tap to open")
+                        .font(.caption2)
+                        .foregroundColor(isOutgoing ? .white.opacity(0.7) : .gray)
+                } else if let attachment = message.attachment {
+                    Text(formatSize(attachment.ciphertextSize))
+                        .font(.caption2)
+                        .foregroundColor(isOutgoing ? .white.opacity(0.7) : .gray)
+                } else {
+                    Text("Tap to download")
+                        .font(.caption2)
+                        .foregroundColor(isOutgoing ? .white.opacity(0.7) : .gray)
+                }
+            }
+
+            Spacer()
+
+            // Download/Open indicator
+            if fileURL != nil {
+                Image(systemName: "arrow.up.forward.circle")
+                    .foregroundColor(isOutgoing ? .white.opacity(0.7) : .blue)
+            } else if !isDownloading {
+                Image(systemName: "arrow.down.circle")
+                    .foregroundColor(isOutgoing ? .white.opacity(0.7) : .blue)
             }
         }
         .padding(12)
         .background(isOutgoing ? Color.blue : Color(.systemGray5))
         .cornerRadius(12)
+        .onTapGesture {
+            if let url = fileURL {
+                showShareSheet = true
+            } else if !isDownloading {
+                downloadFile()
+            }
+        }
+        .sheet(isPresented: $showShareSheet) {
+            if let url = fileURL {
+                ShareSheet(items: [url])
+            }
+        }
     }
 
     private var fileName: String {
-        URL(string: message.content)?.lastPathComponent ?? "File"
+        // Try to get from content (which should be filename)
+        if !message.content.isEmpty && !message.content.contains("/") {
+            return message.content
+        }
+        // Fallback to attachment content type
+        if let attachment = message.attachment {
+            let ext = getExtension(for: attachment.contentType)
+            return "File.\(ext)"
+        }
+        return "File"
     }
 
-    private var fileSize: String {
-        "Tap to download"
+    private var fileIcon: String {
+        guard let attachment = message.attachment else { return "doc.fill" }
+        let contentType = attachment.contentType.lowercased()
+
+        if contentType.contains("pdf") { return "doc.text.fill" }
+        if contentType.contains("word") || contentType.contains("document") { return "doc.richtext.fill" }
+        if contentType.contains("excel") || contentType.contains("spreadsheet") { return "tablecells.fill" }
+        if contentType.contains("zip") || contentType.contains("archive") { return "doc.zipper" }
+        if contentType.contains("text") { return "doc.plaintext.fill" }
+
+        return "doc.fill"
     }
+
+    private func formatSize(_ bytes: Int) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: Int64(bytes))
+    }
+
+    private func getExtension(for contentType: String) -> String {
+        switch contentType.lowercased() {
+        case "application/pdf": return "pdf"
+        case "application/msword": return "doc"
+        case "application/vnd.openxmlformats-officedocument.wordprocessingml.document": return "docx"
+        case "text/plain": return "txt"
+        case "application/zip": return "zip"
+        default: return "file"
+        }
+    }
+
+    private func downloadFile() {
+        guard fileURL == nil && !isDownloading else { return }
+
+        if let attachment = message.attachment {
+            if isOutgoing {
+                downloadError = "File unavailable"
+                return
+            }
+
+            guard let senderPublicKey = ContactsService.shared.getPublicKey(for: message.from) else {
+                downloadError = "Missing key"
+                return
+            }
+
+            isDownloading = true
+            downloadError = nil
+
+            Task {
+                do {
+                    let url = try await AttachmentService.shared.downloadFile(attachment, senderPublicKey: senderPublicKey)
+                    await MainActor.run {
+                        fileURL = url
+                        isDownloading = false
+                    }
+                } catch {
+                    await MainActor.run {
+                        downloadError = "Download failed"
+                        isDownloading = false
+                        print("[FileMessage] Download error: \(error)")
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Share Sheet
+struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
 /// Custom bubble shape
