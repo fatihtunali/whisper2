@@ -23,6 +23,43 @@ final class AuthService: ObservableObject {
     
     private init() {
         setupMessageHandler()
+        setupReconnectHandler()
+    }
+
+    /// Handle WebSocket reconnections - need to re-authenticate
+    private func setupReconnectHandler() {
+        ws.$connectionState
+            .sink { [weak self] state in
+                guard let self = self else { return }
+
+                switch state {
+                case .disconnected, .reconnecting:
+                    // Reset authenticated state - server requires new auth on each connection
+                    if self.isAuthenticated {
+                        print("WebSocket disconnected - resetting authentication state")
+                        Task { @MainActor in
+                            self.isAuthenticated = false
+                        }
+                    }
+
+                case .connected:
+                    // If we have stored credentials but not authenticated, re-authenticate
+                    if !self.isAuthenticated && self.keychain.whisperId != nil {
+                        print("WebSocket connected - re-authenticating...")
+                        Task {
+                            do {
+                                try await self.reconnect()
+                            } catch {
+                                print("Re-authentication failed: \(error)")
+                            }
+                        }
+                    }
+
+                case .connecting:
+                    break
+                }
+            }
+            .store(in: &cancellables)
     }
     
     /// Current user with keys and session info
@@ -127,20 +164,23 @@ final class AuthService: ObservableObject {
               let savedWhisperId = keychain.whisperId else {
             throw AuthError.notAuthenticated
         }
-        
+
         self.encKeyPair = CryptoService.KeyPair(publicKey: encPub, privateKey: encPriv)
         self.signKeyPair = CryptoService.KeyPair(publicKey: signPub, privateKey: signPriv)
-        
-        ws.connect()
-        try await waitForConnection()
-        
+
+        // Only connect if not already connected
+        if ws.connectionState != .connected {
+            ws.connect()
+            try await waitForConnection()
+        }
+
         let ack = try await performAuth(
             whisperId: savedWhisperId,  // Recovery
             encPublicKey: encPub,
             signPublicKey: signPub,
             signPrivateKey: signPriv
         )
-        
+
         await MainActor.run {
             self.whisperId = ack.whisperId
             self.sessionToken = ack.sessionToken

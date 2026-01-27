@@ -94,6 +94,12 @@ final class PushNotificationService: NSObject, ObservableObject {
     // MARK: - Send Tokens to Server
 
     private func sendTokensToServer() async {
+        // Must be authenticated with the server before sending tokens
+        guard auth.isAuthenticated else {
+            print("Not authenticated, will send push tokens after auth")
+            return
+        }
+
         guard let sessionToken = auth.currentUser?.sessionToken else {
             print("No session token, cannot send push tokens")
             return
