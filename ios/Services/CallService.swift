@@ -797,37 +797,56 @@ final class CallService: NSObject, ObservableObject {
     }
 
     private func handleCallAnswer(_ data: Data) {
-        guard let frame = try? JSONDecoder().decode(WsFrame<CallAnswerPayload>.self, from: data),
-              let user = auth.currentUser,
-              let senderPublicKey = contacts.getPublicKey(for: frame.payload.from) else {
+        print("=== handleCallAnswer BEGIN ===")
+
+        guard let frame = try? JSONDecoder().decode(WsFrame<CallAnswerPayload>.self, from: data) else {
+            print("ERROR: Failed to decode call_answer frame")
+            return
+        }
+
+        guard let user = auth.currentUser else {
+            print("ERROR: No authenticated user for call_answer")
+            return
+        }
+
+        guard let senderPublicKey = contacts.getPublicKey(for: frame.payload.from) else {
+            print("ERROR: No public key for \(frame.payload.from)")
             return
         }
 
         let payload = frame.payload
+        print("Processing answer from: \(payload.from) for call: \(payload.callId)")
 
         Task {
             do {
                 // Decrypt SDP answer
                 guard let ciphertextData = Data(base64Encoded: payload.ciphertext),
                       let nonceData = Data(base64Encoded: payload.nonce) else {
+                    print("ERROR: Failed to decode base64 ciphertext/nonce")
                     return
                 }
 
+                print("Decrypting SDP answer...")
                 let sdpAnswer = try crypto.decryptMessage(
                     ciphertext: ciphertextData,
                     nonce: nonceData,
                     senderPublicKey: senderPublicKey,
                     recipientPrivateKey: user.encPrivateKey
                 )
+                print("SDP answer decrypted, length: \(sdpAnswer.count)")
 
                 let remoteDesc = RTCSessionDescription(type: .answer, sdp: sdpAnswer)
+                print("Setting remote description...")
                 try await peerConnection?.setRemoteDescription(remoteDesc)
+                print("Remote description SET successfully")
 
                 // Process pending ICE candidates
+                print("Processing \(pendingIceCandidates.count) pending ICE candidates...")
                 for candidate in pendingIceCandidates {
                     try await peerConnection?.add(candidate)
                 }
                 pendingIceCandidates.removeAll()
+                print("=== handleCallAnswer END (success) ===")
 
                 // NOTE: No UI state updates - CallKit handles all UI
             } catch {
@@ -837,11 +856,22 @@ final class CallService: NSObject, ObservableObject {
     }
 
     private func handleIceCandidate(_ data: Data) {
-        guard let frame = try? JSONDecoder().decode(WsFrame<CallIceCandidatePayload>.self, from: data),
-              let user = auth.currentUser,
-              let senderPublicKey = contacts.getPublicKey(for: frame.payload.from) else {
+        guard let frame = try? JSONDecoder().decode(WsFrame<CallIceCandidatePayload>.self, from: data) else {
+            print("ERROR: Failed to decode ICE candidate frame")
             return
         }
+
+        guard let user = auth.currentUser else {
+            print("ERROR: No authenticated user for ICE candidate")
+            return
+        }
+
+        guard let senderPublicKey = contacts.getPublicKey(for: frame.payload.from) else {
+            print("ERROR: No public key for ICE candidate from \(frame.payload.from)")
+            return
+        }
+
+        print("Processing ICE candidate from: \(frame.payload.from)")
 
         let payload = frame.payload
 
