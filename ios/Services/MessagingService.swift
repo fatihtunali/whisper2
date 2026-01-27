@@ -32,6 +32,7 @@ final class MessagingService: ObservableObject {
         loadFromStorage()
         setupMessageHandler()
         setupRequestAcceptedHandler()
+        setupConnectionMonitor()
     }
 
     // MARK: - Persistence
@@ -79,6 +80,112 @@ final class MessagingService: ObservableObject {
                 }
             }
             .store(in: &cancellables)
+    }
+
+    private func setupConnectionMonitor() {
+        // Monitor WebSocket connection state
+        ws.$connectionState
+            .dropFirst() // Skip initial value
+            .removeDuplicates()
+            .sink { [weak self] state in
+                if state == .connected {
+                    print("MessagingService: WebSocket connected, retrying failed messages...")
+                    Task {
+                        await self?.retryFailedMessages()
+                    }
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    /// Retry all messages that are in failed or pending status
+    private func retryFailedMessages() async {
+        guard let user = auth.currentUser,
+              let sessionToken = user.sessionToken else {
+            print("No user or session token, cannot retry failed messages")
+            return
+        }
+
+        // Collect all failed/pending messages
+        var messagesToRetry: [(conversationId: String, message: Message)] = []
+
+        await MainActor.run {
+            for (convId, msgs) in self.messages {
+                for msg in msgs where msg.direction == .outgoing && (msg.status == .failed || msg.status == .pending) {
+                    messagesToRetry.append((conversationId: convId, message: msg))
+                }
+            }
+        }
+
+        if messagesToRetry.isEmpty {
+            print("No failed messages to retry")
+            return
+        }
+
+        print("Retrying \(messagesToRetry.count) failed/pending messages...")
+
+        for (convId, msg) in messagesToRetry {
+            do {
+                // Get recipient's public key
+                guard let recipientPublicKey = contactsService.getPublicKey(for: msg.to) else {
+                    print("No public key for \(msg.to), marking message as failed")
+                    await markMessageStatus(messageId: msg.id, conversationId: convId, status: .failed)
+                    continue
+                }
+
+                // Re-encrypt and send
+                let timestamp = Int64(Date().timeIntervalSince1970 * 1000)
+
+                let (ciphertext, nonce) = try crypto.encryptMessage(
+                    msg.content,
+                    recipientPublicKey: recipientPublicKey,
+                    senderPrivateKey: user.encPrivateKey
+                )
+
+                let signature = try crypto.signMessage(
+                    messageType: Constants.MessageType.sendMessage,
+                    messageId: msg.id,
+                    from: user.whisperId,
+                    to: msg.to,
+                    timestamp: timestamp,
+                    nonce: nonce,
+                    ciphertext: ciphertext,
+                    privateKey: user.signPrivateKey
+                )
+
+                let payload = SendMessagePayload(
+                    sessionToken: sessionToken,
+                    messageId: msg.id,
+                    from: user.whisperId,
+                    to: msg.to,
+                    msgType: msg.contentType,
+                    timestamp: timestamp,
+                    nonce: nonce.base64EncodedString(),
+                    ciphertext: ciphertext.base64EncodedString(),
+                    sig: signature.base64EncodedString()
+                )
+
+                let frame = WsFrame(type: Constants.MessageType.sendMessage, payload: payload, requestId: msg.id)
+                try await ws.send(frame)
+
+                print("Retried message \(msg.id) to \(msg.to)")
+            } catch {
+                print("Failed to retry message \(msg.id): \(error)")
+                await markMessageStatus(messageId: msg.id, conversationId: convId, status: .failed)
+            }
+        }
+    }
+
+    /// Mark a message with a specific status
+    private func markMessageStatus(messageId: String, conversationId: String, status: MessageStatus) async {
+        await MainActor.run {
+            if var msgs = self.messages[conversationId],
+               let index = msgs.firstIndex(where: { $0.id == messageId }) {
+                msgs[index].status = status
+                self.messages[conversationId] = msgs
+                self.saveMessagesToStorage()
+            }
+        }
     }
     
     // MARK: - Send Message

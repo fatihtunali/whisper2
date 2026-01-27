@@ -1,7 +1,9 @@
 import Foundation
 import AVFoundation
+import CoreMedia
 import Combine
 import WebRTC
+import CallKit
 
 /// Call state
 enum CallState: Equatable {
@@ -79,6 +81,9 @@ final class CallService: NSObject, ObservableObject {
     // CallKit manager
     private(set) var callKitManager: CallKitManager?
 
+    // Audio session state - tracks if CallKit has activated before tracks are ready
+    private var isAudioSessionActivated = false
+
     // Storage
     private let callHistoryStorageKey = "whisper2.call.history"
     private var currentCallStartTime: Date?
@@ -89,12 +94,36 @@ final class CallService: NSObject, ObservableObject {
         setupWebRTC()
         setupMessageHandler()
         setupCallKit()
+
+        // Clean up any stale CallKit state from previous session
+        print("CallService init: Cleaning up stale CallKit state")
+        callKitManager?.endAllCalls()
     }
 
     // MARK: - Setup
 
     private func setupWebRTC() {
         RTCInitializeSSL()
+
+        // Configure RTCAudioSession for CallKit integration
+        // CRITICAL: Must set these BEFORE creating any peer connections
+        let rtcAudioSession = RTCAudioSession.sharedInstance()
+        rtcAudioSession.lockForConfiguration()
+        do {
+            // Tell RTCAudioSession to use manual audio management (required for CallKit)
+            rtcAudioSession.useManualAudio = true
+            rtcAudioSession.isAudioEnabled = false  // Will enable when CallKit activates
+
+            // Configure audio session category for voice chat
+            // This is set once at startup, CallKit will activate/deactivate as needed
+            try rtcAudioSession.setCategory(.playAndRecord,
+                                             with: [.allowBluetooth, .allowBluetoothA2DP])
+            try rtcAudioSession.setMode(.voiceChat)
+            print("RTCAudioSession configured for CallKit: useManualAudio=true, category=playAndRecord, mode=voiceChat")
+        } catch {
+            print("Failed to configure RTCAudioSession: \(error)")
+        }
+        rtcAudioSession.unlockForConfiguration()
 
         let encoderFactory = RTCDefaultVideoEncoderFactory()
         let decoderFactory = RTCDefaultVideoDecoderFactory()
@@ -120,7 +149,11 @@ final class CallService: NSObject, ObservableObject {
 
     /// Handle incoming call from VoIP push (when app was in background/killed)
     private func handleVoIPIncomingCall(_ payload: CallIncomingPayload) {
-        print("=== VoIP Push: Incoming call from \(payload.from) ===")
+        print("=== VoIP Push: Incoming call ===")
+        print("  callId: \(payload.callId)")
+        print("  from: \(payload.from)")
+        print("  isVideo: \(payload.isVideo)")
+        print("  ciphertext length: \(payload.ciphertext.count)")
 
         // Store pending incoming call for CallKit answer flow
         pendingIncomingCall = payload
@@ -136,13 +169,14 @@ final class CallService: NSObject, ObservableObject {
         let contact = contacts.getContact(whisperId: payload.from)
         let displayName = contact?.displayName ?? payload.from
 
-        print("Reporting incoming call to CallKit: \(payload.callId)")
+        print("VoIP Push: Reporting to CallKit with displayName: \(displayName)")
         callKitManager?.reportIncomingCall(
             callId: payload.callId,
             handle: payload.from,
             displayName: displayName,
             hasVideo: payload.isVideo
         )
+        print("=== VoIP Push: reportIncomingCall called ===")
     }
 
     private func setupMessageHandler() {
@@ -169,30 +203,47 @@ final class CallService: NSObject, ObservableObject {
 
     /// Request to start an outgoing call - CallKit handles ALL UI
     func initiateCall(to peerId: String, isVideo: Bool) async throws {
+        print("=== initiateCall BEGIN - isVideo: \(isVideo) ===")
+
         guard auth.currentUser?.sessionToken != nil else {
+            print("ERROR: No session token")
             throw NetworkError.connectionFailed
         }
 
         guard contacts.getPublicKey(for: peerId) != nil else {
+            print("ERROR: No public key for \(peerId)")
             throw CryptoError.invalidPublicKey
         }
 
+        // Clean up any previous call state first
+        if activeCallId != nil {
+            print("Cleaning up previous call state before starting new call...")
+            cleanupPreviousCall()
+        }
+
         // Request microphone permission first
+        print("Requesting microphone permission...")
         let micPermission = await requestMicrophonePermission()
         guard micPermission else {
+            print("ERROR: Microphone permission denied")
             throw NetworkError.serverError(code: "PERMISSION_DENIED", message: "Microphone permission required for calls")
         }
+        print("Microphone permission granted")
 
         // Request camera permission for video calls
         if isVideo {
+            print("Requesting camera permission...")
             let cameraPermission = await requestCameraPermission()
             guard cameraPermission else {
+                print("ERROR: Camera permission denied")
                 throw NetworkError.serverError(code: "PERMISSION_DENIED", message: "Camera permission required for video calls")
             }
+            print("Camera permission granted")
         }
 
         // Generate callId
         let callId = UUID().uuidString.lowercased()
+        print("Generated callId: \(callId)")
 
         // Store pending outgoing call info (WebRTC setup happens after CallKit confirms)
         pendingOutgoingCall = (peerId: peerId, isVideo: isVideo, callId: callId)
@@ -419,6 +470,9 @@ final class CallService: NSObject, ObservableObject {
     // MARK: - End Call
 
     func endCall(reason: CallEndReason = .ended) async throws {
+        // Set the end reason BEFORE cleanup so history is recorded correctly
+        lastCallEndReason = reason
+
         guard let callId = activeCallId,
               let peerId = activeCallPeerId,
               let user = auth.currentUser,
@@ -509,19 +563,81 @@ final class CallService: NSObject, ObservableObject {
     }
 
     func switchCamera() {
-        guard let capturer = videoCapturer else { return }
-
-        let position: AVCaptureDevice.Position = capturer.captureSession.inputs
-            .compactMap { ($0 as? AVCaptureDeviceInput)?.device }
-            .first?.position == .front ? .back : .front
-
-        guard let device = RTCCameraVideoCapturer.captureDevices().first(where: { $0.position == position }),
-              let format = RTCCameraVideoCapturer.supportedFormats(for: device).last,
-              let fps = format.videoSupportedFrameRateRanges.first?.maxFrameRate else {
+        guard let capturer = videoCapturer else {
+            print("No video capturer for switching camera")
             return
         }
 
-        capturer.startCapture(with: device, format: format, fps: Int(fps))
+        // Determine current camera position and switch
+        let currentPosition: AVCaptureDevice.Position = capturer.captureSession.inputs
+            .compactMap { ($0 as? AVCaptureDeviceInput)?.device }
+            .first?.position ?? .front
+
+        let newPosition: AVCaptureDevice.Position = currentPosition == .front ? .back : .front
+
+        guard let device = RTCCameraVideoCapturer.captureDevices().first(where: { $0.position == newPosition }) else {
+            print("Could not find camera for position: \(newPosition)")
+            return
+        }
+
+        // Get supported formats and select a reasonable one
+        let formats = RTCCameraVideoCapturer.supportedFormats(for: device)
+        guard !formats.isEmpty else {
+            print("No formats available for camera")
+            return
+        }
+
+        // Find a format close to 1280x720 (HD) - prefer non-HDR
+        let targetWidth: Int32 = 1280
+        let targetHeight: Int32 = 720
+
+        var selectedFormat: AVCaptureDevice.Format?
+        var minDiff = Int32.max
+
+        for format in formats {
+            let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            let diff = abs(dimensions.width - targetWidth) + abs(dimensions.height - targetHeight)
+
+            // Prefer non-HDR formats
+            let mediaSubType = CMFormatDescriptionGetMediaSubType(format.formatDescription)
+            let isHDR = mediaSubType == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+            let penalty: Int32 = isHDR ? 1000 : 0
+
+            if diff + penalty < minDiff {
+                minDiff = diff + penalty
+                selectedFormat = format
+            }
+        }
+
+        guard let format = selectedFormat else {
+            print("Could not find suitable format")
+            return
+        }
+
+        // Get FPS - use 30 fps as target
+        let targetFps = 30
+        var selectedFps = 15
+
+        for range in format.videoSupportedFrameRateRanges {
+            let maxFps = Int(range.maxFrameRate)
+            if maxFps >= targetFps {
+                selectedFps = min(maxFps, targetFps)
+                break
+            } else if maxFps > selectedFps {
+                selectedFps = maxFps
+            }
+        }
+
+        let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+        print("Switching camera to \(newPosition == .front ? "front" : "back"): \(dimensions.width)x\(dimensions.height) @ \(selectedFps)fps")
+
+        capturer.startCapture(with: device, format: format, fps: selectedFps) { error in
+            if let error = error {
+                print("ERROR: Failed to switch camera: \(error.localizedDescription)")
+            } else {
+                print("Camera switched successfully")
+            }
+        }
     }
 
     // MARK: - WebRTC Setup
@@ -577,31 +693,42 @@ final class CallService: NSObject, ObservableObject {
             peerConnection?.add(audioTrack, streamIds: ["stream0"])
         }
 
+        // Enable audio if CallKit already activated the session
+        enableAudioTracksIfNeeded()
+
         // Add video track if video call
         if isVideo {
+            print("Setting up video track for video call...")
             let videoSource = factory.videoSource()
             localVideoTrack = factory.videoTrack(with: videoSource, trackId: "video0")
 
             if let videoTrack = localVideoTrack {
                 peerConnection?.add(videoTrack, streamIds: ["stream0"])
+                print("Video track added to peer connection")
 
                 // Setup camera capturer
                 videoCapturer = RTCCameraVideoCapturer(delegate: videoSource)
+                print("Video capturer created")
 
-                if let device = RTCCameraVideoCapturer.captureDevices().first(where: { $0.position == .front }),
-                   let format = RTCCameraVideoCapturer.supportedFormats(for: device).last,
-                   let fps = format.videoSupportedFrameRateRanges.first?.maxFrameRate {
-                    Task {
-                        try? await videoCapturer?.startCapture(with: device, format: format, fps: Int(fps))
-                    }
+                // Start camera capture on main thread with slight delay to ensure setup is complete
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                    self?.startCameraCapture()
                 }
 
-                // Connect to local renderer
+                // Connect to legacy local renderer if available
                 if let renderer = localVideoRenderer {
                     videoTrack.add(renderer)
                 }
+
+                // Note: ActiveVideoCallState renderers will be connected when call connects
+                // via showVideoCallScreen() -> connectVideoRenderers()
+            } else {
+                print("WARNING: Failed to create local video track")
             }
         }
+
+        // Enable video tracks if they exist
+        enableVideoTracksIfNeeded()
 
         // NOTE: Audio session is managed by CallKit
         // CallKit will activate the audio session and notify us via callKitAudioSessionDidActivate
@@ -612,9 +739,13 @@ final class CallService: NSObject, ObservableObject {
     // MARK: - Permissions
 
     private func requestMicrophonePermission() async -> Bool {
-        return await withCheckedContinuation { continuation in
-            AVAudioSession.sharedInstance().requestRecordPermission { granted in
-                continuation.resume(returning: granted)
+        if #available(iOS 17.0, *) {
+            return await AVAudioApplication.requestRecordPermission()
+        } else {
+            return await withCheckedContinuation { continuation in
+                AVAudioSession.sharedInstance().requestRecordPermission { granted in
+                    continuation.resume(returning: granted)
+                }
             }
         }
     }
@@ -625,6 +756,94 @@ final class CallService: NSObject, ObservableObject {
                 continuation.resume(returning: granted)
             }
         }
+    }
+
+    /// Start camera capture with safe format selection
+    private func startCameraCapture() {
+        print("=== startCameraCapture BEGIN ===")
+
+        guard let capturer = videoCapturer else {
+            print("ERROR: No video capturer available")
+            return
+        }
+
+        // Get front camera
+        let devices = RTCCameraVideoCapturer.captureDevices()
+        print("Available cameras: \(devices.count)")
+
+        guard let device = devices.first(where: { $0.position == .front }) ?? devices.first else {
+            print("ERROR: No camera found")
+            return
+        }
+        print("Using camera: \(device.localizedName), position: \(device.position.rawValue)")
+
+        // Get supported formats and select a reasonable one
+        let formats = RTCCameraVideoCapturer.supportedFormats(for: device)
+        print("Available formats: \(formats.count)")
+
+        guard !formats.isEmpty else {
+            print("ERROR: No supported formats for camera")
+            return
+        }
+
+        // Find a format close to 1280x720 (HD) - prefer formats without HDR to avoid issues
+        let targetWidth: Int32 = 1280
+        let targetHeight: Int32 = 720
+
+        var selectedFormat: AVCaptureDevice.Format?
+        var minDiff = Int32.max
+
+        for format in formats {
+            let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            let diff = abs(dimensions.width - targetWidth) + abs(dimensions.height - targetHeight)
+
+            // Prefer non-HDR formats for better compatibility
+            let mediaSubType = CMFormatDescriptionGetMediaSubType(format.formatDescription)
+            let isHDR = mediaSubType == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+            let penalty: Int32 = isHDR ? 1000 : 0
+
+            if diff + penalty < minDiff {
+                minDiff = diff + penalty
+                selectedFormat = format
+            }
+        }
+
+        guard let format = selectedFormat else {
+            print("ERROR: Could not find suitable camera format")
+            return
+        }
+
+        let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+        print("Selected format: \(dimensions.width)x\(dimensions.height)")
+
+        // Get FPS - use 30 fps as target
+        let targetFps = 30
+        var selectedFps = 15 // Default to lower FPS for stability
+
+        for range in format.videoSupportedFrameRateRanges {
+            let maxFps = Int(range.maxFrameRate)
+            let minFps = Int(range.minFrameRate)
+            print("Format FPS range: \(minFps)-\(maxFps)")
+
+            if maxFps >= targetFps {
+                selectedFps = min(maxFps, targetFps)
+            } else if maxFps > selectedFps {
+                selectedFps = maxFps
+            }
+        }
+
+        print("Starting camera capture: \(dimensions.width)x\(dimensions.height) @ \(selectedFps)fps")
+
+        // Start capture with completion handler for error handling
+        capturer.startCapture(with: device, format: format, fps: selectedFps) { error in
+            if let error = error {
+                print("ERROR: Camera capture failed to start: \(error.localizedDescription)")
+            } else {
+                print("Camera capture started successfully")
+            }
+        }
+
+        print("=== startCameraCapture END ===")
     }
 
     private func createOffer() async throws -> String {
@@ -723,12 +942,20 @@ final class CallService: NSObject, ObservableObject {
     // MARK: - Message Handling
 
     private func handleMessage(_ data: Data) {
-        guard let raw = try? JSONDecoder().decode(RawWsFrame.self, from: data) else { return }
+        // First, try to decode as RawWsFrame
+        guard let raw = try? JSONDecoder().decode(RawWsFrame.self, from: data) else {
+            print("CallService: Failed to decode RawWsFrame")
+            return
+        }
 
-        // Log all call-related messages
+        // Log ALL messages to debug call_incoming issue
+        print("CallService handleMessage: type=\(raw.type)")
+
+        // Detailed logging for call-related messages
         if raw.type.hasPrefix("call") || raw.type.hasPrefix("turn") || raw.type == "error" {
             if let jsonString = String(data: data, encoding: .utf8) {
-                print("CallService received: \(raw.type) - \(jsonString.prefix(500))")
+                print("=== CallService received: \(raw.type) ===")
+                print(jsonString.prefix(1000))
             }
         }
 
@@ -763,35 +990,51 @@ final class CallService: NSObject, ObservableObject {
     }
 
     private func handleCallIncoming(_ data: Data) {
-        guard let frame = try? JSONDecoder().decode(WsFrame<CallIncomingPayload>.self, from: data) else { return }
+        print("=== handleCallIncoming BEGIN ===")
 
-        let payload = frame.payload
+        do {
+            let frame = try JSONDecoder().decode(WsFrame<CallIncomingPayload>.self, from: data)
+            let payload = frame.payload
 
-        // Store pending incoming call for CallKit answer flow
-        pendingIncomingCall = payload
+            print("Incoming call decoded successfully:")
+            print("  callId: \(payload.callId)")
+            print("  from: \(payload.from)")
+            print("  isVideo: \(payload.isVideo)")
 
-        // Store internal state
-        activeCallId = payload.callId
-        activeCallPeerId = payload.from
-        activeCallIsVideo = payload.isVideo
-        activeCallIsOutgoing = false
+            // Store pending incoming call for CallKit answer flow
+            pendingIncomingCall = payload
 
-        // Report to CallKit - CallKit handles ALL incoming call UI
-        let contact = contacts.getContact(whisperId: payload.from)
-        callKitManager?.reportIncomingCall(
-            callId: payload.callId,
-            handle: payload.from,
-            displayName: contact?.displayName ?? payload.from,
-            hasVideo: payload.isVideo
-        )
+            // Store internal state
+            activeCallId = payload.callId
+            activeCallPeerId = payload.from
+            activeCallIsVideo = payload.isVideo
+            activeCallIsOutgoing = false
 
-        // NOTE: NO UI updates here - CallKit handles everything
+            // Report to CallKit - CallKit handles ALL incoming call UI
+            let contact = contacts.getContact(whisperId: payload.from)
+            let displayName = contact?.displayName ?? payload.from
+
+            print("Reporting to CallKit - displayName: \(displayName)")
+            callKitManager?.reportIncomingCall(
+                callId: payload.callId,
+                handle: payload.from,
+                displayName: displayName,
+                hasVideo: payload.isVideo
+            )
+            print("=== handleCallIncoming END (reported to CallKit) ===")
+        } catch {
+            print("ERROR: Failed to decode call_incoming: \(error)")
+            if let jsonString = String(data: data, encoding: .utf8) {
+                print("Raw data: \(jsonString)")
+            }
+        }
     }
 
     private func handleCallAnswer(_ data: Data) {
         print("=== handleCallAnswer BEGIN ===")
 
-        guard let frame = try? JSONDecoder().decode(WsFrame<CallAnswerPayload>.self, from: data) else {
+        // Use CallAnswerReceivedPayload - server strips version/session/to fields when forwarding
+        guard let frame = try? JSONDecoder().decode(WsFrame<CallAnswerReceivedPayload>.self, from: data) else {
             print("ERROR: Failed to decode call_answer frame")
             return
         }
@@ -848,7 +1091,8 @@ final class CallService: NSObject, ObservableObject {
     }
 
     private func handleIceCandidate(_ data: Data) {
-        guard let frame = try? JSONDecoder().decode(WsFrame<CallIceCandidatePayload>.self, from: data) else {
+        // Use CallIceCandidateReceivedPayload - server strips version/session/to fields when forwarding
+        guard let frame = try? JSONDecoder().decode(WsFrame<CallIceCandidateReceivedPayload>.self, from: data) else {
             print("ERROR: Failed to decode ICE candidate frame")
             return
         }
@@ -907,13 +1151,25 @@ final class CallService: NSObject, ObservableObject {
     private var lastCallEndReason: CallEndReason = .ended
 
     private func handleCallEnd(_ data: Data) {
-        guard let frame = try? JSONDecoder().decode(WsFrame<CallEndPayload>.self, from: data) else { return }
+        print("=== handleCallEnd (remote ended) ===")
+        // Use CallEndReceivedPayload - server strips version/session/to fields when forwarding
+        guard let frame = try? JSONDecoder().decode(WsFrame<CallEndReceivedPayload>.self, from: data) else {
+            print("Failed to decode call_end")
+            return
+        }
 
+        print("Call ended by remote - callId: \(frame.payload.callId), reason: \(frame.payload.reason)")
         lastCallEndReason = CallEndReason(rawValue: frame.payload.reason) ?? .ended
 
-        // Report to CallKit
-        if let callId = activeCallId {
-            callKitManager?.endCall(callId: callId)
+        // Report to CallKit that remote ended the call (not as local end)
+        let callIdToEnd = frame.payload.callId
+        print("Reporting call ended to CallKit: \(callIdToEnd)")
+        callKitManager?.reportCallEnded(callId: callIdToEnd, reason: .remoteEnded)
+
+        // Also end activeCallId if different
+        if let activeId = activeCallId, activeId != callIdToEnd {
+            print("Also reporting active call ended: \(activeId)")
+            callKitManager?.reportCallEnded(callId: activeId, reason: .remoteEnded)
         }
 
         cleanup()
@@ -929,16 +1185,88 @@ final class CallService: NSObject, ObservableObject {
 
     // MARK: - Cleanup
 
+    /// Clean up previous call state before starting a new call (no history recording)
+    private func cleanupPreviousCall() {
+        print("=== cleanupPreviousCall ===")
+
+        // Stop video capture first
+        if let capturer = videoCapturer {
+            capturer.stopCapture()
+            print("Stopped previous video capture")
+        }
+        videoCapturer = nil
+
+        // Remove video renderers
+        if let localTrack = localVideoTrack {
+            if let renderer = localVideoRenderer {
+                localTrack.remove(renderer)
+            }
+        }
+
+        if let remoteTrack = remoteVideoTrack {
+            if let renderer = remoteVideoRenderer {
+                remoteTrack.remove(renderer)
+            }
+        }
+
+        localVideoTrack = nil
+        localAudioTrack = nil
+        remoteVideoTrack = nil
+        remoteAudioTrack = nil
+
+        // Close peer connection
+        peerConnection?.close()
+        peerConnection = nil
+
+        pendingIceCandidates.removeAll()
+        pendingIncomingCall = nil
+        pendingOutgoingCall = nil
+        currentCallStartTime = nil
+
+        // Clear internal state
+        activeCallId = nil
+        activeCallPeerId = nil
+        activeCallIsVideo = false
+        activeCallIsOutgoing = false
+        isMuted = false
+        isSpeakerOn = false
+        isAudioSessionActivated = false
+
+        print("Previous call state cleaned up")
+    }
+
     private func cleanup() {
         // Record call to history before cleanup
         recordCallToHistory()
 
+        // Stop video capture
         videoCapturer?.stopCapture()
         videoCapturer = nil
 
-        if let renderer = localVideoRenderer {
-            localVideoTrack?.remove(renderer)
+        // Remove video renderers from tracks before cleaning up
+        if let localTrack = localVideoTrack {
+            if let renderer = localVideoRenderer {
+                localTrack.remove(renderer)
+            }
+            // Also remove from ActiveVideoCallState renderer
+            DispatchQueue.main.async {
+                if let renderer = ActiveVideoCallState.shared.localVideoView {
+                    localTrack.remove(renderer)
+                }
+            }
         }
+
+        if let remoteTrack = remoteVideoTrack {
+            if let renderer = remoteVideoRenderer {
+                remoteTrack.remove(renderer)
+            }
+            DispatchQueue.main.async {
+                if let renderer = ActiveVideoCallState.shared.remoteVideoView {
+                    remoteTrack.remove(renderer)
+                }
+            }
+        }
+
         localVideoTrack = nil
         localAudioTrack = nil
         remoteVideoTrack = nil
@@ -960,10 +1288,13 @@ final class CallService: NSObject, ObservableObject {
         isMuted = false
         isSpeakerOn = false
         lastCallEndReason = .ended
+        isAudioSessionActivated = false
 
-        // Hide outgoing call UI
+        // Hide all call UIs
         DispatchQueue.main.async {
             OutgoingCallState.shared.hide()
+            ActiveVideoCallState.shared.hide()
+            ActiveAudioCallState.shared.hide()
         }
 
         // NOTE: Audio session is managed by CallKit
@@ -989,10 +1320,16 @@ final class CallService: NSObject, ObservableObject {
         guard activeCallId != nil,
               let peerId = activeCallPeerId else { return }
 
+        print("=== recordCallToHistory ===")
+        print("  lastCallEndReason: \(lastCallEndReason)")
+        print("  currentCallStartTime: \(String(describing: currentCallStartTime))")
+        print("  activeCallIsOutgoing: \(activeCallIsOutgoing)")
+
         // Determine call outcome based on last end reason
         let outcome: CallRecord.CallOutcome
         switch lastCallEndReason {
         case .ended:
+            // If call was connected (has start time), it's completed
             outcome = currentCallStartTime != nil ? .completed : (activeCallIsOutgoing ? .cancelled : .missed)
         case .declined:
             outcome = activeCallIsOutgoing ? .noAnswer : .declined
@@ -1005,6 +1342,8 @@ final class CallService: NSObject, ObservableObject {
         case .cancelled:
             outcome = .cancelled
         }
+
+        print("  outcome: \(outcome)")
 
         // Calculate duration if call was connected
         var duration: TimeInterval? = nil
@@ -1056,14 +1395,31 @@ extension CallService: RTCPeerConnectionDelegate {
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {
+        print("Received remote stream with \(stream.videoTracks.count) video tracks and \(stream.audioTracks.count) audio tracks")
+
         if let videoTrack = stream.videoTracks.first {
             remoteVideoTrack = videoTrack
+
+            // Connect to legacy renderer if set
             if let renderer = remoteVideoRenderer {
                 videoTrack.add(renderer)
             }
+
+            // Connect to ActiveVideoCallState renderer
+            DispatchQueue.main.async {
+                if let renderer = ActiveVideoCallState.shared.remoteVideoView {
+                    videoTrack.add(renderer)
+                    print("Remote video track connected to ActiveVideoCallState renderer")
+                }
+            }
         }
+
         if let audioTrack = stream.audioTracks.first {
             remoteAudioTrack = audioTrack
+            // Enable if audio session is active
+            if isAudioSessionActivated {
+                audioTrack.isEnabled = true
+            }
         }
     }
 
@@ -1080,13 +1436,27 @@ extension CallService: RTCPeerConnectionDelegate {
                 OutgoingCallState.shared.updateStatus("Connecting...")
             }
         case .connected, .completed:
+            print("=== ICE CONNECTED - Call is now active ===")
             currentCallStartTime = Date()
             if let callId = activeCallId {
+                print("Reporting call connected to CallKit: \(callId)")
                 callKitManager?.reportCallConnected(callId: callId)
             }
-            // Hide outgoing call UI when connected (call is active)
+
+            // Hide outgoing call UI (animation is handled in OutgoingCallState)
             DispatchQueue.main.async {
+                print("Hiding OutgoingCallState...")
                 OutgoingCallState.shared.hide()
+                print("OutgoingCallState hidden")
+            }
+
+            // Show appropriate call screen
+            if activeCallIsVideo {
+                print("This is a video call - showing video call screen")
+                showVideoCallScreen()
+            } else {
+                print("This is an audio call - showing audio call screen")
+                showAudioCallScreen()
             }
         case .disconnected:
             print("ICE disconnected - attempting reconnection")
@@ -1204,23 +1574,188 @@ extension CallService: CallKitManagerDelegate {
 
     func callKitAudioSessionDidActivate() {
         // Audio session is now active - WebRTC can use audio
-        print("CallKit audio session activated")
+        print("=== CallKit audio session ACTIVATED ===")
+
+        isAudioSessionActivated = true
+
+        let rtcAudioSession = RTCAudioSession.sharedInstance()
 
         // Tell WebRTC's audio session that it's been activated by CallKit
-        RTCAudioSession.sharedInstance().audioSessionDidActivate(AVAudioSession.sharedInstance())
+        rtcAudioSession.lockForConfiguration()
+        rtcAudioSession.audioSessionDidActivate(AVAudioSession.sharedInstance())
+        rtcAudioSession.isAudioEnabled = true  // Enable audio output
+        rtcAudioSession.unlockForConfiguration()
 
-        // Ensure audio track is enabled
-        localAudioTrack?.isEnabled = true
-        print("Audio session activated - WebRTC audio enabled, track enabled: \(localAudioTrack?.isEnabled ?? false)")
+        // Enable audio tracks if they exist (they might be created later)
+        enableAudioTracksIfNeeded()
     }
 
     func callKitAudioSessionDidDeactivate() {
         // Audio session deactivated
-        print("CallKit audio session deactivated")
+        print("=== CallKit audio session DEACTIVATED ===")
 
-        // Tell WebRTC's audio session that it's been deactivated
-        RTCAudioSession.sharedInstance().audioSessionDidDeactivate(AVAudioSession.sharedInstance())
+        isAudioSessionActivated = false
+
+        let rtcAudioSession = RTCAudioSession.sharedInstance()
+
+        rtcAudioSession.lockForConfiguration()
+        rtcAudioSession.audioSessionDidDeactivate(AVAudioSession.sharedInstance())
+        rtcAudioSession.isAudioEnabled = false
+        rtcAudioSession.unlockForConfiguration()
 
         print("Audio session deactivated")
+    }
+
+    /// Enable audio tracks - called when CallKit activates and when tracks are created
+    private func enableAudioTracksIfNeeded() {
+        guard isAudioSessionActivated else {
+            print("Audio tracks: session not activated yet, will enable later")
+            return
+        }
+
+        localAudioTrack?.isEnabled = true
+        remoteAudioTrack?.isEnabled = true
+
+        print("Audio tracks enabled - local: \(localAudioTrack?.isEnabled ?? false), remote: \(remoteAudioTrack?.isEnabled ?? false)")
+
+        // Enable speaker for video calls
+        if activeCallIsVideo {
+            enableSpeakerForVideoCall()
+        }
+
+        // Also enable video tracks for video calls
+        if activeCallIsVideo {
+            enableVideoTracksIfNeeded()
+        }
+    }
+
+    /// Enable video tracks for video calls
+    private func enableVideoTracksIfNeeded() {
+        guard activeCallIsVideo else { return }
+
+        localVideoTrack?.isEnabled = true
+        remoteVideoTrack?.isEnabled = true
+
+        print("Video tracks enabled - local: \(localVideoTrack?.isEnabled ?? false), remote: \(remoteVideoTrack?.isEnabled ?? false)")
+    }
+
+    /// Enable speaker by default for video calls
+    private func enableSpeakerForVideoCall() {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.overrideOutputAudioPort(.speaker)
+            isSpeakerOn = true
+            print("Speaker enabled for video call")
+        } catch {
+            print("Failed to enable speaker for video call: \(error)")
+        }
+    }
+
+    /// Show video call screen when video call connects
+    private func showVideoCallScreen() {
+        guard let callId = activeCallId,
+              let peerId = activeCallPeerId else {
+            return
+        }
+
+        let contact = contacts.getContact(whisperId: peerId)
+        let peerName = contact?.displayName ?? peerId
+
+        DispatchQueue.main.async {
+            // Show video call UI
+            ActiveVideoCallState.shared.showVideoCall(callId: callId, peerName: peerName, peerId: peerId)
+
+            // Connect video renderers
+            self.connectVideoRenderers()
+        }
+    }
+
+    /// Connect video tracks to the renderers in ActiveVideoCallState
+    private func connectVideoRenderers() {
+        DispatchQueue.main.async {
+            // Connect local video
+            if let localTrack = self.localVideoTrack,
+               let localRenderer = ActiveVideoCallState.shared.localVideoView {
+                localTrack.add(localRenderer)
+                print("Local video renderer connected")
+            }
+
+            // Connect remote video
+            if let remoteTrack = self.remoteVideoTrack,
+               let remoteRenderer = ActiveVideoCallState.shared.remoteVideoView {
+                remoteTrack.add(remoteRenderer)
+                print("Remote video renderer connected")
+            }
+        }
+    }
+
+    /// Handle video call control actions from the UI
+    func handleVideoCallMute() {
+        toggleMute()
+        DispatchQueue.main.async {
+            ActiveVideoCallState.shared.isMuted = self.isMuted
+        }
+    }
+
+    func handleVideoCallCamera() {
+        toggleLocalVideo()
+        DispatchQueue.main.async {
+            ActiveVideoCallState.shared.isCameraOff = !(self.localVideoTrack?.isEnabled ?? false)
+        }
+    }
+
+    func handleVideoCallSwitchCamera() {
+        switchCamera()
+    }
+
+    func handleVideoCallSpeaker() {
+        toggleSpeaker()
+        DispatchQueue.main.async {
+            ActiveVideoCallState.shared.isSpeakerOn = self.isSpeakerOn
+        }
+    }
+
+    func handleVideoCallEnd() {
+        Task {
+            try? await endCall(reason: .ended)
+        }
+    }
+
+    // MARK: - Audio Call Screen
+
+    /// Show audio call screen when audio call connects
+    private func showAudioCallScreen() {
+        guard let callId = activeCallId,
+              let peerId = activeCallPeerId else {
+            return
+        }
+
+        let contact = contacts.getContact(whisperId: peerId)
+        let peerName = contact?.displayName ?? peerId
+
+        DispatchQueue.main.async {
+            ActiveAudioCallState.shared.showAudioCall(callId: callId, peerName: peerName, peerId: peerId)
+        }
+    }
+
+    /// Handle audio call control actions from the UI
+    func handleAudioCallMute() {
+        toggleMute()
+        DispatchQueue.main.async {
+            ActiveAudioCallState.shared.isMuted = self.isMuted
+        }
+    }
+
+    func handleAudioCallSpeaker() {
+        toggleSpeaker()
+        DispatchQueue.main.async {
+            ActiveAudioCallState.shared.isSpeakerOn = self.isSpeakerOn
+        }
+    }
+
+    func handleAudioCallEnd() {
+        Task {
+            try? await endCall(reason: .ended)
+        }
     }
 }

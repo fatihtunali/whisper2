@@ -4,6 +4,8 @@ import SwiftUI
 struct MainTabView: View {
     @StateObject private var chatsViewModel = ChatsViewModel()
     @StateObject private var outgoingCallState = OutgoingCallState.shared
+    @StateObject private var videoCallState = ActiveVideoCallState.shared
+    @StateObject private var audioCallState = ActiveAudioCallState.shared
     @State private var selectedTab = 0
 
     var body: some View {
@@ -48,15 +50,59 @@ struct MainTabView: View {
                     isVideo: outgoingCallState.isVideo,
                     onEndCall: {
                         Task {
-                            try? await CallService.shared.endCall()
+                            try? await CallService.shared.endCall(reason: .cancelled)
                         }
                     }
                 )
+                .transition(.opacity.combined(with: .scale(scale: 1.05)))
+                .zIndex(10) // Ensure it's above tabs
+            }
+
+            // Active video call UI - shown when video call connects
+            if videoCallState.isShowingVideoCall {
+                VideoCallView(
+                    state: videoCallState,
+                    onEndCall: {
+                        CallService.shared.handleVideoCallEnd()
+                    },
+                    onToggleMute: {
+                        CallService.shared.handleVideoCallMute()
+                    },
+                    onToggleCamera: {
+                        CallService.shared.handleVideoCallCamera()
+                    },
+                    onSwitchCamera: {
+                        CallService.shared.handleVideoCallSwitchCamera()
+                    },
+                    onToggleSpeaker: {
+                        CallService.shared.handleVideoCallSpeaker()
+                    }
+                )
                 .transition(.opacity)
+                .zIndex(11) // Above outgoing call UI
+            }
+
+            // Active audio call UI - shown when audio call connects
+            if audioCallState.isShowingAudioCall {
+                AudioCallView(
+                    state: audioCallState,
+                    onEndCall: {
+                        CallService.shared.handleAudioCallEnd()
+                    },
+                    onToggleMute: {
+                        CallService.shared.handleAudioCallMute()
+                    },
+                    onToggleSpeaker: {
+                        CallService.shared.handleAudioCallSpeaker()
+                    }
+                )
+                .transition(.opacity)
+                .zIndex(12) // Above video call UI
             }
         }
         // NOTE: Incoming calls are handled by CallKit natively
         // Outgoing calls need custom UI since CallKit doesn't provide one
+        // Video calls show custom UI when connected
     }
 }
 

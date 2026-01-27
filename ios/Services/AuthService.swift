@@ -100,8 +100,11 @@ final class AuthService: ObservableObject {
 
         // 8. Send push tokens now that we're authenticated
         await PushNotificationService.shared.sendTokensAfterAuth()
+
+        // 9. Fetch any pending messages from server
+        await fetchPendingMessagesAfterAuth()
     }
-    
+
     // MARK: - Recover Account
     
     func recoverAccount(mnemonic: String) async throws {
@@ -147,6 +150,20 @@ final class AuthService: ObservableObject {
 
         // Send push tokens now that we're authenticated
         await PushNotificationService.shared.sendTokensAfterAuth()
+
+        // Fetch any pending messages from server
+        await fetchPendingMessagesAfterAuth()
+    }
+
+    /// Fetch pending messages after authentication
+    private func fetchPendingMessagesAfterAuth() async {
+        do {
+            print("Fetching pending messages after authentication...")
+            try await MessagingService.shared.fetchPendingMessages()
+            print("Pending messages fetch requested")
+        } catch {
+            print("Failed to fetch pending messages: \(error)")
+        }
     }
 
     // MARK: - Logout

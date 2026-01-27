@@ -1,12 +1,5 @@
 import Foundation
 
-// MARK: - Base Protocol
-
-protocol VersionedPayload: Codable {
-    var protocolVersion: Int { get }
-    var cryptoVersion: Int { get }
-}
-
 // MARK: - Error Payload
 
 struct ErrorPayload: Codable {
@@ -23,7 +16,7 @@ struct RegisterBeginPayload: Codable {
     let whisperId: String?
     let deviceId: String
     let platform: String
-    
+
     init(deviceId: String, whisperId: String? = nil) {
         self.protocolVersion = Constants.protocolVersion
         self.cryptoVersion = Constants.cryptoVersion
@@ -51,7 +44,7 @@ struct RegisterProofPayload: Codable {
     let signature: String  // base64
     let pushToken: String?
     let voipToken: String?
-    
+
     init(
         challengeId: String,
         deviceId: String,
@@ -90,7 +83,7 @@ struct SessionRefreshPayload: Codable {
     let protocolVersion: Int
     let cryptoVersion: Int
     let sessionToken: String
-    
+
     init(sessionToken: String) {
         self.protocolVersion = Constants.protocolVersion
         self.cryptoVersion = Constants.cryptoVersion
@@ -108,7 +101,7 @@ struct LogoutPayload: Codable {
     let protocolVersion: Int
     let cryptoVersion: Int
     let sessionToken: String
-    
+
     init(sessionToken: String) {
         self.protocolVersion = Constants.protocolVersion
         self.cryptoVersion = Constants.cryptoVersion
@@ -159,7 +152,7 @@ struct SendMessagePayload: Codable {
     let replyTo: String?
     let reactions: [String: [String]]?  // emoji -> whisperId[]
     let attachment: AttachmentPointer?
-    
+
     init(
         sessionToken: String,
         messageId: String,
@@ -220,7 +213,7 @@ struct DeliveryReceiptPayload: Codable {
     let to: String
     let status: String
     let timestamp: Int64
-    
+
     init(sessionToken: String, messageId: String, from: String, to: String, status: String, timestamp: Int64) {
         self.protocolVersion = Constants.protocolVersion
         self.cryptoVersion = Constants.cryptoVersion
@@ -284,7 +277,7 @@ struct FetchPendingPayload: Codable {
     let sessionToken: String
     let cursor: String?
     let limit: Int?
-    
+
     init(sessionToken: String, cursor: String? = nil, limit: Int? = nil) {
         self.protocolVersion = Constants.protocolVersion
         self.cryptoVersion = Constants.cryptoVersion
@@ -307,7 +300,7 @@ struct GroupCreatePayload: Codable {
     let sessionToken: String
     let title: String
     let memberIds: [String]  // whisperId[]
-    
+
     init(sessionToken: String, title: String, memberIds: [String]) {
         self.protocolVersion = Constants.protocolVersion
         self.cryptoVersion = Constants.cryptoVersion
@@ -332,7 +325,7 @@ struct GroupUpdatePayload: Codable {
     let addMembers: [String]?
     let removeMembers: [String]?
     let title: String?
-    
+
     init(sessionToken: String, groupId: String, addMembers: [String]? = nil, removeMembers: [String]? = nil, title: String? = nil) {
         self.protocolVersion = Constants.protocolVersion
         self.cryptoVersion = Constants.cryptoVersion
@@ -358,7 +351,7 @@ struct GroupSendMessagePayload: Codable {
     let ciphertext: String
     let sig: String
     let attachment: AttachmentPointer?
-    
+
     init(
         sessionToken: String,
         groupId: String,
@@ -412,7 +405,7 @@ struct UpdateTokensPayload: Codable {
     let sessionToken: String
     let pushToken: String?
     let voipToken: String?  // iOS only
-    
+
     init(sessionToken: String, pushToken: String? = nil, voipToken: String? = nil) {
         self.protocolVersion = Constants.protocolVersion
         self.cryptoVersion = Constants.cryptoVersion
@@ -428,7 +421,7 @@ struct GetTurnCredentialsPayload: Codable {
     let protocolVersion: Int
     let cryptoVersion: Int
     let sessionToken: String
-    
+
     init(sessionToken: String) {
         self.protocolVersion = Constants.protocolVersion
         self.cryptoVersion = Constants.cryptoVersion
@@ -455,7 +448,7 @@ struct CallInitiatePayload: Codable {
     let nonce: String
     let ciphertext: String  // base64(sdpOfferString)
     let sig: String
-    
+
     init(
         sessionToken: String,
         callId: String,
@@ -491,13 +484,58 @@ struct CallIncomingPayload: Codable {
     let sig: String
 }
 
-struct CallAnswerPayload: Codable {
-    let protocolVersion: Int?
-    let cryptoVersion: Int?
-    let sessionToken: String?
+// MARK: - Received Call Payloads (server forwards without version/session/to fields)
+
+/// Received call_answer - server strips protocolVersion, cryptoVersion, sessionToken, to
+struct CallAnswerReceivedPayload: Codable {
     let callId: String
     let from: String
-    let to: String?
+    let timestamp: Int64
+    let nonce: String
+    let ciphertext: String
+    let sig: String
+}
+
+/// Received call_ice_candidate - server strips protocolVersion, cryptoVersion, sessionToken, to
+struct CallIceCandidateReceivedPayload: Codable {
+    let callId: String
+    let from: String
+    let timestamp: Int64
+    let nonce: String
+    let ciphertext: String
+    let sig: String
+}
+
+/// Received call_end - server strips protocolVersion, cryptoVersion, sessionToken, to
+struct CallEndReceivedPayload: Codable {
+    let callId: String
+    let from: String
+    let reason: String
+    // These may or may not be present when forwarded
+    let timestamp: Int64?
+    let nonce: String?
+    let ciphertext: String?
+    let sig: String?
+}
+
+/// Received call_ringing - server strips protocolVersion, cryptoVersion, sessionToken, to
+struct CallRingingReceivedPayload: Codable {
+    let callId: String
+    let from: String
+    // These may or may not be present when forwarded
+    let timestamp: Int64?
+    let nonce: String?
+    let ciphertext: String?
+    let sig: String?
+}
+
+struct CallAnswerPayload: Codable {
+    let protocolVersion: Int
+    let cryptoVersion: Int
+    let sessionToken: String
+    let callId: String
+    let from: String
+    let to: String
     let timestamp: Int64
     let nonce: String
     let ciphertext: String  // encrypted SDP answer
@@ -527,12 +565,12 @@ struct CallAnswerPayload: Codable {
 }
 
 struct CallIceCandidatePayload: Codable {
-    let protocolVersion: Int?
-    let cryptoVersion: Int?
-    let sessionToken: String?
+    let protocolVersion: Int
+    let cryptoVersion: Int
+    let sessionToken: String
     let callId: String
     let from: String
-    let to: String?
+    let to: String
     let timestamp: Int64
     let nonce: String
     let ciphertext: String  // encrypted ICE candidate
@@ -573,7 +611,7 @@ struct CallEndPayload: Codable {
     let ciphertext: String
     let sig: String
     let reason: String  // ended | declined | busy | timeout | failed
-    
+
     init(
         sessionToken: String,
         callId: String,
@@ -610,7 +648,7 @@ struct CallRingingPayload: Codable {
     let nonce: String
     let ciphertext: String
     let sig: String
-    
+
     init(
         sessionToken: String,
         callId: String,
@@ -647,7 +685,7 @@ struct TypingPayload: Codable {
     let sessionToken: String
     let to: String
     let isTyping: Bool
-    
+
     init(sessionToken: String, to: String, isTyping: Bool) {
         self.protocolVersion = Constants.protocolVersion
         self.cryptoVersion = Constants.cryptoVersion

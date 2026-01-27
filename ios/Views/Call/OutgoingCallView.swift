@@ -111,7 +111,10 @@ class OutgoingCallState: ObservableObject {
         self.peerId = peerId
         self.isVideo = isVideo
         self.callStatus = "Calling..."
-        self.isShowingOutgoingCall = true
+
+        withAnimation(.easeIn(duration: 0.3)) {
+            self.isShowingOutgoingCall = true
+        }
 
         // Start ringback tone
         ringbackPlayer.start()
@@ -127,10 +130,16 @@ class OutgoingCallState: ObservableObject {
     }
 
     func hide() {
-        self.isShowingOutgoingCall = false
+        print("OutgoingCallState.hide() called")
 
-        // Stop ringback tone when call UI hides
+        // Stop ringback tone first
         ringbackPlayer.stop()
+
+        withAnimation(.easeOut(duration: 0.3)) {
+            self.isShowingOutgoingCall = false
+        }
+
+        print("OutgoingCallState.hide() - isShowingOutgoingCall set to false")
     }
 }
 

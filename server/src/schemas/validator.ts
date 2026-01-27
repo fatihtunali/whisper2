@@ -95,12 +95,13 @@ validators.set('call_end', ajv.compile(callEndSchema));
 validators.set('typing', ajv.compile({
   type: 'object',
   properties: {
+    protocolVersion: { type: 'integer', const: 1 },
+    cryptoVersion: { type: 'integer', const: 1 },
     sessionToken: { type: 'string', minLength: 1 },
     to: { type: 'string', minLength: 1 },
     isTyping: { type: 'boolean' },
-    v: { type: 'number' },
   },
-  required: ['sessionToken', 'to', 'isTyping'],
+  required: ['protocolVersion', 'cryptoVersion', 'sessionToken', 'to', 'isTyping'],
   additionalProperties: false,
 }));
 

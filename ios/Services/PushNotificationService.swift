@@ -2,9 +2,11 @@ import Foundation
 import UIKit
 import UserNotifications
 import PushKit
+import CallKit
 import Combine
 
 /// Service for managing push notifications (APNS) and VoIP push (PushKit)
+/// iOS 26 REQUIREMENT: VoIP push MUST report a call to CallKit or app will be terminated
 final class PushNotificationService: NSObject, ObservableObject {
     static let shared = PushNotificationService()
 
@@ -19,6 +21,16 @@ final class PushNotificationService: NSObject, ObservableObject {
 
     // Callback for incoming VoIP push (call)
     var onIncomingCall: ((CallIncomingPayload) -> Void)?
+
+    // Fallback CXProvider for iOS 26 compliance
+    // If onIncomingCall callback fails, we use this to report a fallback call
+    private lazy var fallbackProvider: CXProvider = {
+        let config = CXProviderConfiguration()
+        config.supportsVideo = true
+        config.maximumCallsPerCallGroup = 1
+        config.supportedHandleTypes = [.generic]
+        return CXProvider(configuration: config)
+    }()
 
     private override init() {
         super.init()
@@ -62,7 +74,6 @@ final class PushNotificationService: NSObject, ObservableObject {
         apnsToken = token
         print("APNS Token: \(token)")
 
-        // Send to server
         Task {
             await sendTokensToServer()
         }
@@ -88,7 +99,6 @@ final class PushNotificationService: NSObject, ObservableObject {
             return
         }
 
-        // Only send if we have at least one token
         guard apnsToken != nil || voipToken != nil else {
             return
         }
@@ -118,12 +128,9 @@ final class PushNotificationService: NSObject, ObservableObject {
     // MARK: - WebSocket Listener
 
     private func setupWebSocketListener() {
-        // Re-send tokens when we reconnect AND are authenticated
-        // Note: Initial token send is done via sendTokensAfterAuth() after login
         auth.$isAuthenticated
             .combineLatest(ws.$connectionState)
             .sink { [weak self] (isAuthenticated, connectionState) in
-                // Only send if both authenticated AND connected
                 if isAuthenticated && connectionState == .connected {
                     Task {
                         await self?.sendTokensToServer()
@@ -136,7 +143,6 @@ final class PushNotificationService: NSObject, ObservableObject {
     // MARK: - Handle Incoming Notifications
 
     func handleNotification(_ userInfo: [AnyHashable: Any], completionHandler: @escaping () -> Void) {
-        // Parse notification type
         guard let type = userInfo["type"] as? String else {
             completionHandler()
             return
@@ -157,7 +163,6 @@ final class PushNotificationService: NSObject, ObservableObject {
     }
 
     private func handleMessageNotification(_ userInfo: [AnyHashable: Any]) {
-        // Post notification to update UI
         NotificationCenter.default.post(
             name: NSNotification.Name("NewMessageNotification"),
             object: nil,
@@ -166,7 +171,6 @@ final class PushNotificationService: NSObject, ObservableObject {
     }
 
     private func handleCallNotification(_ userInfo: [AnyHashable: Any]) {
-        // VoIP calls are handled via PushKit, this is for missed call notifications
         NotificationCenter.default.post(
             name: NSNotification.Name("CallNotification"),
             object: nil,
@@ -193,6 +197,65 @@ final class PushNotificationService: NSObject, ObservableObject {
     func clearBadge() {
         UNUserNotificationCenter.current().setBadgeCount(0)
     }
+
+    // MARK: - UUID Generation
+
+    /// Generate UUID with CFUUID fallback for guaranteed non-nil result
+    /// Uses CFUUIDCreate pattern for extra safety
+    private func generateUUID() -> UUID {
+        // Primary: Swift UUID (should never fail)
+        let swiftUUID = UUID()
+
+        // Fallback: CFUUID for guaranteed generation
+        let cfUUID = CFUUIDCreate(kCFAllocatorDefault)
+        if let cfString = CFUUIDCreateString(kCFAllocatorDefault, cfUUID) {
+            let uuidString = cfString as String
+            if let uuid = UUID(uuidString: uuidString) {
+                return uuid
+            }
+        }
+
+        return swiftUUID
+    }
+
+    // MARK: - Fallback CallKit Reporting
+
+    /// Report a fallback call directly to CallKit when normal flow fails
+    /// This ensures iOS 26 compliance - VoIP push MUST report a call
+    private func reportFallbackCall(callId: String, handle: String, isVideo: Bool, endImmediately: Bool) {
+        // Convert callId to UUID, or generate a new one
+        let callUUID: UUID
+        if let uuid = UUID(uuidString: callId) {
+            callUUID = uuid
+        } else {
+            callUUID = generateUUID()
+        }
+
+        let update = CXCallUpdate()
+        update.remoteHandle = CXHandle(type: .generic, value: handle)
+        update.localizedCallerName = handle == "Unknown" ? "Unknown Caller" : handle
+        update.hasVideo = isVideo
+        update.supportsHolding = false
+        update.supportsGrouping = false
+        update.supportsUngrouping = false
+        update.supportsDTMF = false
+
+        print("FALLBACK: Reporting call to CallKit - UUID: \(callUUID), handle: \(handle)")
+
+        fallbackProvider.reportNewIncomingCall(with: callUUID, update: update) { [weak self] error in
+            if let error = error {
+                print("FALLBACK: Failed to report incoming call: \(error)")
+            } else {
+                print("FALLBACK: Incoming call reported successfully - UUID: \(callUUID)")
+
+                // If this was a fallback call due to parse failure, end it immediately
+                if endImmediately {
+                    print("FALLBACK: Ending fallback call immediately...")
+                    self?.fallbackProvider.reportCall(with: callUUID, endedAt: Date(), reason: .failed)
+                }
+            }
+        }
+    }
 }
 
 // MARK: - PKPushRegistryDelegate (VoIP Push)
@@ -206,48 +269,70 @@ extension PushNotificationService: PKPushRegistryDelegate {
         voipToken = token
         print("VoIP Token: \(token)")
 
-        // Send to server
         Task {
             await sendTokensToServer()
         }
     }
 
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
+        print("=== VoIP PUSH RECEIVED ===")
+        print("Type: \(type.rawValue)")
+
         guard type == .voIP else {
+            print("Not a VoIP push, ignoring")
             completion()
             return
         }
 
-        // Parse the call payload from VoIP push
+        // iOS 26 REQUIREMENT: MUST report a call to CallKit on VoIP push or app will be terminated
+        // We MUST call reportNewIncomingCall BEFORE calling completion()
+
         let dictionaryPayload = payload.dictionaryPayload
+        print("VoIP push payload: \(dictionaryPayload)")
 
-        guard let callData = dictionaryPayload["call"] as? [String: Any],
-              let callId = callData["callId"] as? String,
-              let from = callData["from"] as? String else {
-            print("Invalid VoIP push payload")
-            completion()
-            return
+        // Try to parse call data
+        if let callData = dictionaryPayload["call"] as? [String: Any],
+           let callId = callData["callId"] as? String,
+           let from = callData["from"] as? String {
+
+            print("VoIP push parsed: callId=\(callId), from=\(from)")
+
+            let isVideo = callData["isVideo"] as? Bool ?? false
+            let timestamp = callData["timestamp"] as? Int64 ?? Int64(Date().timeIntervalSince1970 * 1000)
+            let nonce = callData["nonce"] as? String ?? ""
+            let ciphertext = callData["ciphertext"] as? String ?? ""
+            let sig = callData["sig"] as? String ?? ""
+
+            let callPayload = CallIncomingPayload(
+                callId: callId,
+                from: from,
+                isVideo: isVideo,
+                timestamp: timestamp,
+                nonce: nonce,
+                ciphertext: ciphertext,
+                sig: sig
+            )
+
+            // Notify CallService via callback
+            if let callback = onIncomingCall {
+                print("Invoking onIncomingCall callback...")
+                callback(callPayload)
+                print("onIncomingCall callback invoked successfully")
+            } else {
+                // FALLBACK: Callback is nil - report directly to CallKit
+                print("WARNING: onIncomingCall callback is nil! Using fallback...")
+                reportFallbackCall(callId: callId, handle: from, isVideo: isVideo, endImmediately: false)
+            }
+
+        } else {
+            // FALLBACK: Failed to parse payload - MUST still report a call to CallKit
+            print("ERROR: Invalid VoIP push payload - missing call data")
+            print("Available keys: \(dictionaryPayload.keys)")
+            print("Using fallback to avoid iOS 26 termination...")
+
+            let fallbackUUID = generateUUID()
+            reportFallbackCall(callId: fallbackUUID.uuidString, handle: "Unknown", isVideo: false, endImmediately: true)
         }
-
-        let isVideo = callData["isVideo"] as? Bool ?? false
-        let timestamp = callData["timestamp"] as? Int64 ?? Int64(Date().timeIntervalSince1970 * 1000)
-        let nonce = callData["nonce"] as? String ?? ""
-        let ciphertext = callData["ciphertext"] as? String ?? ""
-        let sig = callData["sig"] as? String ?? ""
-
-        // Create CallIncomingPayload matching protocol
-        let callPayload = CallIncomingPayload(
-            callId: callId,
-            from: from,
-            isVideo: isVideo,
-            timestamp: timestamp,
-            nonce: nonce,
-            ciphertext: ciphertext,
-            sig: sig
-        )
-
-        // Notify CallKit/CallService
-        onIncomingCall?(callPayload)
 
         completion()
     }
@@ -263,12 +348,8 @@ extension PushNotificationService: PKPushRegistryDelegate {
 
 extension PushNotificationService: UNUserNotificationCenterDelegate {
 
-    // Called when notification received while app is in foreground
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         let userInfo = notification.request.content.userInfo
-
-        // Check if we should show the notification
-        // For example, don't show if user is already in that chat
         let showNotification = shouldShowNotification(userInfo)
 
         if showNotification {
@@ -278,19 +359,14 @@ extension PushNotificationService: UNUserNotificationCenterDelegate {
         }
     }
 
-    // Called when user taps on notification
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
         let userInfo = response.notification.request.content.userInfo
-
-        // Route to appropriate screen
         handleNotificationTap(userInfo)
-
         completionHandler()
     }
 
     private func shouldShowNotification(_ userInfo: [AnyHashable: Any]) -> Bool {
         // TODO: Check if user is currently viewing the relevant chat/call
-        // For now, always show
         return true
     }
 
@@ -307,7 +383,6 @@ extension PushNotificationService: UNUserNotificationCenterDelegate {
                 )
             }
         case "call":
-            // Open call screen or show missed call
             break
         case "group":
             if let groupId = userInfo["groupId"] as? String {
