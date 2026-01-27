@@ -288,8 +288,16 @@ struct AudioMessageBubbleContent: View {
             return
         }
 
-        // For outgoing messages, we can't re-download (fileKeyBox was encrypted for recipient only)
+        // For outgoing messages, check the outgoing cache first
         if isOutgoing {
+            if let cachedURL = AttachmentService.shared.getOutgoingFileURL(forObjectKey: attachment.objectKey) {
+                audioURL = cachedURL
+                if duration == 0 {
+                    duration = audioService.getAudioDuration(url: cachedURL) ?? 0
+                }
+                audioService.play(url: cachedURL, messageId: message.id)
+                return
+            }
             downloadError = "File unavailable"
             return
         }
@@ -512,13 +520,19 @@ struct ImageMessageBubble: View {
 
         // Check if we have an attachment to download
         if let attachment = message.attachment {
-            // For outgoing, we can't decrypt (encrypted for recipient)
+            // For outgoing, check the outgoing cache first
             if isOutgoing {
+                if let cachedURL = AttachmentService.shared.getOutgoingFileURL(forObjectKey: attachment.objectKey),
+                   let data = try? Data(contentsOf: cachedURL),
+                   let loadedImage = UIImage(data: data) {
+                    image = loadedImage
+                    return
+                }
                 downloadError = "Image unavailable"
                 return
             }
 
-            // Get sender's public key
+            // For incoming: use sender's public key to decrypt
             guard let senderPublicKey = ContactsService.shared.getPublicKey(for: message.from) else {
                 downloadError = "Missing sender key"
                 return
@@ -782,12 +796,23 @@ struct VideoMessageBubble: View {
         guard videoURL == nil && !isDownloading else { return }
 
         if let attachment = message.attachment {
-            // For outgoing, we can't decrypt
+            // For outgoing, check the outgoing cache first
             if isOutgoing {
+                if let cachedURL = AttachmentService.shared.getOutgoingFileURL(forObjectKey: attachment.objectKey) {
+                    videoURL = cachedURL
+                    Task {
+                        let thumbImage = await generateThumbnail(from: cachedURL)
+                        await MainActor.run {
+                            thumbnail = thumbImage
+                        }
+                    }
+                    return
+                }
                 downloadError = "Video unavailable"
                 return
             }
 
+            // For incoming: use sender's public key to decrypt
             guard let senderPublicKey = ContactsService.shared.getPublicKey(for: message.from) else {
                 downloadError = "Missing sender key"
                 return
@@ -1015,11 +1040,17 @@ struct FileMessageBubble: View {
         guard fileURL == nil && !isDownloading else { return }
 
         if let attachment = message.attachment {
+            // For outgoing, check the outgoing cache first
             if isOutgoing {
+                if let cachedURL = AttachmentService.shared.getOutgoingFileURL(forObjectKey: attachment.objectKey) {
+                    fileURL = cachedURL
+                    return
+                }
                 downloadError = "File unavailable"
                 return
             }
 
+            // For incoming: use sender's public key to decrypt
             guard let senderPublicKey = ContactsService.shared.getPublicKey(for: message.from) else {
                 downloadError = "Missing key"
                 return

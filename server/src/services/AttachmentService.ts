@@ -31,25 +31,72 @@ const PRESIGN_TTL_SEC = parseInt(process.env.PRESIGN_TTL_SEC || '300', 10); // 5
 const ATTACHMENT_TTL_DAYS = parseInt(process.env.ATTACHMENT_TTL_DAYS || '30', 10);
 const ATTACHMENT_TTL_MS = ATTACHMENT_TTL_DAYS * 24 * 60 * 60 * 1000;
 
-// Allowed content types for original files
+// Allowed content types for original files (iOS + Android compatibility)
 const ALLOWED_CONTENT_TYPES = new Set([
+  // Images
   'image/jpeg',
   'image/png',
   'image/gif',
   'image/webp',
   'image/heic',
+  'image/heif',
+  'image/bmp',
+  'image/tiff',
+  'image/svg+xml',
+
+  // Videos - iOS
   'video/mp4',
   'video/quicktime',
   'video/mov',
+  'video/x-m4v',
+  'video/m4v',
+
+  // Videos - Android & cross-platform
+  'video/3gpp',
+  'video/3gpp2',
+  'video/webm',
+  'video/mpeg',
+  'video/x-msvideo',  // AVI
+  'video/avi',
+  'video/x-matroska', // MKV
+  'video/ogg',
+
+  // Audio - iOS
   'audio/aac',
   'audio/m4a',
   'audio/x-m4a',
   'audio/mp4',
-  'audio/mpeg',
+  'audio/x-caf',      // Core Audio Format
+  'audio/aiff',
+  'audio/x-aiff',
+
+  // Audio - Android & cross-platform
+  'audio/mpeg',       // MP3
+  'audio/mp3',
   'audio/ogg',
   'audio/wav',
   'audio/x-wav',
+  'audio/webm',
+  'audio/3gpp',
+  'audio/amr',
+  'audio/flac',
+  'audio/x-flac',
+
+  // Documents
   'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'text/plain',
+  'text/csv',
+  'application/zip',
+  'application/x-zip-compressed',
+  'application/json',
+
+  // Fallback
   'application/octet-stream',
 ]);
 

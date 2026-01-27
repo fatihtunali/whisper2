@@ -20,6 +20,9 @@ final class AttachmentService: ObservableObject {
     // Cache for downloaded files
     private var downloadCache: [String: URL] = [:]
 
+    // Cache for outgoing files (so sender can view their own sent attachments)
+    private var outgoingCache: [String: URL] = [:]
+
     // Persistent storage directory for attachments
     private lazy var attachmentsDirectory: URL = {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -52,28 +55,50 @@ final class AttachmentService: ObservableObject {
     // MARK: - Cache Persistence
 
     private let cacheIndexKey = "whisper2.attachments.cache"
+    private let outgoingCacheIndexKey = "whisper2.attachments.outgoing.cache"
 
     private func loadCacheIndex() {
-        guard let data = KeychainService.shared.getData(for: cacheIndexKey),
-              let index = try? JSONDecoder().decode([String: String].self, from: data) else {
-            return
+        // Load download cache
+        if let data = KeychainService.shared.getData(for: cacheIndexKey),
+           let index = try? JSONDecoder().decode([String: String].self, from: data) {
+            // Rebuild cache from stored paths
+            for (objectKey, fileName) in index {
+                let fileURL = attachmentsDirectory.appendingPathComponent(fileName)
+                if FileManager.default.fileExists(atPath: fileURL.path) {
+                    downloadCache[objectKey] = fileURL
+                }
+            }
         }
-        // Rebuild cache from stored paths
-        for (objectKey, fileName) in index {
-            let fileURL = attachmentsDirectory.appendingPathComponent(fileName)
-            if FileManager.default.fileExists(atPath: fileURL.path) {
-                downloadCache[objectKey] = fileURL
+
+        // Load outgoing cache
+        if let data = KeychainService.shared.getData(for: outgoingCacheIndexKey),
+           let index = try? JSONDecoder().decode([String: String].self, from: data) {
+            for (objectKey, fileName) in index {
+                let fileURL = attachmentsDirectory.appendingPathComponent(fileName)
+                if FileManager.default.fileExists(atPath: fileURL.path) {
+                    outgoingCache[objectKey] = fileURL
+                }
             }
         }
     }
 
     private func saveCacheIndex() {
+        // Save download cache
         var index: [String: String] = [:]
         for (objectKey, url) in downloadCache {
             index[objectKey] = url.lastPathComponent
         }
         if let data = try? JSONEncoder().encode(index) {
             KeychainService.shared.save(data: data, for: cacheIndexKey)
+        }
+
+        // Save outgoing cache
+        var outgoingIndex: [String: String] = [:]
+        for (objectKey, url) in outgoingCache {
+            outgoingIndex[objectKey] = url.lastPathComponent
+        }
+        if let data = try? JSONEncoder().encode(outgoingIndex) {
+            KeychainService.shared.save(data: data, for: outgoingCacheIndexKey)
         }
     }
 
@@ -360,6 +385,43 @@ final class AttachmentService: ObservableObject {
         }
     }
 
+    // MARK: - Outgoing File Cache
+
+    /// Cache an outgoing file so the sender can view it later
+    /// Call this BEFORE uploading and deleting the original file
+    func cacheOutgoingFile(_ fileURL: URL, forObjectKey objectKey: String) throws {
+        // Read file data
+        let fileData = try Data(contentsOf: fileURL)
+
+        // Determine file extension
+        let ext = fileURL.pathExtension.isEmpty ? "bin" : fileURL.pathExtension
+        let fileName = "\(UUID().uuidString).\(ext)"
+        let cachedURL = attachmentsDirectory.appendingPathComponent(fileName)
+
+        // Write to cache
+        try fileData.write(to: cachedURL)
+
+        // Store in cache dictionary
+        outgoingCache[objectKey] = cachedURL
+        saveCacheIndex()
+
+        print("[AttachmentService] Cached outgoing file: \(objectKey) -> \(cachedURL.lastPathComponent)")
+    }
+
+    /// Get the cached URL for an outgoing attachment
+    func getOutgoingFileURL(forObjectKey objectKey: String) -> URL? {
+        if let url = outgoingCache[objectKey],
+           FileManager.default.fileExists(atPath: url.path) {
+            return url
+        }
+        return nil
+    }
+
+    /// Check if an outgoing file is cached
+    func hasOutgoingFileCache(forObjectKey objectKey: String) -> Bool {
+        return getOutgoingFileURL(forObjectKey: objectKey) != nil
+    }
+
     // MARK: - Helpers
 
     private func getContentType(for url: URL) -> String {
@@ -367,16 +429,7 @@ final class AttachmentService: ObservableObject {
 
         // Use explicit mappings for known types to ensure server compatibility
         switch ext {
-        case "m4a":
-            return "audio/m4a"
-        case "mp3":
-            return "audio/mpeg"
-        case "aac":
-            return "audio/aac"
-        case "ogg":
-            return "audio/ogg"
-        case "wav":
-            return "audio/wav"
+        // Images
         case "jpg", "jpeg":
             return "image/jpeg"
         case "png":
@@ -387,12 +440,83 @@ final class AttachmentService: ObservableObject {
             return "image/webp"
         case "heic":
             return "image/heic"
+        case "heif":
+            return "image/heif"
+        case "bmp":
+            return "image/bmp"
+        case "tiff", "tif":
+            return "image/tiff"
+        case "svg":
+            return "image/svg+xml"
+
+        // Videos - iOS
         case "mp4":
             return "video/mp4"
         case "mov":
             return "video/quicktime"
+        case "m4v":
+            return "video/x-m4v"
+
+        // Videos - Android & cross-platform
+        case "3gp":
+            return "video/3gpp"
+        case "3g2":
+            return "video/3gpp2"
+        case "webm":
+            return "video/webm"
+        case "mpeg", "mpg":
+            return "video/mpeg"
+        case "avi":
+            return "video/x-msvideo"
+        case "mkv":
+            return "video/x-matroska"
+
+        // Audio - iOS
+        case "m4a":
+            return "audio/m4a"
+        case "aac":
+            return "audio/aac"
+        case "caf":
+            return "audio/x-caf"
+        case "aiff", "aif":
+            return "audio/aiff"
+
+        // Audio - cross-platform
+        case "mp3":
+            return "audio/mpeg"
+        case "ogg", "oga":
+            return "audio/ogg"
+        case "wav":
+            return "audio/wav"
+        case "flac":
+            return "audio/flac"
+        case "amr":
+            return "audio/amr"
+
+        // Documents
         case "pdf":
             return "application/pdf"
+        case "doc":
+            return "application/msword"
+        case "docx":
+            return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        case "xls":
+            return "application/vnd.ms-excel"
+        case "xlsx":
+            return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        case "ppt":
+            return "application/vnd.ms-powerpoint"
+        case "pptx":
+            return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        case "txt":
+            return "text/plain"
+        case "csv":
+            return "text/csv"
+        case "zip":
+            return "application/zip"
+        case "json":
+            return "application/json"
+
         default:
             // Fallback to UTType
             if let utType = UTType(filenameExtension: ext) {
@@ -408,16 +532,57 @@ final class AttachmentService: ObservableObject {
             return ext
         }
 
-        // Fallback mappings
+        // Fallback mappings for all supported types
         switch contentType {
+        // Images
         case "image/jpeg": return "jpg"
         case "image/png": return "png"
         case "image/gif": return "gif"
+        case "image/webp": return "webp"
+        case "image/heic": return "heic"
+        case "image/heif": return "heif"
+        case "image/bmp": return "bmp"
+        case "image/tiff": return "tiff"
+        case "image/svg+xml": return "svg"
+
+        // Videos
         case "video/mp4": return "mp4"
-        case "video/quicktime": return "mov"
-        case "audio/mpeg": return "mp3"
-        case "audio/m4a": return "m4a"
+        case "video/quicktime", "video/mov": return "mov"
+        case "video/x-m4v", "video/m4v": return "m4v"
+        case "video/3gpp": return "3gp"
+        case "video/3gpp2": return "3g2"
+        case "video/webm": return "webm"
+        case "video/mpeg": return "mpeg"
+        case "video/x-msvideo", "video/avi": return "avi"
+        case "video/x-matroska": return "mkv"
+        case "video/ogg": return "ogv"
+
+        // Audio
+        case "audio/m4a", "audio/x-m4a", "audio/mp4": return "m4a"
+        case "audio/aac": return "aac"
+        case "audio/mpeg", "audio/mp3": return "mp3"
+        case "audio/ogg": return "ogg"
+        case "audio/wav", "audio/x-wav": return "wav"
+        case "audio/flac", "audio/x-flac": return "flac"
+        case "audio/amr": return "amr"
+        case "audio/x-caf": return "caf"
+        case "audio/aiff", "audio/x-aiff": return "aiff"
+        case "audio/webm": return "weba"
+        case "audio/3gpp": return "3gp"
+
+        // Documents
         case "application/pdf": return "pdf"
+        case "application/msword": return "doc"
+        case "application/vnd.openxmlformats-officedocument.wordprocessingml.document": return "docx"
+        case "application/vnd.ms-excel": return "xls"
+        case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": return "xlsx"
+        case "application/vnd.ms-powerpoint": return "ppt"
+        case "application/vnd.openxmlformats-officedocument.presentationml.presentation": return "pptx"
+        case "text/plain": return "txt"
+        case "text/csv": return "csv"
+        case "application/zip", "application/x-zip-compressed": return "zip"
+        case "application/json": return "json"
+
         default: return "bin"
         }
     }
@@ -453,9 +618,19 @@ final class AttachmentService: ObservableObject {
         KeychainService.shared.delete(key: cacheIndexKey)
     }
 
+    /// Clear outgoing file cache
+    func clearOutgoingCache() {
+        for url in outgoingCache.values {
+            try? FileManager.default.removeItem(at: url)
+        }
+        outgoingCache.removeAll()
+        KeychainService.shared.delete(key: outgoingCacheIndexKey)
+    }
+
     /// Clear all attachments (for wipe data)
     func clearAllAttachments() {
         clearCache()
+        clearOutgoingCache()
         // Also remove the entire attachments directory
         try? FileManager.default.removeItem(at: attachmentsDirectory)
         // Recreate the directory

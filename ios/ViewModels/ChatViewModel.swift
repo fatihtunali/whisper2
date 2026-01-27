@@ -160,6 +160,9 @@ final class ChatViewModel: ObservableObject {
                     messageId: messageId
                 )
 
+                // Cache outgoing file so sender can view it later
+                try? AttachmentService.shared.cacheOutgoingFile(url, forObjectKey: pointer.objectKey)
+
                 // Content contains duration for display purposes
                 let content = "\(Int(duration))"
 
@@ -171,7 +174,7 @@ final class ChatViewModel: ObservableObject {
                     attachment: pointer
                 )
 
-                // Clean up local file
+                // Clean up local file (cached copy already saved)
                 try? FileManager.default.removeItem(at: url)
             } catch {
                 self.error = error.localizedDescription
@@ -228,6 +231,9 @@ final class ChatViewModel: ObservableObject {
                     messageId: messageId
                 )
 
+                // Cache outgoing file so sender can view it later
+                try? AttachmentService.shared.cacheOutgoingFile(url, forObjectKey: pointer.objectKey)
+
                 // Determine content type
                 let mimeType = getContentType(for: url)
                 let messageContentType: String
@@ -251,7 +257,7 @@ final class ChatViewModel: ObservableObject {
                     attachment: pointer
                 )
 
-                // Clean up local file
+                // Clean up local file (cached copy already saved)
                 try? FileManager.default.removeItem(at: url)
             } catch {
                 self.error = error.localizedDescription
@@ -262,14 +268,38 @@ final class ChatViewModel: ObservableObject {
     private func getContentType(for url: URL) -> String {
         let ext = url.pathExtension.lowercased()
         switch ext {
+        // Images
         case "jpg", "jpeg": return "image/jpeg"
         case "png": return "image/png"
         case "gif": return "image/gif"
+        case "webp": return "image/webp"
+        case "heic": return "image/heic"
+        case "heif": return "image/heif"
+
+        // Videos
         case "mp4": return "video/mp4"
         case "mov": return "video/quicktime"
+        case "m4v": return "video/x-m4v"
+        case "3gp": return "video/3gpp"
+        case "webm": return "video/webm"
+        case "avi": return "video/x-msvideo"
+        case "mkv": return "video/x-matroska"
+
+        // Audio
         case "m4a": return "audio/m4a"
         case "mp3": return "audio/mpeg"
+        case "aac": return "audio/aac"
+        case "wav": return "audio/wav"
+        case "ogg": return "audio/ogg"
+        case "flac": return "audio/flac"
+
+        // Documents
         case "pdf": return "application/pdf"
+        case "doc": return "application/msword"
+        case "docx": return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        case "txt": return "text/plain"
+        case "zip": return "application/zip"
+
         default: return "application/octet-stream"
         }
     }
