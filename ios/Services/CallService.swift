@@ -1220,7 +1220,7 @@ extension CallService: CallKitManagerDelegate {
         do {
             // Tell WebRTC that audio session is already configured by CallKit
             try rtcAudioSession.setCategory(AVAudioSession.Category.playAndRecord.rawValue,
-                                            with: [.allowBluetooth, .defaultToSpeaker])
+                                            with: .allowBluetooth)
             try rtcAudioSession.setMode(AVAudioSession.Mode.voiceChat.rawValue)
             try rtcAudioSession.setActive(true)
             print("RTCAudioSession configured successfully")
