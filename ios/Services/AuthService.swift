@@ -111,14 +111,21 @@ final class AuthService: ObservableObject {
     // MARK: - Register New Account
     
     func registerNewAccount(mnemonic: String) async throws {
+        print("[AuthService] Starting new account registration...")
+
         // 1. Derive keys from mnemonic
+        print("[AuthService] Step 1: Deriving keys from mnemonic...")
         let derivedKeys = try KeyDerivation.deriveKeys(from: mnemonic)
-        
+        print("[AuthService] Keys derived successfully")
+
         // 2. Generate key pairs
+        print("[AuthService] Step 2: Generating key pairs...")
         let encKP = try crypto.generateEncryptionKeyPair(from: derivedKeys.encSeed)
         let signKP = try crypto.generateSigningKeyPair(from: derivedKeys.signSeed)
-        
+        print("[AuthService] Key pairs generated")
+
         // 3. Store in keychain
+        print("[AuthService] Step 3: Storing keys in keychain...")
         try keychain.storeKeys(
             encPrivateKey: encKP.privateKey,
             encPublicKey: encKP.publicKey,
@@ -127,24 +134,30 @@ final class AuthService: ObservableObject {
             contactsKey: derivedKeys.contactsKey
         )
         keychain.mnemonic = mnemonic
-        
+        print("[AuthService] Keys stored in keychain")
+
         // 4. Keep in memory
         self.encKeyPair = encKP
         self.signKeyPair = signKP
-        
+
         // 5. Connect and authenticate
+        print("[AuthService] Step 5: Connecting to WebSocket...")
         ws.connect()
         try await waitForConnection()
-        
+        print("[AuthService] WebSocket connected")
+
         // 6. Perform auth flow
+        print("[AuthService] Step 6: Performing authentication...")
         let ack = try await performAuth(
             whisperId: nil,  // New registration - server assigns ID
             encPublicKey: encKP.publicKey,
             signPublicKey: signKP.publicKey,
             signPrivateKey: signKP.privateKey
         )
-        
+        print("[AuthService] Authentication complete, received whisperId: \(ack.whisperId)")
+
         // 7. Store session
+        print("[AuthService] Step 7: Storing session...")
         await MainActor.run {
             self.whisperId = ack.whisperId
             self.sessionToken = ack.sessionToken
@@ -152,12 +165,16 @@ final class AuthService: ObservableObject {
         }
         keychain.whisperId = ack.whisperId
         keychain.sessionToken = ack.sessionToken
+        print("[AuthService] Session stored, isAuthenticated = true")
 
         // 8. Send push tokens now that we're authenticated
+        print("[AuthService] Step 8: Sending push tokens...")
         await PushNotificationService.shared.sendTokensAfterAuth()
 
         // 9. Fetch any pending messages from server
+        print("[AuthService] Step 9: Fetching pending messages...")
         await fetchPendingMessagesAfterAuth()
+        print("[AuthService] Registration complete!")
     }
 
     // MARK: - Recover Account

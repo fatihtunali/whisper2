@@ -36,19 +36,24 @@ final class AuthViewModel: ObservableObject {
     func registerAccount() async {
         guard let mnemonic = mnemonic else {
             error = "No seed phrase generated"
+            print("[AuthViewModel] registerAccount failed: No mnemonic")
             return
         }
-        
+
         isLoading = true
         error = nil
-        
+
+        print("[AuthViewModel] Starting account registration...")
+
         do {
             try await authService.registerNewAccount(mnemonic: mnemonic)
+            print("[AuthViewModel] Registration successful!")
             isAuthenticated = true
         } catch {
+            print("[AuthViewModel] Registration failed: \(error)")
             self.error = error.localizedDescription
         }
-        
+
         isLoading = false
     }
     

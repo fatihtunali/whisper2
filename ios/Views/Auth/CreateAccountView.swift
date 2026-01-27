@@ -4,6 +4,7 @@ import SwiftUI
 struct CreateAccountView: View {
     @ObservedObject var viewModel: AuthViewModel
     @State private var showSeedPhrase = false
+    @State private var showErrorAlert = false
     @Environment(\.dismiss) private var dismiss
     
     var body: some View {
@@ -84,10 +85,18 @@ struct CreateAccountView: View {
         }
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(viewModel.isLoading)
-        .alert("Error", isPresented: .constant(viewModel.error != nil)) {
-            Button("OK") { viewModel.error = nil }
+        .alert("Error", isPresented: $showErrorAlert) {
+            Button("OK") {
+                viewModel.error = nil
+                showErrorAlert = false
+            }
         } message: {
-            Text(viewModel.error ?? "")
+            Text(viewModel.error ?? "An unknown error occurred")
+        }
+        .onChange(of: viewModel.error) { _, newValue in
+            if newValue != nil {
+                showErrorAlert = true
+            }
         }
         .navigationDestination(isPresented: $showSeedPhrase) {
             SeedPhraseView(viewModel: viewModel, isNewAccount: true)

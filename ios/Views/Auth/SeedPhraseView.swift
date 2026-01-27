@@ -7,6 +7,7 @@ struct SeedPhraseView: View {
     
     @State private var hasConfirmedBackup = false
     @State private var showCopiedAlert = false
+    @State private var showErrorAlert = false
     @Environment(\.dismiss) private var dismiss
     
     private var words: [String] {
@@ -133,10 +134,18 @@ struct SeedPhraseView: View {
         } message: {
             Text("Seed phrase copied to clipboard. Make sure to save it securely and clear your clipboard.")
         }
-        .alert("Error", isPresented: .constant(viewModel.error != nil)) {
-            Button("OK") { viewModel.error = nil }
+        .alert("Error", isPresented: $showErrorAlert) {
+            Button("OK") {
+                viewModel.error = nil
+                showErrorAlert = false
+            }
         } message: {
-            Text(viewModel.error ?? "")
+            Text(viewModel.error ?? "An unknown error occurred")
+        }
+        .onChange(of: viewModel.error) { _, newValue in
+            if newValue != nil {
+                showErrorAlert = true
+            }
         }
     }
     
