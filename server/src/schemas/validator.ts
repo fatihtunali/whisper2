@@ -91,6 +91,19 @@ validators.set('call_answer', ajv.compile(callAnswerSchema));
 validators.set('call_ice_candidate', ajv.compile(callIceCandidateSchema));
 validators.set('call_end', ajv.compile(callEndSchema));
 
+// Typing schema
+validators.set('typing', ajv.compile({
+  type: 'object',
+  properties: {
+    sessionToken: { type: 'string', minLength: 1 },
+    to: { type: 'string', minLength: 1 },
+    isTyping: { type: 'boolean' },
+    v: { type: 'number' },
+  },
+  required: ['sessionToken', 'to', 'isTyping'],
+  additionalProperties: false,
+}));
+
 // =============================================================================
 // VALIDATION FUNCTIONS
 // =============================================================================

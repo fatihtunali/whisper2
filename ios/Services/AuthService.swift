@@ -97,6 +97,9 @@ final class AuthService: ObservableObject {
         }
         keychain.whisperId = ack.whisperId
         keychain.sessionToken = ack.sessionToken
+
+        // 8. Send push tokens now that we're authenticated
+        await PushNotificationService.shared.sendTokensAfterAuth()
     }
     
     // MARK: - Recover Account
@@ -141,8 +144,11 @@ final class AuthService: ObservableObject {
             self.isAuthenticated = true
         }
         keychain.sessionToken = ack.sessionToken
+
+        // Send push tokens now that we're authenticated
+        await PushNotificationService.shared.sendTokensAfterAuth()
     }
-    
+
     // MARK: - Logout
     
     func logout() {

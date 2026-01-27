@@ -40,6 +40,7 @@ import {
   CallAnswerPayload,
   CallIceCandidatePayload,
   CallEndPayload,
+  TypingPayload,
 } from '../types/protocol';
 import { messageRouter } from '../services/MessageRouter';
 import {
@@ -308,6 +309,11 @@ export class WsGateway {
 
       case MessageTypes.CALL_END:
         await this.handleCallEnd(conn, payload as CallEndPayload, requestId);
+        break;
+
+      // Typing indicator handler
+      case MessageTypes.TYPING:
+        await this.handleTyping(conn, payload as TypingPayload, requestId);
         break;
 
       default:
@@ -803,6 +809,37 @@ export class WsGateway {
     }
 
     // Peer receives call_end
+  }
+
+  // ===========================================================================
+  // TYPING HANDLER
+  // ===========================================================================
+
+  private async handleTyping(
+    conn: Connection,
+    payload: TypingPayload,
+    requestId?: string
+  ): Promise<void> {
+    if (!conn.whisperId) {
+      this.sendError(conn.ws, 'NOT_REGISTERED', 'Not authenticated', requestId);
+      return;
+    }
+
+    // Forward typing indicator to the recipient if they're online
+    const sent = connectionManager.sendToUser(payload.to, {
+      type: MessageTypes.TYPING_NOTIFICATION,
+      payload: {
+        from: conn.whisperId,
+        isTyping: payload.isTyping,
+        timestamp: Date.now(),
+      },
+    });
+
+    // No ACK needed for typing indicators - fire and forget
+    if (!sent) {
+      // Recipient is offline, just ignore
+      logger.debug({ from: conn.whisperId, to: payload.to }, 'Typing indicator not delivered: recipient offline');
+    }
   }
 
   // ===========================================================================

@@ -73,20 +73,33 @@ final class CallKitManager: NSObject {
     }
 
     /// Start an outgoing call
-    func startOutgoingCall(callId: String, handle: String, hasVideo: Bool) {
+    func startOutgoingCall(callId: String, handle: String, displayName: String?, hasVideo: Bool) {
         let uuid = UUID()
         callUUIDs[callId] = uuid
 
-        let handle = CXHandle(type: .generic, value: handle)
-        let startCallAction = CXStartCallAction(call: uuid, handle: handle)
+        let cxHandle = CXHandle(type: .generic, value: handle)
+        let startCallAction = CXStartCallAction(call: uuid, handle: cxHandle)
         startCallAction.isVideo = hasVideo
+        startCallAction.contactIdentifier = displayName
 
         let transaction = CXTransaction(action: startCallAction)
 
-        callController.request(transaction) { error in
+        callController.request(transaction) { [weak self] error in
+            guard let self = self else { return }
             if let error = error {
                 print("Failed to start outgoing call: \(error)")
                 self.callUUIDs.removeValue(forKey: callId)
+            } else {
+                // Update call with display name so CallKit shows it
+                let update = CXCallUpdate()
+                update.remoteHandle = cxHandle
+                update.localizedCallerName = displayName ?? handle
+                update.hasVideo = hasVideo
+                self.provider.reportCall(with: uuid, updated: update)
+
+                // Report started connecting immediately to show CallKit UI
+                self.provider.reportOutgoingCall(with: uuid, startedConnectingAt: Date())
+                print("CallKit: Outgoing call started, reported connecting")
             }
         }
     }

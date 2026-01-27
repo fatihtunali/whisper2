@@ -34,6 +34,10 @@ struct Whisper2App: App {
 class AppDelegate: NSObject, UIApplicationDelegate {
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        // Initialize CallService early to set up VoIP push callback
+        // This ensures the callback is ready before any VoIP push arrives
+        _ = CallService.shared
+        print("CallService initialized for VoIP push handling")
         return true
     }
 

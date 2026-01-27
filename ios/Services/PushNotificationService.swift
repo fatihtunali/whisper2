@@ -103,10 +103,16 @@ final class PushNotificationService: NSObject, ObservableObject {
 
         do {
             try await ws.send(frame)
-            print("Push tokens sent to server")
+            print("Push tokens sent to server - APNS: \(apnsToken ?? "nil"), VoIP: \(voipToken ?? "nil")")
         } catch {
             print("Failed to send push tokens: \(error)")
         }
+    }
+
+    /// Called after authentication completes to send stored tokens
+    func sendTokensAfterAuth() async {
+        print("Sending push tokens after authentication...")
+        await sendTokensToServer()
     }
 
     // MARK: - WebSocket Listener
