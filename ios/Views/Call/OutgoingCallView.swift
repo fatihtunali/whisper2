@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 /// Minimal outgoing call view - shown when initiating a call
 /// CallKit handles incoming calls, but outgoing calls need custom UI
@@ -101,6 +102,8 @@ class OutgoingCallState: ObservableObject {
     @Published var isVideo: Bool = false
     @Published var callStatus: String = "Calling..."
 
+    private let ringbackPlayer = RingbackTonePlayer.shared
+
     private init() {}
 
     func showOutgoingCall(peerName: String, peerId: String, isVideo: Bool) {
@@ -109,14 +112,25 @@ class OutgoingCallState: ObservableObject {
         self.isVideo = isVideo
         self.callStatus = "Calling..."
         self.isShowingOutgoingCall = true
+
+        // Start ringback tone
+        ringbackPlayer.start()
     }
 
     func updateStatus(_ status: String) {
         self.callStatus = status
+
+        // Stop ringback when call connects or has specific status
+        if status == "Connected" || status == "Connecting..." {
+            ringbackPlayer.stop()
+        }
     }
 
     func hide() {
         self.isShowingOutgoingCall = false
+
+        // Stop ringback tone when call UI hides
+        ringbackPlayer.stop()
     }
 }
 
