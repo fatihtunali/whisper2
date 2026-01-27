@@ -29,6 +29,10 @@ final class PushNotificationService: NSObject, ObservableObject {
         config.supportsVideo = true
         config.maximumCallsPerCallGroup = 1
         config.supportedHandleTypes = [.generic]
+        // Disable handoff - calls are encrypted per-device
+        if #available(iOS 14.0, *) {
+            config.supportsCallHandoff = false
+        }
         return CXProvider(configuration: config)
     }()
 
