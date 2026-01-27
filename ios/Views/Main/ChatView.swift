@@ -160,6 +160,7 @@ struct ChatView: View {
                 }
             }
         }
+        .toolbar(.hidden, for: .tabBar)
         .onAppear {
             viewModel.markAsRead()
         }
