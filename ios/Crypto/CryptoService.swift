@@ -45,9 +45,11 @@ final class CryptoService {
     func generateEncryptionKeyPair(from seed: Data) throws -> KeyPair {
         guard seed.count == 32 else { throw CryptoError.invalidSeed }
 
-        // TweetNaCl: box keypair from seed
-        let keyPair = try NaclBox.keyPair(fromSecretKey: seed)
-        return KeyPair(publicKey: keyPair.publicKey, privateKey: keyPair.secretKey)
+        // TweetNaCl's NaclBox.keyPair(fromSecretKey:) has a bug - it validates against
+        // crypto_sign_SECRETKEYBYTES (64) instead of crypto_box_SECRETKEYBYTES (32).
+        // Use NaclScalarMult.base() directly to derive public key from the seed.
+        let publicKey = try NaclScalarMult.base(n: seed)
+        return KeyPair(publicKey: publicKey, privateKey: seed)
     }
 
     /// Generate Ed25519 key pair from 32-byte seed (for signing)
