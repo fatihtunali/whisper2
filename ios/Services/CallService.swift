@@ -128,14 +128,33 @@ final class CallService: NSObject, ObservableObject {
             throw CryptoError.invalidPublicKey
         }
 
+        // Request microphone permission first
+        let micPermission = await requestMicrophonePermission()
+        guard micPermission else {
+            throw NetworkError.serverError(code: "PERMISSION_DENIED", message: "Microphone permission required for calls")
+        }
+
+        // Request camera permission for video calls
+        if isVideo {
+            let cameraPermission = await requestCameraPermission()
+            guard cameraPermission else {
+                throw NetworkError.serverError(code: "PERMISSION_DENIED", message: "Camera permission required for video calls")
+            }
+        }
+
         // Fetch TURN credentials first
         try await fetchTurnCredentials()
 
-        // Wait for credentials
-        try await Task.sleep(nanoseconds: 500_000_000) // 0.5 second
+        // Wait for credentials with retry
+        var attempts = 0
+        while turnCredentials == nil && attempts < 10 {
+            try await Task.sleep(nanoseconds: 200_000_000) // 0.2 second
+            attempts += 1
+        }
 
-        guard turnCredentials != nil else {
-            throw NetworkError.connectionFailed
+        // Continue even without TURN (will try direct connection)
+        if turnCredentials == nil {
+            print("Warning: No TURN credentials received, attempting direct connection")
         }
 
         let callId = UUID().uuidString.lowercased()
@@ -405,9 +424,15 @@ final class CallService: NSObject, ObservableObject {
 
         let config = RTCConfiguration()
 
+        // Setup ICE servers
+        var iceServers: [RTCIceServer] = []
+
+        // Always add public STUN servers as fallback
+        let stunServer = RTCIceServer(urlStrings: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"])
+        iceServers.append(stunServer)
+
         // Use TURN credentials if available
         if let turn = turnCredentials {
-            var iceServers: [RTCIceServer] = []
             for url in turn.urls {
                 let server = RTCIceServer(
                     urlStrings: [url],
@@ -416,8 +441,9 @@ final class CallService: NSObject, ObservableObject {
                 )
                 iceServers.append(server)
             }
-            config.iceServers = iceServers
         }
+
+        config.iceServers = iceServers
 
         config.sdpSemantics = .unifiedPlan
         config.continualGatheringPolicy = .gatherContinually
@@ -468,14 +494,36 @@ final class CallService: NSObject, ObservableObject {
             }
         }
 
-        // Configure audio session
-        try configureAudioSession()
+        // Configure audio session (don't throw - just log errors)
+        do {
+            try configureAudioSession()
+        } catch {
+            print("Warning: Failed to configure audio session: \(error)")
+        }
     }
 
     private func configureAudioSession() throws {
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetoothHFP, .defaultToSpeaker])
+        try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .defaultToSpeaker])
         try session.setActive(true)
+    }
+
+    // MARK: - Permissions
+
+    private func requestMicrophonePermission() async -> Bool {
+        return await withCheckedContinuation { continuation in
+            AVAudioSession.sharedInstance().requestRecordPermission { granted in
+                continuation.resume(returning: granted)
+            }
+        }
+    }
+
+    private func requestCameraPermission() async -> Bool {
+        return await withCheckedContinuation { continuation in
+            AVCaptureDevice.requestAccess(for: .video) { granted in
+                continuation.resume(returning: granted)
+            }
+        }
     }
 
     private func createOffer() async throws -> String {
@@ -595,7 +643,9 @@ final class CallService: NSObject, ObservableObject {
 
     private func handleTurnCredentials(_ data: Data) {
         guard let frame = try? JSONDecoder().decode(WsFrame<TurnCredentialsPayload>.self, from: data) else { return }
-        turnCredentials = frame.payload
+        DispatchQueue.main.async {
+            self.turnCredentials = frame.payload
+        }
     }
 
     private func handleCallIncoming(_ data: Data) {
