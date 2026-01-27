@@ -20,7 +20,8 @@ final class AuthService: ObservableObject {
     
     private var pendingChallenge: (id: String, bytes: Data)?
     private var authContinuation: CheckedContinuation<RegisterAckPayload, Error>?
-    
+    private var isAuthenticating = false  // Prevent duplicate auth attempts
+
     private init() {
         setupMessageHandler()
         setupReconnectHandler()
@@ -41,10 +42,13 @@ final class AuthService: ObservableObject {
                             self.isAuthenticated = false
                         }
                     }
+                    // Also reset authenticating flag on disconnect
+                    self.isAuthenticating = false
 
                 case .connected:
                     // If we have stored credentials but not authenticated, re-authenticate
-                    if !self.isAuthenticated && self.keychain.whisperId != nil {
+                    // Guard against duplicate auth attempts
+                    if !self.isAuthenticated && !self.isAuthenticating && self.keychain.whisperId != nil {
                         print("WebSocket connected - re-authenticating...")
                         Task {
                             do {
@@ -155,8 +159,14 @@ final class AuthService: ObservableObject {
     }
     
     // MARK: - Reconnect with existing session
-    
+
     func reconnect() async throws {
+        // Prevent duplicate auth attempts
+        guard !isAuthenticating else {
+            print("Authentication already in progress, skipping")
+            return
+        }
+
         guard let encPriv = keychain.getData(forKey: Constants.StorageKey.encPrivateKey),
               let encPub = keychain.getData(forKey: Constants.StorageKey.encPublicKey),
               let signPriv = keychain.getData(forKey: Constants.StorageKey.signPrivateKey),
@@ -164,6 +174,9 @@ final class AuthService: ObservableObject {
               let savedWhisperId = keychain.whisperId else {
             throw AuthError.notAuthenticated
         }
+
+        isAuthenticating = true
+        defer { isAuthenticating = false }
 
         self.encKeyPair = CryptoService.KeyPair(publicKey: encPub, privateKey: encPriv)
         self.signKeyPair = CryptoService.KeyPair(publicKey: signPub, privateKey: signPriv)
