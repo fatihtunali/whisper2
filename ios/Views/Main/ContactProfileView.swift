@@ -344,14 +344,9 @@ struct ContactProfileView: View {
     }
 
     private func startVoiceCall() {
-        guard let contact = contact else { return }
         Task {
             do {
-                try await CallService.shared.startCall(
-                    to: peerId,
-                    peerName: contact.displayName,
-                    isVideo: false
-                )
+                try await CallService.shared.initiateCall(to: peerId, isVideo: false)
             } catch {
                 print("Failed to start voice call: \(error)")
             }
@@ -359,14 +354,9 @@ struct ContactProfileView: View {
     }
 
     private func startVideoCall() {
-        guard let contact = contact else { return }
         Task {
             do {
-                try await CallService.shared.startCall(
-                    to: peerId,
-                    peerName: contact.displayName,
-                    isVideo: true
-                )
+                try await CallService.shared.initiateCall(to: peerId, isVideo: true)
             } catch {
                 print("Failed to start video call: \(error)")
             }
