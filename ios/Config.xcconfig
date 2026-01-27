@@ -1,0 +1,22 @@
+// Whisper2 Build Configuration
+// Bundle ID must match APNS configuration on server
+
+PRODUCT_BUNDLE_IDENTIFIER = com.aiakademiturkiye.whisper2
+DEVELOPMENT_TEAM = KX5N2U5RA2
+
+// App Display Name
+PRODUCT_NAME = Whisper2
+
+// Deployment Target
+IPHONEOS_DEPLOYMENT_TARGET = 17.0
+
+// Code Signing
+CODE_SIGN_STYLE = Automatic
+CODE_SIGN_ENTITLEMENTS = Whisper2.entitlements
+
+// Swift
+SWIFT_VERSION = 5.9
+
+// Build Settings
+ENABLE_BITCODE = NO
+ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES

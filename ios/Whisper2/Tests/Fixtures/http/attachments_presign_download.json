@@ -1,7 +1,0 @@
-{
-  "objectKey": "whisper/att/2024/01/WSP-ABCD-EFGH-IJKL/550e8400-e29b-41d4-a716-446655440000.bin",
-  "downloadUrl": "https://nyc3.digitaloceanspaces.com/whisper-bucket/whisper/att/2024/01/WSP-ABCD-EFGH-IJKL/550e8400-e29b-41d4-a716-446655440000.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=...&X-Amz-Date=20240112T120000Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=...",
-  "expiresAtMs": 1705088400000,
-  "sizeBytes": 2097152,
-  "contentType": "image/jpeg"
-}

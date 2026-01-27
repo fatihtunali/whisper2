@@ -1,1 +1,20 @@
 CLAUDE.md
+
+# macOS
+.DS_Store
+
+# iOS Build
+ios/.build/
+ios/.swiftpm/
+ios/Pods/
+ios/Whisper2.xcworkspace/
+ios/Whisper2.xcodeproj/xcuserdata/
+ios/Whisper2.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Xcode
+*.xcuserstate
+xcuserdata/
+DerivedData/
+
+# CocoaPods - keep Podfile.lock for reproducibility
+# ios/Podfile.lock
