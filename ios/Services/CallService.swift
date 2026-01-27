@@ -603,18 +603,10 @@ final class CallService: NSObject, ObservableObject {
             }
         }
 
-        // Configure audio session (don't throw - just log errors)
-        do {
-            try configureAudioSession()
-        } catch {
-            print("Warning: Failed to configure audio session: \(error)")
-        }
-    }
-
-    private func configureAudioSession() throws {
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .defaultToSpeaker])
-        try session.setActive(true)
+        // NOTE: Audio session is managed by CallKit
+        // CallKit will activate the audio session and notify us via callKitAudioSessionDidActivate
+        // We should NOT configure it ourselves when using CallKit
+        print("Peer connection created - audio session will be activated by CallKit")
     }
 
     // MARK: - Permissions

@@ -492,17 +492,17 @@ struct CallIncomingPayload: Codable {
 }
 
 struct CallAnswerPayload: Codable {
-    let protocolVersion: Int
-    let cryptoVersion: Int
-    let sessionToken: String
+    let protocolVersion: Int?
+    let cryptoVersion: Int?
+    let sessionToken: String?
     let callId: String
     let from: String
-    let to: String
+    let to: String?
     let timestamp: Int64
     let nonce: String
     let ciphertext: String  // encrypted SDP answer
     let sig: String
-    
+
     init(
         sessionToken: String,
         callId: String,
@@ -527,17 +527,17 @@ struct CallAnswerPayload: Codable {
 }
 
 struct CallIceCandidatePayload: Codable {
-    let protocolVersion: Int
-    let cryptoVersion: Int
-    let sessionToken: String
+    let protocolVersion: Int?
+    let cryptoVersion: Int?
+    let sessionToken: String?
     let callId: String
     let from: String
-    let to: String
+    let to: String?
     let timestamp: Int64
     let nonce: String
     let ciphertext: String  // encrypted ICE candidate
     let sig: String
-    
+
     init(
         sessionToken: String,
         callId: String,
