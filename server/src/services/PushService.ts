@@ -375,7 +375,7 @@ export class PushService {
       if (reason === 'call') {
         // High priority for calls
         notification.priority = 10;
-        notification.pushType = 'alert';
+        (notification as any).pushType = 'alert';
         notification.alert = {
           title: 'Incoming Call',
           body: 'You have an incoming call',
@@ -384,7 +384,7 @@ export class PushService {
       } else {
         // Background push for messages
         notification.priority = 5;
-        notification.pushType = 'background';
+        (notification as any).pushType = 'background';
         notification.contentAvailable = true;
       }
 
@@ -450,7 +450,7 @@ export class PushService {
       const notification = new apn.Notification();
       // VoIP push uses .voip suffix on bundle ID
       notification.topic = `${APNS_BUNDLE_ID}.voip`;
-      notification.pushType = 'voip';
+      (notification as any).pushType = 'voip';
       notification.priority = 10; // VoIP must be high priority
       notification.expiry = Math.floor(Date.now() / 1000) + 30; // 30 second expiry for calls
 
