@@ -319,15 +319,25 @@ final class CallService: NSObject, ObservableObject {
     // MARK: - Answer Call
 
     func answerCall(_ incomingPayload: CallIncomingPayload) async throws {
+        print("=== answerCall BEGIN ===")
+        print("Call from: \(incomingPayload.from)")
+        print("Call ID: \(incomingPayload.callId)")
+        print("Is Video: \(incomingPayload.isVideo)")
+
         guard let user = auth.currentUser,
               let sessionToken = user.sessionToken else {
+            print("ERROR: No authenticated user or session token")
             throw NetworkError.connectionFailed
         }
+        print("User authenticated: \(user.whisperId)")
 
         guard let senderPublicKey = contacts.getPublicKey(for: incomingPayload.from) else {
+            print("ERROR: No public key for caller \(incomingPayload.from)")
+            print("Available contacts: \(contacts.contacts.map { $0.whisperId })")
             // Add as contact temporarily for the call
             throw CryptoError.invalidPublicKey
         }
+        print("Got caller's public key")
 
         // Fetch TURN if needed
         if turnCredentials == nil {
@@ -1112,13 +1122,40 @@ extension CallService: CallKitManagerDelegate {
         // User answered incoming call via CallKit UI - start the WebRTC connection
         guard let payload = pendingIncomingCall, payload.callId == callId else {
             print("CallKit answer: No pending call found for callId: \(callId)")
+            print("  pendingIncomingCall: \(pendingIncomingCall?.callId ?? "nil")")
+            print("  requested callId: \(callId)")
             return
         }
 
+        print("CallKit answer: Answering call \(callId) from \(payload.from)")
+
         Task {
             do {
+                // Ensure we're authenticated before answering
+                // App might have been woken by VoIP push and not yet authenticated
+                if auth.currentUser?.sessionToken == nil {
+                    print("CallKit answer: Not authenticated, attempting reconnect...")
+                    try await auth.reconnect()
+                    print("CallKit answer: Reconnect successful")
+                }
+
+                // Ensure WebSocket is connected
+                if ws.connectionState != .connected {
+                    print("CallKit answer: WebSocket not connected, waiting...")
+                    ws.connect()
+                    // Wait for connection
+                    for _ in 0..<30 {
+                        if ws.connectionState == .connected {
+                            break
+                        }
+                        try await Task.sleep(nanoseconds: 100_000_000)
+                    }
+                }
+
+                print("CallKit answer: Auth and WS ready, answering call...")
                 try await answerCall(payload)
                 pendingIncomingCall = nil
+                print("CallKit answer: Call answered successfully")
             } catch {
                 print("Failed to answer call via CallKit: \(error)")
                 callKitManager?.endCall(callId: callId)

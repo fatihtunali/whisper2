@@ -68,6 +68,7 @@
 		EB4391007218AB1BA066C044 /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 366F57F5E618B73A8DDF8416 /* WelcomeView.swift */; };
 		F3D9A514EE4F283030FA38D4 /* CallService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7975B76D3788564E0E3976FA /* CallService.swift */; };
 		FAB279A57A07EFB3F9FCD08B /* WsFrame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FEE6B01AB5FDC3E3F51533A /* WsFrame.swift */; };
+		FF4DA7454803F78D3CF058EF /* Pods_Whisper2.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4118A8C2214B91804EE7B7BB /* Pods_Whisper2.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -77,6 +78,7 @@
 		118EC344D102A573BA00A21C /* MessageTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageTypes.swift; sourceTree = "<group>"; };
 		14711286FDD8D1EF872492D9 /* ChatRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatRow.swift; sourceTree = "<group>"; };
 		15877D6FA5F146D8A29E2102 /* GroupChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupChatView.swift; sourceTree = "<group>"; };
+		16AB37AC5510F9F7274F44B4 /* Pods-Whisper2.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Whisper2.debug.xcconfig"; path = "Target Support Files/Pods-Whisper2/Pods-Whisper2.debug.xcconfig"; sourceTree = "<group>"; };
 		1A44EFB5660D08CD9701DFB1 /* PushNotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushNotificationService.swift; sourceTree = "<group>"; };
 		1B947D2B38A69A845434C32C /* AddContactView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddContactView.swift; sourceTree = "<group>"; };
 		1C043E02CB8D20206D40CD67 /* Contact.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Contact.swift; sourceTree = "<group>"; };
@@ -89,6 +91,7 @@
 		3756A19C09A240E0202DE8A4 /* MessageInputBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageInputBar.swift; sourceTree = "<group>"; };
 		3AE282D3AB36F3165A685729 /* AuthViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthViewModel.swift; sourceTree = "<group>"; };
 		3FEE6B01AB5FDC3E3F51533A /* WsFrame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WsFrame.swift; sourceTree = "<group>"; };
+		4118A8C2214B91804EE7B7BB /* Pods_Whisper2.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Whisper2.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		45366876C1ED1ADC483BBFB0 /* Conversation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Conversation.swift; sourceTree = "<group>"; };
 		46AF5BB628E816B22E1C03F0 /* Message.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Message.swift; sourceTree = "<group>"; };
 		47F6B0C82EB01A062AA59E23 /* Whisper2.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Whisper2.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -133,7 +136,19 @@
 		F5D60A4E6445EC48C5FB287D /* CreateAccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateAccountView.swift; sourceTree = "<group>"; };
 		F65C4FD538665068C7537900 /* WebSocketService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketService.swift; sourceTree = "<group>"; };
 		F72812296906C23775F15335 /* CryptoService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CryptoService.swift; sourceTree = "<group>"; };
+		FD45C782592A26407AC5E0A2 /* Pods-Whisper2.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Whisper2.release.xcconfig"; path = "Target Support Files/Pods-Whisper2/Pods-Whisper2.release.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		F82D87D32237E8B5B8C252D8 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FF4DA7454803F78D3CF058EF /* Pods_Whisper2.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		0159227BFB748C095C89C5E8 /* Services */ = {
@@ -255,6 +270,8 @@
 				E86AFB3E55A10FF3E2464A38 /* ViewModels */,
 				47991160A237B9B992A5832B /* Views */,
 				3B6A4B920FB9597B204A6664 /* Products */,
+				B79830A3831ACF9F2111E282 /* Pods */,
+				AA4A57ABC57B481AA228AB1D /* Frameworks */,
 			);
 			sourceTree = "<group>";
 		};
@@ -285,6 +302,24 @@
 				AB09CA68D33A6B1E9C0B824B /* GroupListView.swift */,
 			);
 			path = Group;
+			sourceTree = "<group>";
+		};
+		AA4A57ABC57B481AA228AB1D /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				4118A8C2214B91804EE7B7BB /* Pods_Whisper2.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		B79830A3831ACF9F2111E282 /* Pods */ = {
+			isa = PBXGroup;
+			children = (
+				16AB37AC5510F9F7274F44B4 /* Pods-Whisper2.debug.xcconfig */,
+				FD45C782592A26407AC5E0A2 /* Pods-Whisper2.release.xcconfig */,
+			);
+			name = Pods;
+			path = Pods;
 			sourceTree = "<group>";
 		};
 		C48F2327FC58CF1642F246BF /* Auth */ = {
@@ -331,17 +366,18 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 8F19CDA7D3C4D5401FAA683E /* Build configuration list for PBXNativeTarget "Whisper2" */;
 			buildPhases = (
+				4D12C98F09255A9AFF92BDE9 /* [CP] Check Pods Manifest.lock */,
 				4E2A210072B1814D34262614 /* Increment Build Number */,
 				C47DBCF44DF0698DFD62E863 /* Sources */,
 				941BBF0C92D3D1B45F85EC46 /* Resources */,
+				F82D87D32237E8B5B8C252D8 /* Frameworks */,
+				BDF0BC4ECE01FCA9819C836D /* [CP] Embed Pods Frameworks */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
 			name = Whisper2;
-			packageProductDependencies = (
-			);
 			productName = Whisper2;
 			productReference = 47F6B0C82EB01A062AA59E23 /* Whisper2.app */;
 			productType = "com.apple.product-type.application";
@@ -371,6 +407,7 @@
 			mainGroup = 4997B315EAD7F7A687C9BFA3;
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
+			productRefGroup = 3B6A4B920FB9597B204A6664 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -391,6 +428,28 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		4D12C98F09255A9AFF92BDE9 /* [CP] Check Pods Manifest.lock */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"${PODS_PODFILE_DIR_PATH}/Podfile.lock",
+				"${PODS_ROOT}/Manifest.lock",
+			);
+			name = "[CP] Check Pods Manifest.lock";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/Pods-Whisper2-checkManifestLockResult.txt",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
+			showEnvVarsInLog = 0;
+		};
 		4E2A210072B1814D34262614 /* Increment Build Number */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -408,6 +467,23 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "#!/bin/bash\nbuildNumber=$(/usr/libexec/PlistBuddy -c \"Print CFBundleVersion\" \"${PROJECT_DIR}/Info.plist\")\nbuildNumber=$(($buildNumber + 1))\n/usr/libexec/PlistBuddy -c \"Set :CFBundleVersion $buildNumber\" \"${PROJECT_DIR}/Info.plist\"\necho \"Build number incremented to $buildNumber\"\n";
+			showEnvVarsInLog = 0;
+		};
+		BDF0BC4ECE01FCA9819C836D /* [CP] Embed Pods Frameworks */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-Whisper2/Pods-Whisper2-frameworks-${CONFIGURATION}-input-files.xcfilelist",
+			);
+			name = "[CP] Embed Pods Frameworks";
+			outputFileListPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-Whisper2/Pods-Whisper2-frameworks-${CONFIGURATION}-output-files.xcfilelist",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-Whisper2/Pods-Whisper2-frameworks.sh\"\n";
 			showEnvVarsInLog = 0;
 		};
 /* End PBXShellScriptBuildPhase section */
@@ -612,6 +688,7 @@
 		};
 		67FBB52C6B2EDE77A9F404AF /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = FD45C782592A26407AC5E0A2 /* Pods-Whisper2.release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Whisper2.entitlements;
@@ -632,6 +709,7 @@
 		};
 		9A1FB7CB78D59C197743CA27 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 16AB37AC5510F9F7274F44B4 /* Pods-Whisper2.debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Whisper2.entitlements;
