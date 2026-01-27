@@ -473,6 +473,12 @@ final class CallService: NSObject, ObservableObject {
         // Set the end reason BEFORE cleanup so history is recorded correctly
         lastCallEndReason = reason
 
+        // Always report to CallKit first, even if we can't send to server
+        if let callId = activeCallId {
+            print("Reporting call end to CallKit: \(callId)")
+            callKitManager?.endCall(callId: callId)
+        }
+
         guard let callId = activeCallId,
               let peerId = activeCallPeerId,
               let user = auth.currentUser,
@@ -521,9 +527,7 @@ final class CallService: NSObject, ObservableObject {
         let frame = WsFrame(type: Constants.MessageType.callEnd, payload: payload)
         try await ws.send(frame)
 
-        // Report to CallKit
-        callKitManager?.endCall(callId: callId)
-
+        // CallKit already notified at start of endCall()
         cleanup()
     }
 

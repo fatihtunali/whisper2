@@ -144,14 +144,20 @@ final class CallKitManager: NSObject {
         let callUUID = uuid(from: callId)
         print("CallKit.endCall - callId: \(callId), UUID: \(callUUID)")
 
+        // Check if we're tracking this call
+        guard uuidToCallId[callUUID] != nil else {
+            print("CallKit.endCall - call not tracked, skipping")
+            return
+        }
+
         let endCallAction = CXEndCallAction(call: callUUID)
         let transaction = CXTransaction(action: endCallAction)
 
         callController.request(transaction) { [weak self] error in
             if let error = error {
                 print("Failed to end call via transaction: \(error)")
-                // Fallback: Report call ended directly to provider
-                self?.provider.reportCall(with: callUUID, endedAt: Date(), reason: .remoteEnded)
+                // Fallback: Report call ended directly to provider (use .answeredElsewhere for local end)
+                self?.provider.reportCall(with: callUUID, endedAt: Date(), reason: .answeredElsewhere)
             } else {
                 print("Call ended successfully - callId: \(callId)")
             }
