@@ -389,8 +389,18 @@ export class PushService {
           body: 'You have an incoming call',
         };
         notification.sound = 'default';
+      } else if (reason === 'message') {
+        // Alert notification for messages - shows banner to user
+        notification.priority = 10;
+        (notification as any).pushType = 'alert';
+        notification.alert = {
+          title: 'Whisper2',
+          body: 'You have a new message',
+        };
+        notification.sound = 'default';
+        notification.contentAvailable = true; // Also wake app in background
       } else {
-        // Background push for messages
+        // Background push for system notifications
         notification.priority = 5;
         (notification as any).pushType = 'background';
         notification.contentAvailable = true;
