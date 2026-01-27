@@ -186,7 +186,16 @@ struct ChatView: View {
             QRScannerSheet(peerId: conversation.peerId)
         }
         .sheet(isPresented: $showContactProfile) {
-            ContactProfileView(peerId: conversation.peerId)
+            NavigationStack {
+                ContactProfileView(peerId: conversation.peerId)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") {
+                                showContactProfile = false
+                            }
+                        }
+                    }
+            }
         }
     }
 }

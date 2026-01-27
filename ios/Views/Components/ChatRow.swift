@@ -1,32 +1,38 @@
 import SwiftUI
+import UIKit
 
 /// Chat row for conversation list
 struct ChatRow: View {
     let conversation: Conversation
-    
+    @ObservedObject private var contactsService = ContactsService.shared
+    @ObservedObject private var avatarService = AvatarService.shared
+
+    /// Get display name from ContactsService (for live updates) or fallback to conversation
+    private var displayName: String {
+        if let contact = contactsService.getContact(whisperId: conversation.peerId) {
+            return contact.displayName
+        }
+        return conversation.displayName
+    }
+
+    /// Get avatar for this contact
+    private var contactAvatar: UIImage? {
+        avatarService.getContactAvatar(for: conversation.peerId)
+    }
+
     var body: some View {
         HStack(spacing: 12) {
             // Avatar
-            Circle()
-                .fill(
-                    LinearGradient(
-                        colors: [.blue, .purple],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .frame(width: 50, height: 50)
-                .overlay(
-                    Text(conversation.displayName.prefix(1).uppercased())
-                        .font(.title2)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.white)
-                )
-            
+            AvatarView(
+                image: contactAvatar,
+                name: displayName,
+                size: 50
+            )
+
             // Content
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Text(conversation.displayName)
+                    Text(displayName)
                         .font(.headline)
                         .foregroundColor(.white)
                         .lineLimit(1)

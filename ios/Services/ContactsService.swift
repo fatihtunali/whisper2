@@ -108,6 +108,7 @@ final class ContactsService: ObservableObject {
             lastSeen: contact.lastSeen,
             isOnline: contact.isOnline
         )
+        objectWillChange.send()
         contacts[whisperId] = contact
         saveContactsToStorage()
     }
