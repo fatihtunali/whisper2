@@ -44,34 +44,38 @@ struct ChatGroup: Codable, Identifiable, Hashable {
     }
 }
 
-/// Group event types
+/// Group event types (matches server GroupEventPayload.event)
 enum GroupEventType: String, Codable {
     case created = "created"
+    case updated = "updated"
     case memberAdded = "member_added"
     case memberRemoved = "member_removed"
-    case memberLeft = "member_left"
-    case titleChanged = "title_changed"
-    case messageReceived = "message_received"
+}
+
+/// Group member from server
+struct GroupMember: Codable {
+    let whisperId: String
+    let role: String  // "owner", "admin", "member"
+    let joinedAt: Int64
+    let removedAt: Int64?
+}
+
+/// Group object from server
+struct ServerGroup: Codable {
+    let groupId: String
+    let title: String
+    let ownerId: String
+    let createdAt: Int64
+    let updatedAt: Int64
+    let members: [GroupMember]
 }
 
 /// Group event payload (received from server)
+/// Server format: { event: string, group: Group, affectedMembers?: string[] }
 struct GroupEventPayload: Codable {
-    let groupId: String
-    let eventType: String
-    let actorId: String?  // Who performed the action
-    let targetId: String?  // Who was affected (for add/remove)
-    let title: String?  // For title changes or creation
-    let memberIds: [String]?  // Full member list for sync
-    let timestamp: Int64
-
-    // Message data (for messageReceived events)
-    let messageId: String?
-    let from: String?
-    let msgType: String?
-    let nonce: String?
-    let ciphertext: String?
-    let sig: String?
-    let attachment: AttachmentPointer?
+    let event: String  // "created", "updated", "member_added", "member_removed"
+    let group: ServerGroup
+    let affectedMembers: [String]?
 }
 
 /// Group message (received)

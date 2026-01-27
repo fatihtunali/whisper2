@@ -496,24 +496,42 @@ final class MessagingService: ObservableObject {
     private func handleMessageReceived(_ data: Data) {
         guard let frame = try? JSONDecoder().decode(WsFrame<MessageReceivedPayload>.self, from: data),
               let user = auth.currentUser else { return }
-        
+
         let payload = frame.payload
-        
+
         // Check if sender is blocked
         guard !contactsService.isBlocked(whisperId: payload.from) else {
             // Silently ignore messages from blocked users
             return
         }
-        
+
+        // Check if this is a group message
+        if let groupId = payload.groupId {
+            // Route to GroupService for group message handling
+            let groupPayload = GroupMessagePayload(
+                groupId: groupId,
+                messageId: payload.messageId,
+                from: payload.from,
+                msgType: payload.msgType,
+                timestamp: payload.timestamp,
+                nonce: payload.nonce,
+                ciphertext: payload.ciphertext,
+                sig: payload.sig,
+                attachment: payload.attachment
+            )
+            GroupService.shared.handleIncomingGroupMessage(groupPayload)
+            return
+        }
+
         // Check if sender is a known contact
         let isKnownContact = contactsService.hasContact(whisperId: payload.from)
-        
+
         if !isKnownContact {
             // Unknown sender - create message request
             handleUnknownSenderMessage(payload)
             return
         }
-        
+
         // Known contact - process message normally
         processReceivedMessage(payload, user: user)
     }

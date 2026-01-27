@@ -337,6 +337,21 @@ struct GroupUpdatePayload: Codable {
     }
 }
 
+/// Recipient envelope for group messages (per-recipient encryption)
+struct RecipientEnvelope: Codable {
+    let to: String
+    let nonce: String
+    let ciphertext: String
+    let sig: String
+
+    init(to: String, nonce: String, ciphertext: String, sig: String) {
+        self.to = to
+        self.nonce = nonce
+        self.ciphertext = ciphertext
+        self.sig = sig
+    }
+}
+
 struct GroupSendMessagePayload: Codable {
     let protocolVersion: Int
     let cryptoVersion: Int
@@ -344,12 +359,9 @@ struct GroupSendMessagePayload: Codable {
     let groupId: String
     let messageId: String
     let from: String
-    let to: String  // individual member
     let msgType: String
     let timestamp: Int64
-    let nonce: String
-    let ciphertext: String
-    let sig: String
+    let recipients: [RecipientEnvelope]  // All recipients bundled in one frame
     let attachment: AttachmentPointer?
 
     init(
@@ -357,12 +369,9 @@ struct GroupSendMessagePayload: Codable {
         groupId: String,
         messageId: String,
         from: String,
-        to: String,
         msgType: String = "text",
         timestamp: Int64,
-        nonce: String,
-        ciphertext: String,
-        sig: String,
+        recipients: [RecipientEnvelope],
         attachment: AttachmentPointer? = nil
     ) {
         self.protocolVersion = Constants.protocolVersion
@@ -371,12 +380,9 @@ struct GroupSendMessagePayload: Codable {
         self.groupId = groupId
         self.messageId = messageId
         self.from = from
-        self.to = to
         self.msgType = msgType
         self.timestamp = timestamp
-        self.nonce = nonce
-        self.ciphertext = ciphertext
-        self.sig = sig
+        self.recipients = recipients
         self.attachment = attachment
     }
 }

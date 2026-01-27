@@ -202,7 +202,7 @@ final class GroupService: ObservableObject {
 
     // MARK: - Send Group Message
 
-    func sendMessage(to groupId: String, content: String) async throws {
+    func sendMessage(to groupId: String, content: String, contentType: String = "text", attachment: AttachmentPointer? = nil) async throws {
         guard let user = auth.currentUser,
               let sessionToken = user.sessionToken,
               let group = groups[groupId] else {
@@ -212,15 +212,16 @@ final class GroupService: ObservableObject {
         let messageId = UUID().uuidString.lowercased()
         let timestamp = Int64(Date().timeIntervalSince1970 * 1000)
 
-        // Send encrypted message to each member individually
-        // This is how Whisper2 handles group encryption - per-member encryption
+        // Build recipient envelopes for all members (pairwise encryption)
+        var recipientEnvelopes: [RecipientEnvelope] = []
+
         for memberId in group.memberIds {
             // Skip self
             guard memberId != user.whisperId else { continue }
 
             // Get member's public key
             guard let memberPublicKey = contacts.getPublicKey(for: memberId) else {
-                print("No public key for member \(memberId), skipping")
+                print("[GroupService] No public key for member \(memberId), skipping")
                 continue
             }
 
@@ -232,37 +233,52 @@ final class GroupService: ObservableObject {
                     senderPrivateKey: user.encPrivateKey
                 )
 
-                // Sign
+                // Sign with toOrGroupId = groupId (NOT memberId)
+                // This is the canonical format the server expects
                 let signature = try crypto.signMessage(
                     messageType: Constants.MessageType.groupSendMessage,
                     messageId: messageId,
                     from: user.whisperId,
-                    to: memberId,
+                    to: groupId,  // IMPORTANT: Use groupId, not memberId
                     timestamp: timestamp,
                     nonce: nonce,
                     ciphertext: ciphertext,
                     privateKey: user.signPrivateKey
                 )
 
-                // Send to this member
-                let payload = GroupSendMessagePayload(
-                    sessionToken: sessionToken,
-                    groupId: groupId,
-                    messageId: messageId,
-                    from: user.whisperId,
+                let envelope = RecipientEnvelope(
                     to: memberId,
-                    timestamp: timestamp,
                     nonce: nonce.base64EncodedString(),
                     ciphertext: ciphertext.base64EncodedString(),
                     sig: signature.base64EncodedString()
                 )
-
-                let frame = WsFrame(type: Constants.MessageType.groupSendMessage, payload: payload)
-                try await ws.send(frame)
+                recipientEnvelopes.append(envelope)
             } catch {
-                print("Failed to send to \(memberId): \(error)")
+                print("[GroupService] Failed to encrypt for \(memberId): \(error)")
             }
         }
+
+        // If no recipients could be encrypted for, fail
+        guard !recipientEnvelopes.isEmpty else {
+            throw CryptoError.encryptionFailed
+        }
+
+        // Send ONE frame with all recipients bundled
+        let payload = GroupSendMessagePayload(
+            sessionToken: sessionToken,
+            groupId: groupId,
+            messageId: messageId,
+            from: user.whisperId,
+            msgType: contentType,
+            timestamp: timestamp,
+            recipients: recipientEnvelopes,
+            attachment: attachment
+        )
+
+        let frame = WsFrame(type: Constants.MessageType.groupSendMessage, payload: payload)
+        try await ws.send(frame)
+
+        print("[GroupService] Sent group message to \(recipientEnvelopes.count) recipients")
 
         // Add to local messages
         let message = Message(
@@ -271,10 +287,11 @@ final class GroupService: ObservableObject {
             from: user.whisperId,
             to: groupId,
             content: content,
-            contentType: "text",
+            contentType: contentType,
             timestamp: Date(timeIntervalSince1970: Double(timestamp) / 1000),
             status: .sent,
-            direction: .outgoing
+            direction: .outgoing,
+            attachment: attachment
         )
 
         await MainActor.run {
@@ -309,8 +326,6 @@ final class GroupService: ObservableObject {
         guard let raw = try? JSONDecoder().decode(RawWsFrame.self, from: data) else { return }
 
         switch raw.type {
-        case Constants.MessageType.groupCreateAck:
-            handleGroupCreateAck(data)
         case Constants.MessageType.groupEvent:
             handleGroupEvent(data)
         default:
@@ -318,120 +333,101 @@ final class GroupService: ObservableObject {
         }
     }
 
-    private func handleGroupCreateAck(_ data: Data) {
-        guard let frame = try? JSONDecoder().decode(WsFrame<GroupCreateAckPayload>.self, from: data),
-              let user = auth.currentUser else { return }
-
-        let payload = frame.payload
-
-        let group = ChatGroup(
-            id: payload.groupId,
-            title: payload.title,
-            memberIds: payload.memberIds,
-            creatorId: user.whisperId,
-            createdAt: Date(timeIntervalSince1970: Double(payload.createdAt) / 1000)
-        )
-
-        DispatchQueue.main.async {
-            self.groups[payload.groupId] = group
-            self.saveToStorage()
-        }
-    }
-
     private func handleGroupEvent(_ data: Data) {
-        guard let frame = try? JSONDecoder().decode(WsFrame<GroupEventPayload>.self, from: data) else { return }
+        guard let frame = try? JSONDecoder().decode(WsFrame<GroupEventPayload>.self, from: data) else {
+            print("[GroupService] Failed to decode group event")
+            return
+        }
 
         let payload = frame.payload
-        let eventType = GroupEventType(rawValue: payload.eventType)
+        let serverGroup = payload.group
+        let eventType = GroupEventType(rawValue: payload.event)
+
+        print("[GroupService] Received group event: \(payload.event) for group \(serverGroup.groupId)")
 
         DispatchQueue.main.async {
+            // Convert server group to local ChatGroup
+            let memberIds = serverGroup.members
+                .filter { $0.removedAt == nil }
+                .map { $0.whisperId }
+
             switch eventType {
             case .created:
-                // New group created - we received an invite
-                // If we are the creator, add directly; otherwise create an invite
-                if let memberIds = payload.memberIds, let title = payload.title {
-                    let isCreator = payload.actorId == self.auth.currentUser?.whisperId
+                // New group created
+                let isCreator = serverGroup.ownerId == self.auth.currentUser?.whisperId
 
-                    if isCreator {
-                        // We created the group, add it directly
-                        let group = ChatGroup(
-                            id: payload.groupId,
-                            title: title,
-                            memberIds: memberIds,
-                            creatorId: payload.actorId ?? "",
-                            createdAt: Date(timeIntervalSince1970: Double(payload.timestamp) / 1000)
-                        )
-                        self.groups[payload.groupId] = group
-                    } else {
-                        // We were invited - create a group invite
-                        let inviterName = self.contacts.getContact(whisperId: payload.actorId ?? "")?.displayName
-                        let invite = GroupInvite(
-                            groupId: payload.groupId,
-                            title: title,
-                            inviterId: payload.actorId ?? "",
-                            inviterName: inviterName,
-                            memberIds: memberIds,
-                            createdAt: Date(timeIntervalSince1970: Double(payload.timestamp) / 1000),
-                            receivedAt: Date()
-                        )
-                        self.groupInvites[payload.groupId] = invite
-                    }
-                }
-
-            case .memberAdded:
-                if var group = self.groups[payload.groupId],
-                   let targetId = payload.targetId {
-                    if !group.memberIds.contains(targetId) {
-                        group.memberIds.append(targetId)
-                        group.updatedAt = Date()
-                        self.groups[payload.groupId] = group
-                    }
-                }
-
-            case .memberRemoved, .memberLeft:
-                if var group = self.groups[payload.groupId],
-                   let targetId = payload.targetId {
-                    group.memberIds.removeAll { $0 == targetId }
-                    group.updatedAt = Date()
-                    self.groups[payload.groupId] = group
-
-                    // If we were removed, delete the group locally
-                    if targetId == self.auth.currentUser?.whisperId {
-                        self.groups.removeValue(forKey: payload.groupId)
-                        self.groupMessages.removeValue(forKey: payload.groupId)
-                    }
-                }
-
-            case .titleChanged:
-                if var group = self.groups[payload.groupId],
-                   let title = payload.title {
-                    group.title = title
-                    group.updatedAt = Date()
-                    self.groups[payload.groupId] = group
-                }
-
-            case .messageReceived:
-                // messageReceived events come with the full encrypted message
-                if let messageId = payload.messageId,
-                   let from = payload.from,
-                   let nonce = payload.nonce,
-                   let ciphertext = payload.ciphertext {
-                    let msgPayload = GroupMessagePayload(
-                        groupId: payload.groupId,
-                        messageId: messageId,
-                        from: from,
-                        msgType: payload.msgType ?? "text",
-                        timestamp: payload.timestamp,
-                        nonce: nonce,
-                        ciphertext: ciphertext,
-                        sig: payload.sig ?? "",
-                        attachment: payload.attachment
+                if isCreator {
+                    // We created the group, add it directly
+                    let group = ChatGroup(
+                        id: serverGroup.groupId,
+                        title: serverGroup.title,
+                        memberIds: memberIds,
+                        creatorId: serverGroup.ownerId,
+                        createdAt: Date(timeIntervalSince1970: Double(serverGroup.createdAt) / 1000)
                     )
-                    self.handleIncomingGroupMessage(msgPayload)
+                    self.groups[serverGroup.groupId] = group
+                    print("[GroupService] Created group locally: \(serverGroup.groupId)")
+                } else {
+                    // We were invited - add group directly (no invite accept needed per server design)
+                    let group = ChatGroup(
+                        id: serverGroup.groupId,
+                        title: serverGroup.title,
+                        memberIds: memberIds,
+                        creatorId: serverGroup.ownerId,
+                        createdAt: Date(timeIntervalSince1970: Double(serverGroup.createdAt) / 1000)
+                    )
+                    self.groups[serverGroup.groupId] = group
+                    print("[GroupService] Added to group: \(serverGroup.groupId)")
+                }
+
+            case .updated:
+                // Group was updated - sync full state from server
+                if var group = self.groups[serverGroup.groupId] {
+                    group.title = serverGroup.title
+                    group.memberIds = memberIds
+                    group.updatedAt = Date(timeIntervalSince1970: Double(serverGroup.updatedAt) / 1000)
+                    self.groups[serverGroup.groupId] = group
+                    print("[GroupService] Updated group: \(serverGroup.groupId)")
+
+                    // Check if we were removed
+                    if let myId = self.auth.currentUser?.whisperId,
+                       !memberIds.contains(myId) {
+                        self.groups.removeValue(forKey: serverGroup.groupId)
+                        self.groupMessages.removeValue(forKey: serverGroup.groupId)
+                        print("[GroupService] Removed from group: \(serverGroup.groupId)")
+                    }
+                } else {
+                    // We don't have this group yet, add it
+                    let group = ChatGroup(
+                        id: serverGroup.groupId,
+                        title: serverGroup.title,
+                        memberIds: memberIds,
+                        creatorId: serverGroup.ownerId,
+                        createdAt: Date(timeIntervalSince1970: Double(serverGroup.createdAt) / 1000)
+                    )
+                    self.groups[serverGroup.groupId] = group
+                    print("[GroupService] Added group from update event: \(serverGroup.groupId)")
+                }
+
+            case .memberAdded, .memberRemoved:
+                // These come with full group state, so just sync
+                if var group = self.groups[serverGroup.groupId] {
+                    group.title = serverGroup.title
+                    group.memberIds = memberIds
+                    group.updatedAt = Date(timeIntervalSince1970: Double(serverGroup.updatedAt) / 1000)
+                    self.groups[serverGroup.groupId] = group
+
+                    // Check if we were removed
+                    if let myId = self.auth.currentUser?.whisperId,
+                       !memberIds.contains(myId) {
+                        self.groups.removeValue(forKey: serverGroup.groupId)
+                        self.groupMessages.removeValue(forKey: serverGroup.groupId)
+                        print("[GroupService] Removed from group: \(serverGroup.groupId)")
+                    }
                 }
 
             case .none:
-                print("Unknown group event type: \(payload.eventType)")
+                print("[GroupService] Unknown group event type: \(payload.event)")
             }
 
             self.saveToStorage()
@@ -592,7 +588,3 @@ final class GroupService: ObservableObject {
     }
 }
 
-// MARK: - Group Message Constants (add to Constants.swift)
-extension Constants.MessageType {
-    static let groupCreateAck = "group_create_ack"
-}
