@@ -217,7 +217,15 @@ export class PushService {
   /**
    * Send wake-up push for a call (uses VoIP push on iOS if available).
    */
-  async sendCallWake(whisperId: string): Promise<PushResult> {
+  async sendCallWake(whisperId: string, callData?: {
+    callId: string;
+    from: string;
+    isVideo: boolean;
+    timestamp: number;
+    nonce: string;
+    ciphertext: string;
+    sig: string;
+  }): Promise<PushResult> {
     // Check if user is online
     if (connectionManager.isUserConnected(whisperId)) {
       logger.debug({ whisperId }, 'Call push skipped: user is online');
@@ -249,7 +257,7 @@ export class PushService {
 
     // iOS: prefer VoIP push for calls
     if (device.platform === 'ios' && device.voipToken) {
-      return this.sendVoip(device, payload);
+      return this.sendVoipCall(device, payload, callData);
     }
 
     // Fallback to regular push
@@ -430,11 +438,12 @@ export class PushService {
   }
 
   /**
-   * Send VoIP push (iOS CallKit).
+   * Send VoIP push for calls (iOS CallKit) - includes full call data.
    */
-  private async sendVoip(
+  private async sendVoipCall(
     device: DeviceInfo,
-    payload: PushPayload
+    payload: PushPayload,
+    callData?: { callId: string; from: string; isVideo: boolean; timestamp: number; nonce: string; ciphertext: string; sig: string }
   ): Promise<PushResult> {
     if (!device.voipToken) {
       return { sent: false, skipped: true, reason: 'no_voip_token' };
@@ -454,10 +463,21 @@ export class PushService {
       notification.priority = 10; // VoIP must be high priority
       notification.expiry = Math.floor(Date.now() / 1000) + 30; // 30 second expiry for calls
 
+      // Include full call data for CallKit
       notification.payload = {
         type: payload.type,
         reason: payload.reason,
         whisperId: payload.whisperId,
+        // Full call data for iOS to report to CallKit
+        call: callData ? {
+          callId: callData.callId,
+          from: callData.from,
+          isVideo: callData.isVideo,
+          timestamp: callData.timestamp,
+          nonce: callData.nonce,
+          ciphertext: callData.ciphertext,
+          sig: callData.sig,
+        } : undefined,
         aps: {
           'content-available': 1,
         },
@@ -482,7 +502,7 @@ export class PushService {
       }
 
       logger.info(
-        { deviceId: device.deviceId },
+        { deviceId: device.deviceId, callId: callData?.callId },
         'VoIP push sent successfully'
       );
 
@@ -496,6 +516,16 @@ export class PushService {
       logger.error({ error, deviceId: device.deviceId }, 'VoIP push error');
       return { sent: false, skipped: false, reason: 'voip_exception' };
     }
+  }
+
+  /**
+   * Send VoIP push (iOS CallKit) - generic wake-up.
+   */
+  private async sendVoip(
+    device: DeviceInfo,
+    payload: PushPayload
+  ): Promise<PushResult> {
+    return this.sendVoipCall(device, payload);
   }
 
   /**

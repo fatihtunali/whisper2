@@ -195,8 +195,16 @@ export class CallService {
       const pendingKey = RedisKeys.pendingCall(to);
       await redis.setWithTTL(pendingKey, JSON.stringify(callIncoming), TTL.PENDING_CALL);
 
-      // Send call push
-      await pushService.sendCallWake(to);
+      // Send call push with full call data for VoIP/CallKit
+      await pushService.sendCallWake(to, {
+        callId,
+        from,
+        isVideo,
+        timestamp,
+        nonce,
+        ciphertext,
+        sig,
+      });
 
       logger.info({ callId, from, to }, 'Call initiated, callee offline - push sent');
     } else {
