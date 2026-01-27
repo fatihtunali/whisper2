@@ -160,13 +160,9 @@ export class PushService {
       return { sent: false, skipped: true, reason: 'user_online' };
     }
 
-    // 2. Check suppress key (coalescing)
-    const suppressKey = RedisKeys.pushSuppress(whisperId, reason);
-    const isSuppressed = await redis.exists(suppressKey);
-    if (isSuppressed) {
-      logger.debug({ whisperId, reason }, 'Push skipped: suppressed (coalescing)');
-      return { sent: false, skipped: true, reason: 'suppressed' };
-    }
+    // 2. Get pending message count (for notification text)
+    const pendingKey = RedisKeys.pending(whisperId);
+    const pendingCount = await redis.listLength(pendingKey);
 
     // 3. Get device tokens
     const device = await this.getActiveDevice(whisperId);
@@ -188,18 +184,15 @@ export class PushService {
     // 5. Validate payload doesn't contain forbidden fields
     this.validatePayload(payload);
 
-    // 6. Set suppress key BEFORE sending (prevents race conditions)
-    await redis.setWithTTL(suppressKey, '1', TTL.PUSH_SUPPRESS);
-
-    // 7. Send push based on platform and reason
+    // 6. Send push based on platform and reason (no suppression - send every time)
     let result: PushResult;
     if (device.platform === 'ios') {
-      result = await this.sendApns(device, payload, reason);
+      result = await this.sendApns(device, payload, reason, pendingCount);
     } else {
-      result = await this.sendFcm(device, payload, reason);
+      result = await this.sendFcm(device, payload, reason, pendingCount);
     }
 
-    // 8. Log push (only allowed fields)
+    // 7. Log push (only allowed fields)
     logger.info(
       {
         whisperId,
@@ -207,6 +200,7 @@ export class PushService {
         provider: result.provider,
         sent: result.sent,
         ticketId: result.ticketId,
+        pendingCount,
       },
       'Push notification processed'
     );
@@ -363,7 +357,8 @@ export class PushService {
   private async sendApns(
     device: DeviceInfo,
     payload: PushPayload,
-    reason: PushReason
+    reason: PushReason,
+    pendingCount: number = 1
   ): Promise<PushResult> {
     if (!device.pushToken) {
       return { sent: false, skipped: true, reason: 'no_token' };
@@ -378,7 +373,7 @@ export class PushService {
     try {
       const notification = new apn.Notification();
       notification.topic = APNS_BUNDLE_ID;
-      notification.expiry = Math.floor(Date.now() / 1000) + 60; // 1 minute expiry
+      notification.expiry = Math.floor(Date.now() / 1000) + 3600; // 1 hour expiry
 
       if (reason === 'call') {
         // High priority for calls
@@ -393,11 +388,15 @@ export class PushService {
         // Alert notification for messages - shows banner to user
         notification.priority = 10;
         (notification as any).pushType = 'alert';
+        const msgText = pendingCount === 1
+          ? 'You have a new message'
+          : `You have ${pendingCount} new messages`;
         notification.alert = {
           title: 'Whisper2',
-          body: 'You have a new message',
+          body: msgText,
         };
         notification.sound = 'default';
+        notification.badge = pendingCount; // Show badge count on app icon
         notification.contentAvailable = true; // Also wake app in background
       } else {
         // Background push for system notifications
@@ -545,7 +544,8 @@ export class PushService {
   private async sendFcm(
     device: DeviceInfo,
     payload: PushPayload,
-    reason: PushReason
+    reason: PushReason,
+    pendingCount: number = 1
   ): Promise<PushResult> {
     if (!device.pushToken) {
       return { sent: false, skipped: true, reason: 'no_token' };
