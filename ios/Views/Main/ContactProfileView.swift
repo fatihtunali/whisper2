@@ -5,184 +5,304 @@ struct ContactProfileView: View {
     let peerId: String
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var contactsService = ContactsService.shared
+    @ObservedObject private var messagingService = MessagingService.shared
     @State private var showEditNickname = false
     @State private var newNickname = ""
     @State private var showBlockConfirm = false
     @State private var showDeleteConfirm = false
+    @State private var showClearChatConfirm = false
+    @State private var navigateToChat = false
 
     private var contact: Contact? {
         contactsService.getContact(whisperId: peerId)
     }
 
+    private var canCommunicate: Bool {
+        contactsService.hasValidPublicKey(for: peerId)
+    }
+
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Color.black.ignoresSafeArea()
+        ZStack {
+            Color.black.ignoresSafeArea()
 
-                ScrollView {
-                    VStack(spacing: 24) {
-                        // Avatar
-                        Circle()
-                            .fill(
-                                LinearGradient(
-                                    colors: [.blue, .purple],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
+            ScrollView {
+                VStack(spacing: 24) {
+                    // Avatar
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: [.blue, .purple],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
                             )
-                            .frame(width: 120, height: 120)
-                            .overlay(
-                                Text(String((contact?.displayName ?? "?").prefix(1)).uppercased())
-                                    .font(.system(size: 50, weight: .semibold))
-                                    .foregroundColor(.white)
-                            )
-                            .padding(.top, 20)
-
-                        // Name and status
-                        VStack(spacing: 8) {
-                            Text(contact?.displayName ?? peerId)
-                                .font(.title)
-                                .fontWeight(.bold)
+                        )
+                        .frame(width: 120, height: 120)
+                        .overlay(
+                            Text(String((contact?.displayName ?? "?").prefix(1)).uppercased())
+                                .font(.system(size: 50, weight: .semibold))
                                 .foregroundColor(.white)
-
-                            if let contact = contact {
-                                HStack(spacing: 6) {
-                                    Circle()
-                                        .fill(contact.isOnline ? Color.green : Color.gray)
-                                        .frame(width: 8, height: 8)
-                                    Text(contact.isOnline ? "Online" : lastSeenText)
-                                        .font(.subheadline)
-                                        .foregroundColor(.gray)
-                                }
-                            }
-                        }
-
-                        // Info cards
-                        VStack(spacing: 16) {
-                            // Whisper ID
-                            ProfileInfoCard(
-                                icon: "person.text.rectangle",
-                                title: "Whisper ID",
-                                value: peerId,
-                                copyable: true
-                            )
-
-                            // Nickname
-                            if let nickname = contact?.nickname {
-                                ProfileInfoCard(
-                                    icon: "pencil",
-                                    title: "Nickname",
-                                    value: nickname
-                                )
-                            }
-
-                            // Added date
-                            if let contact = contact {
-                                ProfileInfoCard(
-                                    icon: "calendar",
-                                    title: "Added",
-                                    value: formatDate(contact.addedAt)
-                                )
-                            }
-
-                            // Encryption status
-                            ProfileInfoCard(
-                                icon: contactsService.hasValidPublicKey(for: peerId) ? "lock.fill" : "lock.open",
-                                title: "Encryption",
-                                value: contactsService.hasValidPublicKey(for: peerId) ? "End-to-end encrypted" : "Key not available",
-                                valueColor: contactsService.hasValidPublicKey(for: peerId) ? .green : .orange
-                            )
-                        }
-                        .padding(.horizontal)
-
-                        // Actions
-                        VStack(spacing: 12) {
-                            // Edit nickname
-                            Button(action: {
-                                newNickname = contact?.nickname ?? ""
-                                showEditNickname = true
-                            }) {
-                                HStack {
-                                    Image(systemName: "pencil")
-                                    Text("Edit Nickname")
-                                    Spacer()
-                                    Image(systemName: "chevron.right")
-                                        .font(.caption)
-                                        .foregroundColor(.gray)
-                                }
-                                .foregroundColor(.white)
-                                .padding()
-                                .background(Color.gray.opacity(0.2))
-                                .cornerRadius(12)
-                            }
-
-                            // Block/Unblock
-                            Button(action: { showBlockConfirm = true }) {
-                                HStack {
-                                    Image(systemName: contact?.isBlocked == true ? "hand.raised.slash" : "hand.raised")
-                                    Text(contact?.isBlocked == true ? "Unblock Contact" : "Block Contact")
-                                    Spacer()
-                                }
-                                .foregroundColor(contact?.isBlocked == true ? .blue : .orange)
-                                .padding()
-                                .background(Color.gray.opacity(0.2))
-                                .cornerRadius(12)
-                            }
-
-                            // Delete
-                            Button(action: { showDeleteConfirm = true }) {
-                                HStack {
-                                    Image(systemName: "trash")
-                                    Text("Delete Contact")
-                                    Spacer()
-                                }
-                                .foregroundColor(.red)
-                                .padding()
-                                .background(Color.gray.opacity(0.2))
-                                .cornerRadius(12)
-                            }
-                        }
-                        .padding(.horizontal)
+                        )
                         .padding(.top, 20)
 
-                        Spacer()
+                    // Name and status
+                    VStack(spacing: 8) {
+                        Text(contact?.displayName ?? peerId)
+                            .font(.title)
+                            .fontWeight(.bold)
+                            .foregroundColor(.white)
+
+                        if let contact = contact {
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(contact.isOnline ? Color.green : Color.gray)
+                                    .frame(width: 8, height: 8)
+                                Text(contact.isOnline ? "Online" : lastSeenText)
+                                    .font(.subheadline)
+                                    .foregroundColor(.gray)
+                            }
+                        }
                     }
+
+                    // Action buttons (Message, Voice Call, Video Call)
+                    HStack(spacing: 40) {
+                        // Message button
+                        VStack(spacing: 8) {
+                            Button(action: { navigateToChat = true }) {
+                                Circle()
+                                    .fill(Color.blue)
+                                    .frame(width: 56, height: 56)
+                                    .overlay(
+                                        Image(systemName: "message.fill")
+                                            .font(.title2)
+                                            .foregroundColor(.white)
+                                    )
+                            }
+                            .disabled(!canCommunicate)
+                            .opacity(canCommunicate ? 1.0 : 0.5)
+
+                            Text("Message")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+
+                        // Voice call button
+                        VStack(spacing: 8) {
+                            Button(action: startVoiceCall) {
+                                Circle()
+                                    .fill(Color.green)
+                                    .frame(width: 56, height: 56)
+                                    .overlay(
+                                        Image(systemName: "phone.fill")
+                                            .font(.title2)
+                                            .foregroundColor(.white)
+                                    )
+                            }
+                            .disabled(!canCommunicate)
+                            .opacity(canCommunicate ? 1.0 : 0.5)
+
+                            Text("Call")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+
+                        // Video call button
+                        VStack(spacing: 8) {
+                            Button(action: startVideoCall) {
+                                Circle()
+                                    .fill(Color.purple)
+                                    .frame(width: 56, height: 56)
+                                    .overlay(
+                                        Image(systemName: "video.fill")
+                                            .font(.title2)
+                                            .foregroundColor(.white)
+                                    )
+                            }
+                            .disabled(!canCommunicate)
+                            .opacity(canCommunicate ? 1.0 : 0.5)
+
+                            Text("Video")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+                    }
+                    .padding(.vertical, 10)
+
+                    // Info cards
+                    VStack(spacing: 16) {
+                        // Whisper ID
+                        ProfileInfoCard(
+                            icon: "person.text.rectangle",
+                            title: "Whisper ID",
+                            value: peerId,
+                            copyable: true
+                        )
+
+                        // Nickname
+                        if let nickname = contact?.nickname {
+                            ProfileInfoCard(
+                                icon: "pencil",
+                                title: "Nickname",
+                                value: nickname
+                            )
+                        }
+
+                        // Added date
+                        if let contact = contact {
+                            ProfileInfoCard(
+                                icon: "calendar",
+                                title: "Added",
+                                value: formatDate(contact.addedAt)
+                            )
+                        }
+
+                        // Encryption status
+                        ProfileInfoCard(
+                            icon: contactsService.hasValidPublicKey(for: peerId) ? "lock.fill" : "lock.open",
+                            title: "Encryption",
+                            value: contactsService.hasValidPublicKey(for: peerId) ? "End-to-end encrypted" : "Key not available",
+                            valueColor: contactsService.hasValidPublicKey(for: peerId) ? .green : .orange
+                        )
+                    }
+                    .padding(.horizontal)
+
+                    // Settings Section
+                    VStack(spacing: 12) {
+                        // Edit nickname
+                        Button(action: {
+                            newNickname = contact?.nickname ?? ""
+                            showEditNickname = true
+                        }) {
+                            HStack {
+                                Image(systemName: "pencil")
+                                    .frame(width: 24)
+                                Text("Edit Nickname")
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                            }
+                            .foregroundColor(.white)
+                            .padding()
+                            .background(Color.gray.opacity(0.2))
+                            .cornerRadius(12)
+                        }
+
+                        // Chat theme (placeholder)
+                        Button(action: {
+                            // TODO: Implement chat theme picker
+                        }) {
+                            HStack {
+                                Image(systemName: "paintpalette")
+                                    .frame(width: 24)
+                                Text("Chat Theme")
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                            }
+                            .foregroundColor(.white)
+                            .padding()
+                            .background(Color.gray.opacity(0.2))
+                            .cornerRadius(12)
+                        }
+                    }
+                    .padding(.horizontal)
+                    .padding(.top, 10)
+
+                    // Danger Zone
+                    VStack(spacing: 12) {
+                        // Clear chat
+                        Button(action: { showClearChatConfirm = true }) {
+                            HStack {
+                                Image(systemName: "eraser")
+                                    .frame(width: 24)
+                                Text("Clear Chat History")
+                                Spacer()
+                            }
+                            .foregroundColor(.orange)
+                            .padding()
+                            .background(Color.gray.opacity(0.2))
+                            .cornerRadius(12)
+                        }
+
+                        // Block/Unblock
+                        Button(action: { showBlockConfirm = true }) {
+                            HStack {
+                                Image(systemName: contact?.isBlocked == true ? "hand.raised.slash" : "hand.raised")
+                                    .frame(width: 24)
+                                Text(contact?.isBlocked == true ? "Unblock Contact" : "Block Contact")
+                                Spacer()
+                            }
+                            .foregroundColor(contact?.isBlocked == true ? .blue : .orange)
+                            .padding()
+                            .background(Color.gray.opacity(0.2))
+                            .cornerRadius(12)
+                        }
+
+                        // Delete contact
+                        Button(action: { showDeleteConfirm = true }) {
+                            HStack {
+                                Image(systemName: "trash")
+                                    .frame(width: 24)
+                                Text("Delete Contact")
+                                Spacer()
+                            }
+                            .foregroundColor(.red)
+                            .padding()
+                            .background(Color.gray.opacity(0.2))
+                            .cornerRadius(12)
+                        }
+                    }
+                    .padding(.horizontal)
+                    .padding(.top, 10)
+
+                    Spacer(minLength: 40)
                 }
             }
-            .navigationTitle("Profile")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { dismiss() }
-                }
+        }
+        .navigationTitle("Profile")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
+        .alert("Edit Nickname", isPresented: $showEditNickname) {
+            TextField("Nickname", text: $newNickname)
+            Button("Cancel", role: .cancel) {}
+            Button("Save") {
+                saveNickname()
             }
-            .alert("Edit Nickname", isPresented: $showEditNickname) {
-                TextField("Nickname", text: $newNickname)
-                Button("Cancel", role: .cancel) {}
-                Button("Save") {
-                    saveNickname()
-                }
-            } message: {
-                Text("Enter a nickname for this contact")
+        } message: {
+            Text("Enter a nickname for this contact")
+        }
+        .alert(contact?.isBlocked == true ? "Unblock Contact?" : "Block Contact?", isPresented: $showBlockConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button(contact?.isBlocked == true ? "Unblock" : "Block", role: contact?.isBlocked == true ? .none : .destructive) {
+                toggleBlock()
             }
-            .alert(contact?.isBlocked == true ? "Unblock Contact?" : "Block Contact?", isPresented: $showBlockConfirm) {
-                Button("Cancel", role: .cancel) {}
-                Button(contact?.isBlocked == true ? "Unblock" : "Block", role: contact?.isBlocked == true ? .none : .destructive) {
-                    toggleBlock()
-                }
-            } message: {
-                Text(contact?.isBlocked == true ?
-                    "You will be able to receive messages from this contact again." :
-                    "You will no longer receive messages from this contact.")
+        } message: {
+            Text(contact?.isBlocked == true ?
+                "You will be able to receive messages from this contact again." :
+                "You will no longer receive messages from this contact.")
+        }
+        .alert("Clear Chat History?", isPresented: $showClearChatConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Clear", role: .destructive) {
+                clearChatHistory()
             }
-            .alert("Delete Contact?", isPresented: $showDeleteConfirm) {
-                Button("Cancel", role: .cancel) {}
-                Button("Delete", role: .destructive) {
-                    deleteContact()
-                }
-            } message: {
-                Text("This will remove the contact and all conversation history.")
+        } message: {
+            Text("This will delete all messages in this conversation. This cannot be undone.")
+        }
+        .alert("Delete Contact?", isPresented: $showDeleteConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                deleteContact()
             }
+        } message: {
+            Text("This will remove the contact and all conversation history.")
+        }
+        .navigationDestination(isPresented: $navigateToChat) {
+            ChatView(conversation: Conversation(
+                peerId: peerId,
+                peerNickname: contact?.nickname
+            ))
         }
     }
 
@@ -214,9 +334,43 @@ struct ContactProfileView: View {
         }
     }
 
+    private func clearChatHistory() {
+        messagingService.clearMessages(for: peerId)
+    }
+
     private func deleteContact() {
         contactsService.deleteContact(whisperId: peerId)
         dismiss()
+    }
+
+    private func startVoiceCall() {
+        guard let contact = contact else { return }
+        Task {
+            do {
+                try await CallService.shared.startCall(
+                    to: peerId,
+                    peerName: contact.displayName,
+                    isVideo: false
+                )
+            } catch {
+                print("Failed to start voice call: \(error)")
+            }
+        }
+    }
+
+    private func startVideoCall() {
+        guard let contact = contact else { return }
+        Task {
+            do {
+                try await CallService.shared.startCall(
+                    to: peerId,
+                    peerName: contact.displayName,
+                    isVideo: true
+                )
+            } catch {
+                print("Failed to start video call: \(error)")
+            }
+        }
     }
 }
 
@@ -271,5 +425,7 @@ struct ProfileInfoCard: View {
 }
 
 #Preview {
-    ContactProfileView(peerId: "WSP-TEST-1234-5678")
+    NavigationStack {
+        ContactProfileView(peerId: "WSP-TEST-1234-5678")
+    }
 }

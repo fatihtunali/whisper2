@@ -3,12 +3,9 @@ import SwiftUI
 /// Contact row component
 struct ContactRow: View {
     let contact: Contact
-    
+
     var body: some View {
-        NavigationLink(destination: ChatView(conversation: Conversation(
-            peerId: contact.whisperId,
-            peerNickname: contact.nickname
-        ))) {
+        NavigationLink(destination: ContactProfileView(peerId: contact.whisperId)) {
             HStack(spacing: 12) {
                 // Avatar
                 Circle()
@@ -36,26 +33,24 @@ struct ContactRow: View {
                             )
                             .offset(x: 18, y: 18)
                     )
-                
+
                 // Info
                 VStack(alignment: .leading, spacing: 4) {
                     Text(contact.displayName)
                         .font(.headline)
                         .foregroundColor(.white)
-                    
+
                     Text(contact.whisperId)
                         .font(.caption)
                         .foregroundColor(.gray)
                         .lineLimit(1)
                 }
-                
+
                 Spacer()
-                
-                // Message button
-                Button(action: {}) {
-                    Image(systemName: "message.fill")
-                        .foregroundColor(.blue)
-                }
+
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundColor(.gray)
             }
             .padding(.vertical, 8)
         }

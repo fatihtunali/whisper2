@@ -729,6 +729,20 @@ final class MessagingService: ObservableObject {
     // MARK: - Clear All Data
 
     /// Clear all messaging data (for wipe data feature)
+    /// Clear messages for a specific conversation
+    func clearMessages(for conversationId: String) {
+        messages[conversationId] = []
+        saveMessagesToStorage()
+
+        // Update conversation to show no messages
+        if let index = conversations.firstIndex(where: { $0.peerId == conversationId }) {
+            conversations[index].lastMessage = nil
+            conversations[index].lastMessageTime = nil
+            conversations[index].unreadCount = 0
+            saveConversationsToStorage()
+        }
+    }
+
     func clearAllData() {
         messages.removeAll()
         conversations.removeAll()
