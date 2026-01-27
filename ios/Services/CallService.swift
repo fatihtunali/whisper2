@@ -333,7 +333,7 @@ final class CallService: NSObject, ObservableObject {
 
         guard let senderPublicKey = contacts.getPublicKey(for: incomingPayload.from) else {
             print("ERROR: No public key for caller \(incomingPayload.from)")
-            print("Available contacts: \(contacts.contacts.map { $0.whisperId })")
+            print("Available contacts: \(Array(contacts.contacts.keys))")
             // Add as contact temporarily for the call
             throw CryptoError.invalidPublicKey
         }
