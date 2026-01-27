@@ -33,6 +33,8 @@
 		3C4022F729B77961A73399A5 /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C652DDDA3A343C9A3387381 /* Constants.swift */; };
 		42CDEF29F3AAA1171AD31362 /* Message.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46AF5BB628E816B22E1C03F0 /* Message.swift */; };
 		42F313C7F90F195B868320B9 /* ContactProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 913628273C6F97712E4D4A16 /* ContactProfileView.swift */; };
+		CHATTHEMEBUILD12345678 /* ChatTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = CHATTHEME12345678901234 /* ChatTheme.swift */; };
+		CHATTHEMEPICKERBUILD123 /* ChatThemePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CHATTHEMEPICKER123456789 /* ChatThemePickerView.swift */; };
 		4345CA95B1C07469D92B6F41 /* AuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E726641F6F72BE366C875C5 /* AuthService.swift */; };
 		46C5F642B6FF36F42673C036 /* GroupChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15877D6FA5F146D8A29E2102 /* GroupChatView.swift */; };
 		46F27140A4B59906816440AA /* Contact.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C043E02CB8D20206D40CD67 /* Contact.swift */; };
@@ -141,6 +143,8 @@
 		F5D60A4E6445EC48C5FB287D /* CreateAccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateAccountView.swift; sourceTree = "<group>"; };
 		F65C4FD538665068C7537900 /* WebSocketService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketService.swift; sourceTree = "<group>"; };
 		F72812296906C23775F15335 /* CryptoService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CryptoService.swift; sourceTree = "<group>"; };
+		CHATTHEME12345678901234 /* ChatTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatTheme.swift; sourceTree = "<group>"; };
+		CHATTHEMEPICKER123456789 /* ChatThemePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatThemePickerView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -224,6 +228,7 @@
 			children = (
 				1B947D2B38A69A845434C32C /* AddContactView.swift */,
 				835FFCAC544DA1C9FBF0223F /* ChatsListView.swift */,
+				CHATTHEMEPICKER123456789 /* ChatThemePickerView.swift */,
 				8EC6D3CDD8D494434163F367 /* ChatView.swift */,
 				913628273C6F97712E4D4A16 /* ContactProfileView.swift */,
 				78DC4915E0A686295312943B /* ContactsListView.swift */,
@@ -343,6 +348,7 @@
 			isa = PBXGroup;
 			children = (
 				7B1E7A52019BE1DA7EFA8A61 /* CallHistory.swift */,
+				CHATTHEME12345678901234 /* ChatTheme.swift */,
 				1C043E02CB8D20206D40CD67 /* Contact.swift */,
 				45366876C1ED1ADC483BBFB0 /* Conversation.swift */,
 				B595D834E8FF0A68FABF1BB0 /* Group.swift */,
@@ -513,6 +519,8 @@
 				D1EFCBE6F6CC212F7E58CB41 /* CallKitManager.swift in Sources */,
 				F3D9A514EE4F283030FA38D4 /* CallService.swift in Sources */,
 				BAEA24B952380CEE05533FA9 /* ChatRow.swift in Sources */,
+				CHATTHEMEBUILD12345678 /* ChatTheme.swift in Sources */,
+				CHATTHEMEPICKERBUILD123 /* ChatThemePickerView.swift in Sources */,
 				030855EDED5F6AD80E41DAAF /* ChatView.swift in Sources */,
 				CFB2D31596A9D4B374D87037 /* ChatViewModel.swift in Sources */,
 				8631D020691DBDECD5C4A65F /* ChatsListView.swift in Sources */,

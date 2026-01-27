@@ -105,6 +105,23 @@ validators.set('typing', ajv.compile({
   additionalProperties: false,
 }));
 
+// Delete message schema
+validators.set('delete_message', ajv.compile({
+  type: 'object',
+  properties: {
+    protocolVersion: { type: 'integer', const: 1 },
+    cryptoVersion: { type: 'integer', const: 1 },
+    sessionToken: { type: 'string', minLength: 1 },
+    messageId: { type: 'string', minLength: 1 },
+    conversationId: { type: 'string', minLength: 1 },
+    deleteForEveryone: { type: 'boolean' },
+    timestamp: { type: 'number' },
+    sig: { type: 'string', minLength: 1 },
+  },
+  required: ['protocolVersion', 'cryptoVersion', 'sessionToken', 'messageId', 'conversationId', 'deleteForEveryone', 'timestamp', 'sig'],
+  additionalProperties: false,
+}));
+
 // =============================================================================
 // VALIDATION FUNCTIONS
 // =============================================================================

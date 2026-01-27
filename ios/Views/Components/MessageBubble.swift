@@ -6,9 +6,26 @@ import UIKit
 struct MessageBubble: View {
     let message: Message
     var onDelete: ((Bool) -> Void)? = nil  // Bool = deleteForEveryone
+    var theme: ChatTheme? = nil  // Optional theme for custom colors
 
     private var isOutgoing: Bool {
         message.direction == .outgoing
+    }
+
+    private var outgoingColor: Color {
+        theme?.outgoingBubbleColor.color ?? Color.blue
+    }
+
+    private var incomingColor: Color {
+        theme?.incomingBubbleColor.color ?? Color.gray.opacity(0.4)
+    }
+
+    private var outgoingTextColor: Color {
+        theme?.outgoingTextColor.color ?? .white
+    }
+
+    private var incomingTextColor: Color {
+        theme?.incomingTextColor.color ?? .white
     }
 
     var body: some View {
@@ -83,11 +100,22 @@ struct MessageBubble: View {
     private var textContent: some View {
         Text(message.content)
             .font(.body)
-            .foregroundColor(.white)
+            .foregroundColor(isOutgoing ? outgoingTextColor : incomingTextColor)
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(bubbleGradient)
+            .background(bubbleBackground)
             .clipShape(BubbleShape(isOutgoing: isOutgoing))
+    }
+
+    @ViewBuilder
+    private var bubbleBackground: some View {
+        if let _ = theme {
+            // Use solid color when theme is applied
+            isOutgoing ? outgoingColor : incomingColor
+        } else {
+            // Default gradient
+            bubbleGradient
+        }
     }
 
     // MARK: - Audio Content

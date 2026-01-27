@@ -211,6 +211,25 @@ export interface MessageDeliveredPayload {
   timestamp: number;
 }
 
+// Delete message (Section 4.4)
+export interface DeleteMessagePayload extends VersionedPayload {
+  sessionToken: string;
+  messageId: string;
+  conversationId: string; // peer whisperId
+  deleteForEveryone: boolean;
+  timestamp: number;
+  sig: string; // base64
+}
+
+// Message deleted notification (server → recipient)
+export interface MessageDeletedPayload {
+  messageId: string;
+  conversationId: string;
+  deletedBy: string; // whisperId who deleted
+  deleteForEveryone: boolean;
+  timestamp: number;
+}
+
 // =============================================================================
 // PENDING MESSAGES (Section 5)
 // =============================================================================
@@ -424,6 +443,8 @@ export const MessageTypes = {
   MESSAGE_RECEIVED: 'message_received',
   DELIVERY_RECEIPT: 'delivery_receipt',
   MESSAGE_DELIVERED: 'message_delivered',
+  DELETE_MESSAGE: 'delete_message',
+  MESSAGE_DELETED: 'message_deleted',
   FETCH_PENDING: 'fetch_pending',
   PENDING_MESSAGES: 'pending_messages',
 

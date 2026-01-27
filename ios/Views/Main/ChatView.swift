@@ -4,9 +4,14 @@ import SwiftUI
 struct ChatView: View {
     let conversation: Conversation
     @StateObject private var viewModel: ChatViewModel
+    @ObservedObject private var messagingService = MessagingService.shared
     @FocusState private var isInputFocused: Bool
     @State private var showAddKeyAlert = false
     @State private var showContactProfile = false
+
+    private var theme: ChatTheme {
+        messagingService.getChatTheme(for: conversation.peerId)
+    }
 
     init(conversation: Conversation) {
         self.conversation = conversation
@@ -15,7 +20,7 @@ struct ChatView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            theme.backgroundColor.color.ignoresSafeArea()
 
             VStack(spacing: 0) {
                 // Key missing warning
@@ -43,9 +48,9 @@ struct ChatView: View {
                     ScrollView {
                         LazyVStack(spacing: 8) {
                             ForEach(viewModel.messages) { message in
-                                MessageBubble(message: message) { deleteForEveryone in
+                                MessageBubble(message: message, onDelete: { deleteForEveryone in
                                     viewModel.deleteMessage(messageId: message.id, deleteForEveryone: deleteForEveryone)
-                                }
+                                }, theme: theme)
                                 .id(message.id)
                             }
                         }

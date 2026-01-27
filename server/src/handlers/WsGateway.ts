@@ -32,6 +32,7 @@ import {
   PingPayload,
   SendMessagePayload,
   DeliveryReceiptPayload,
+  DeleteMessagePayload,
   FetchPendingPayload,
   UpdateTokensPayload,
   GetTurnCredentialsPayload,
@@ -266,6 +267,10 @@ export class WsGateway {
 
       case MessageTypes.FETCH_PENDING:
         await this.handleFetchPending(conn, payload as FetchPendingPayload, requestId);
+        break;
+
+      case MessageTypes.DELETE_MESSAGE:
+        await this.handleDeleteMessage(conn, payload as DeleteMessagePayload, requestId);
         break;
 
       // Group handlers
@@ -527,6 +532,48 @@ export class WsGateway {
       type: MessageTypes.PENDING_MESSAGES,
       requestId,
       payload: result.data,
+    });
+  }
+
+  private async handleDeleteMessage(
+    conn: Connection,
+    payload: DeleteMessagePayload,
+    requestId?: string
+  ): Promise<void> {
+    if (!conn.whisperId) {
+      this.sendError(conn.ws, 'NOT_REGISTERED', 'Not authenticated', requestId);
+      return;
+    }
+
+    logger.debug({ messageId: payload.messageId, deleteForEveryone: payload.deleteForEveryone }, 'Delete message request');
+
+    // If deleting for everyone, forward the delete notification to the recipient
+    if (payload.deleteForEveryone) {
+      const deleteNotification = {
+        messageId: payload.messageId,
+        conversationId: payload.conversationId,
+        deletedBy: conn.whisperId,
+        deleteForEveryone: true,
+        timestamp: payload.timestamp,
+      };
+
+      // Send to the conversation partner (conversationId is their whisperId)
+      connectionManager.sendToUser(payload.conversationId, {
+        type: MessageTypes.MESSAGE_DELETED,
+        payload: deleteNotification,
+      });
+
+      logger.info({ messageId: payload.messageId, recipient: payload.conversationId }, 'Delete notification sent');
+    }
+
+    // Acknowledge the delete request
+    this.send(conn.ws, {
+      type: 'delete_ack',
+      requestId,
+      payload: {
+        messageId: payload.messageId,
+        deleted: true,
+      },
     });
   }
 

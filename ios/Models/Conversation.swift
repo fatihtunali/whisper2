@@ -11,9 +11,10 @@ struct Conversation: Codable, Identifiable, Hashable {
     var isTyping: Bool
     var isPinned: Bool
     var isMuted: Bool
+    var chatThemeId: String?    // Custom chat theme
     let createdAt: Date
     var updatedAt: Date
-    
+
     init(
         id: String = UUID().uuidString,
         peerId: String,
@@ -24,6 +25,7 @@ struct Conversation: Codable, Identifiable, Hashable {
         isTyping: Bool = false,
         isPinned: Bool = false,
         isMuted: Bool = false,
+        chatThemeId: String? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -36,6 +38,7 @@ struct Conversation: Codable, Identifiable, Hashable {
         self.isTyping = isTyping
         self.isPinned = isPinned
         self.isMuted = isMuted
+        self.chatThemeId = chatThemeId
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }

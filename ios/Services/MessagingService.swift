@@ -743,6 +743,20 @@ final class MessagingService: ObservableObject {
         }
     }
 
+    /// Set chat theme for a conversation
+    func setChatTheme(for conversationId: String, themeId: String) {
+        if let index = conversations.firstIndex(where: { $0.peerId == conversationId }) {
+            conversations[index].chatThemeId = themeId
+            saveConversationsToStorage()
+        }
+    }
+
+    /// Get chat theme for a conversation
+    func getChatTheme(for conversationId: String) -> ChatTheme {
+        let conversation = conversations.first { $0.peerId == conversationId }
+        return ChatTheme.getTheme(id: conversation?.chatThemeId)
+    }
+
     func clearAllData() {
         messages.removeAll()
         conversations.removeAll()

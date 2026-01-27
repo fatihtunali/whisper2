@@ -12,6 +12,7 @@ struct ContactProfileView: View {
     @State private var showDeleteConfirm = false
     @State private var showClearChatConfirm = false
     @State private var navigateToChat = false
+    @State private var showChatTheme = false
 
     private var contact: Contact? {
         contactsService.getContact(whisperId: peerId)
@@ -187,10 +188,8 @@ struct ContactProfileView: View {
                             .cornerRadius(12)
                         }
 
-                        // Chat theme (placeholder)
-                        Button(action: {
-                            // TODO: Implement chat theme picker
-                        }) {
+                        // Chat theme
+                        NavigationLink(destination: ChatThemePickerView(peerId: peerId)) {
                             HStack {
                                 Image(systemName: "paintpalette")
                                     .frame(width: 24)
