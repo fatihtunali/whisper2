@@ -317,5 +317,11 @@ final class ChatViewModel: ObservableObject {
 
     deinit {
         typingTimer?.invalidate()
+        // Send typing stopped when leaving chat
+        if isTyping {
+            Task { @MainActor in
+                try? await MessagingService.shared.sendTypingIndicator(to: conversationId, isTyping: false)
+            }
+        }
     }
 }

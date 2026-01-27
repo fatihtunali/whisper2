@@ -25,6 +25,9 @@ final class MessagingService: ObservableObject {
         messageRequestSubject.eraseToAnyPublisher()
     }
 
+    // Typing timeout timers - auto-clear typing status after 5 seconds
+    private var typingTimers: [String: Timer] = [:]
+
     private let messagesStorageKey = "whisper2.messages.data"
     private let conversationsStorageKey = "whisper2.conversations.data"
 
@@ -649,8 +652,24 @@ final class MessagingService: ObservableObject {
               contactsService.hasContact(whisperId: senderId) else { return }
 
         DispatchQueue.main.async {
+            // Cancel existing timer for this sender
+            self.typingTimers[senderId]?.invalidate()
+            self.typingTimers[senderId] = nil
+
             if let index = self.conversations.firstIndex(where: { $0.peerId == senderId }) {
                 self.conversations[index].isTyping = isTyping
+
+                // If typing started, set a timeout to auto-clear after 5 seconds
+                if isTyping {
+                    self.typingTimers[senderId] = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { [weak self] _ in
+                        DispatchQueue.main.async {
+                            if let idx = self?.conversations.firstIndex(where: { $0.peerId == senderId }) {
+                                self?.conversations[idx].isTyping = false
+                            }
+                            self?.typingTimers[senderId] = nil
+                        }
+                    }
+                }
             }
         }
     }
