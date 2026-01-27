@@ -118,10 +118,13 @@ final class PushNotificationService: NSObject, ObservableObject {
     // MARK: - WebSocket Listener
 
     private func setupWebSocketListener() {
-        // Re-send tokens when we reconnect
-        ws.$connectionState
-            .sink { [weak self] state in
-                if state == .connected {
+        // Re-send tokens when we reconnect AND are authenticated
+        // Note: Initial token send is done via sendTokensAfterAuth() after login
+        auth.$isAuthenticated
+            .combineLatest(ws.$connectionState)
+            .sink { [weak self] (isAuthenticated, connectionState) in
+                // Only send if both authenticated AND connected
+                if isAuthenticated && connectionState == .connected {
                     Task {
                         await self?.sendTokensToServer()
                     }
