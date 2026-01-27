@@ -696,14 +696,29 @@ final class MessagingService: ObservableObject {
         if let index = conversations.firstIndex(where: { $0.peerId == conversationId }) {
             conversations[index].unreadCount = 0
         }
-        
-        if let msgs = messages[conversationId] {
-            let unreadMessages = msgs.filter { $0.direction == .incoming && $0.status == .delivered }
-            for msg in unreadMessages {
+
+        guard var msgs = messages[conversationId] else { return }
+
+        // Find messages that need to be marked as read (incoming, delivered but not yet read)
+        var needsSave = false
+        for i in msgs.indices {
+            if msgs[i].direction == .incoming && msgs[i].status == .delivered {
+                // Send read receipt only once
+                let messageId = msgs[i].id
+                let senderId = msgs[i].from
                 Task {
-                    try? await sendDeliveryReceipt(messageId: msg.id, from: msg.from, status: "read")
+                    try? await sendDeliveryReceipt(messageId: messageId, from: senderId, status: "read")
                 }
+                // Update local status to read so we don't send receipt again
+                msgs[i].status = .read
+                needsSave = true
             }
+        }
+
+        // Update messages array and save if any changes were made
+        if needsSave {
+            messages[conversationId] = msgs
+            saveMessages()
         }
     }
     
