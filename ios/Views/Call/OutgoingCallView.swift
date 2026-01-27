@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import UIKit
 
 /// Minimal outgoing call view - shown when initiating a call
 /// CallKit handles incoming calls, but outgoing calls need custom UI
@@ -80,6 +81,9 @@ struct OutgoingCallView: View {
             }
         }
         .onAppear {
+            // Dismiss keyboard when call view appears
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+
             withAnimation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true)) {
                 animationPhase = 1.0
             }

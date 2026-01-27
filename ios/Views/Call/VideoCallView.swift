@@ -1,5 +1,6 @@
 import SwiftUI
 import WebRTC
+import UIKit
 
 /// Active video call view - shown when video call is connected
 struct VideoCallView: View {
@@ -140,6 +141,8 @@ struct VideoCallView: View {
             scheduleHideControls()
         }
         .onAppear {
+            // Dismiss keyboard when call view appears
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             scheduleHideControls()
         }
         .statusBar(hidden: true)

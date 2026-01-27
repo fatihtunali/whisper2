@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Active audio call view - shown when audio call is connected
 struct AudioCallView: View {
@@ -110,6 +111,10 @@ struct AudioCallView: View {
             }
         }
         .statusBar(hidden: true)
+        .onAppear {
+            // Dismiss keyboard when call view appears
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        }
     }
 }
 
