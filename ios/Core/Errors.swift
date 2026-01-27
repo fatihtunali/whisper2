@@ -38,14 +38,16 @@ enum CryptoError: LocalizedError {
 // MARK: - Auth Errors
 enum AuthError: LocalizedError {
     case notAuthenticated
+    case notAuthorized
     case sessionExpired
     case invalidChallenge
     case invalidCredentials
     case registrationFailed(String)
-    
+
     var errorDescription: String? {
         switch self {
         case .notAuthenticated: return "Not authenticated"
+        case .notAuthorized: return "Not authorized to perform this action"
         case .sessionExpired: return "Session expired"
         case .invalidChallenge: return "Invalid challenge"
         case .invalidCredentials: return "Invalid credentials"

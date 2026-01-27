@@ -140,24 +140,14 @@ final class GroupService: ObservableObject {
 
     // MARK: - Group Invites
 
-    /// Accept a group invite
+    /// Accept a group invite - just move from invites to groups locally
+    /// (Server already added us to the group when creator created it)
     func acceptInvite(_ groupId: String) async throws {
-        guard let invite = groupInvites[groupId],
-              let sessionToken = auth.currentUser?.sessionToken else {
+        guard let invite = groupInvites[groupId] else {
             throw NetworkError.connectionFailed
         }
 
-        // Send accept to server
-        let payload = GroupInviteResponsePayload(
-            sessionToken: sessionToken,
-            groupId: groupId,
-            accept: true
-        )
-
-        let frame = WsFrame(type: Constants.MessageType.groupInviteResponse, payload: payload)
-        try await ws.send(frame)
-
-        // Add group locally
+        // Add group locally (server already has us as member)
         await MainActor.run {
             let group = ChatGroup(
                 id: invite.groupId,
@@ -169,29 +159,32 @@ final class GroupService: ObservableObject {
             self.groups[groupId] = group
             self.groupInvites.removeValue(forKey: groupId)
             self.saveToStorage()
+            print("[GroupService] Accepted invite for group: \(groupId)")
         }
     }
 
-    /// Decline a group invite
+    /// Decline a group invite - leave the group on server and remove locally
     func declineInvite(_ groupId: String) async throws {
-        guard let sessionToken = auth.currentUser?.sessionToken else {
+        guard let user = auth.currentUser,
+              let sessionToken = user.sessionToken else {
             throw NetworkError.connectionFailed
         }
 
-        // Send decline to server
-        let payload = GroupInviteResponsePayload(
+        // Leave the group on server (we were already added when it was created)
+        let payload = GroupUpdatePayload(
             sessionToken: sessionToken,
             groupId: groupId,
-            accept: false
+            removeMembers: [user.whisperId]
         )
 
-        let frame = WsFrame(type: Constants.MessageType.groupInviteResponse, payload: payload)
+        let frame = WsFrame(type: Constants.MessageType.groupUpdate, payload: payload)
         try await ws.send(frame)
 
         // Remove invite locally
         await MainActor.run {
             self.groupInvites.removeValue(forKey: groupId)
             self.saveToStorage()
+            print("[GroupService] Declined invite for group: \(groupId)")
         }
     }
 
@@ -368,16 +361,19 @@ final class GroupService: ObservableObject {
                     self.groups[serverGroup.groupId] = group
                     print("[GroupService] Created group locally: \(serverGroup.groupId)")
                 } else {
-                    // We were invited - add group directly (no invite accept needed per server design)
-                    let group = ChatGroup(
-                        id: serverGroup.groupId,
+                    // We were invited - show as pending invite so user can accept/decline
+                    let inviterName = self.contacts.getContact(whisperId: serverGroup.ownerId)?.displayName
+                    let invite = GroupInvite(
+                        groupId: serverGroup.groupId,
                         title: serverGroup.title,
+                        inviterId: serverGroup.ownerId,
+                        inviterName: inviterName,
                         memberIds: memberIds,
-                        creatorId: serverGroup.ownerId,
-                        createdAt: Date(timeIntervalSince1970: Double(serverGroup.createdAt) / 1000)
+                        createdAt: Date(timeIntervalSince1970: Double(serverGroup.createdAt) / 1000),
+                        receivedAt: Date()
                     )
-                    self.groups[serverGroup.groupId] = group
-                    print("[GroupService] Added to group: \(serverGroup.groupId)")
+                    self.groupInvites[serverGroup.groupId] = invite
+                    print("[GroupService] Received group invite: \(serverGroup.groupId)")
                 }
 
             case .updated:
@@ -503,6 +499,47 @@ final class GroupService: ObservableObject {
             msgs.removeAll { $0.id == messageId }
             groupMessages[groupId] = msgs
             saveMessages()
+        }
+    }
+
+    // MARK: - Admin Functions
+
+    /// Check if current user is the owner of the group
+    func isOwner(of groupId: String) -> Bool {
+        guard let group = groups[groupId],
+              let myId = auth.currentUser?.whisperId else {
+            return false
+        }
+        return group.creatorId == myId
+    }
+
+    /// Kick a member from the group (owner/admin only)
+    func kickMember(_ memberId: String, from groupId: String) async throws {
+        guard let sessionToken = auth.currentUser?.sessionToken else {
+            throw NetworkError.connectionFailed
+        }
+
+        guard isOwner(of: groupId) else {
+            throw AuthError.notAuthorized
+        }
+
+        let payload = GroupUpdatePayload(
+            sessionToken: sessionToken,
+            groupId: groupId,
+            removeMembers: [memberId]
+        )
+
+        let frame = WsFrame(type: Constants.MessageType.groupUpdate, payload: payload)
+        try await ws.send(frame)
+
+        // Update local state optimistically
+        await MainActor.run {
+            if var group = self.groups[groupId] {
+                group.memberIds.removeAll { $0 == memberId }
+                self.groups[groupId] = group
+                self.saveToStorage()
+            }
+            print("[GroupService] Kicked member \(memberId) from group \(groupId)")
         }
     }
 

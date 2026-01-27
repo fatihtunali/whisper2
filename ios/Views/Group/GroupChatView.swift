@@ -224,9 +224,21 @@ class GroupChatViewModel: ObservableObject {
 struct GroupInfoView: View {
     let group: ChatGroup
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var groupService = GroupService.shared
     @State private var showAddMembers = false
     @State private var showLeaveConfirm = false
+    @State private var memberToKick: String?
+    @State private var showKickConfirm = false
+    @State private var isProcessing = false
     private let contacts = ContactsService.shared
+
+    private var isOwner: Bool {
+        groupService.isOwner(of: group.id)
+    }
+
+    private var currentGroup: ChatGroup {
+        groupService.getGroup(group.id) ?? group
+    }
 
     var body: some View {
         NavigationStack {
@@ -247,14 +259,20 @@ struct GroupInfoView: View {
                                     .foregroundColor(.purple)
                             }
 
-                            Text(group.title)
+                            Text(currentGroup.title)
                                 .font(.title2)
                                 .fontWeight(.semibold)
                                 .foregroundColor(.white)
 
-                            Text("\(group.memberIds.count) members")
+                            Text("\(currentGroup.memberIds.count) members")
                                 .font(.subheadline)
                                 .foregroundColor(.gray)
+
+                            if isOwner {
+                                Text("You are the admin")
+                                    .font(.caption)
+                                    .foregroundColor(.blue)
+                            }
                         }
                         .frame(maxWidth: .infinity)
                         .padding()
@@ -263,42 +281,31 @@ struct GroupInfoView: View {
 
                     // Members
                     Section("Members") {
-                        ForEach(group.memberIds, id: \.self) { memberId in
-                            HStack {
-                                Circle()
-                                    .fill(Color.gray.opacity(0.3))
-                                    .frame(width: 40, height: 40)
-                                    .overlay(
-                                        Text(String(getMemberName(memberId).prefix(1)).uppercased())
-                                            .font(.headline)
-                                            .foregroundColor(.white)
-                                    )
-
-                                VStack(alignment: .leading) {
-                                    Text(getMemberName(memberId))
-                                        .foregroundColor(.white)
-
-                                    if memberId == group.creatorId {
-                                        Text("Admin")
-                                            .font(.caption)
-                                            .foregroundColor(.blue)
-                                    }
+                        ForEach(currentGroup.memberIds, id: \.self) { memberId in
+                            MemberRow(
+                                memberId: memberId,
+                                isCreator: memberId == currentGroup.creatorId,
+                                isCurrentUser: memberId == AuthService.shared.currentUser?.whisperId,
+                                canKick: isOwner && memberId != currentGroup.creatorId && memberId != AuthService.shared.currentUser?.whisperId,
+                                onKick: {
+                                    memberToKick = memberId
+                                    showKickConfirm = true
                                 }
-
-                                Spacer()
-                            }
+                            )
                             .listRowBackground(Color.black)
                         }
 
-                        Button(action: { showAddMembers = true }) {
-                            HStack {
-                                Image(systemName: "person.badge.plus")
-                                    .foregroundColor(.blue)
-                                Text("Add Members")
-                                    .foregroundColor(.blue)
+                        if isOwner {
+                            Button(action: { showAddMembers = true }) {
+                                HStack {
+                                    Image(systemName: "person.badge.plus")
+                                        .foregroundColor(.blue)
+                                    Text("Add Members")
+                                        .foregroundColor(.blue)
+                                }
                             }
+                            .listRowBackground(Color.black)
                         }
-                        .listRowBackground(Color.black)
                     }
 
                     // Actions
@@ -315,6 +322,13 @@ struct GroupInfoView: View {
                 }
                 .listStyle(.insetGrouped)
                 .scrollContentBackground(.hidden)
+
+                if isProcessing {
+                    Color.black.opacity(0.5)
+                        .ignoresSafeArea()
+                    ProgressView()
+                        .tint(.white)
+                }
             }
             .navigationTitle("Group Info")
             .navigationBarTitleDisplayMode(.inline)
@@ -331,6 +345,23 @@ struct GroupInfoView: View {
             } message: {
                 Text("You will no longer receive messages from this group.")
             }
+            .alert("Remove Member?", isPresented: $showKickConfirm) {
+                Button("Remove", role: .destructive) {
+                    if let memberId = memberToKick {
+                        kickMember(memberId)
+                    }
+                }
+                Button("Cancel", role: .cancel) {
+                    memberToKick = nil
+                }
+            } message: {
+                if let memberId = memberToKick {
+                    Text("Remove \(getMemberName(memberId)) from the group?")
+                }
+            }
+            .sheet(isPresented: $showAddMembers) {
+                AddMembersView(groupId: group.id)
+            }
         }
     }
 
@@ -342,10 +373,211 @@ struct GroupInfoView: View {
     }
 
     private func leaveGroup() {
+        isProcessing = true
         Task {
             try? await GroupService.shared.leaveGroup(group.id)
             await MainActor.run {
+                isProcessing = false
                 dismiss()
+            }
+        }
+    }
+
+    private func kickMember(_ memberId: String) {
+        isProcessing = true
+        Task {
+            do {
+                try await GroupService.shared.kickMember(memberId, from: group.id)
+            } catch {
+                print("[GroupInfo] Failed to kick member: \(error)")
+            }
+            await MainActor.run {
+                isProcessing = false
+                memberToKick = nil
+            }
+        }
+    }
+}
+
+/// Row for a member in group info
+struct MemberRow: View {
+    let memberId: String
+    let isCreator: Bool
+    let isCurrentUser: Bool
+    let canKick: Bool
+    let onKick: () -> Void
+
+    private let contacts = ContactsService.shared
+
+    var body: some View {
+        HStack {
+            Circle()
+                .fill(Color.gray.opacity(0.3))
+                .frame(width: 40, height: 40)
+                .overlay(
+                    Text(String(getMemberName().prefix(1)).uppercased())
+                        .font(.headline)
+                        .foregroundColor(.white)
+                )
+
+            VStack(alignment: .leading) {
+                Text(getMemberName())
+                    .foregroundColor(.white)
+
+                if isCreator {
+                    Text("Admin")
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                } else if isCurrentUser {
+                    Text("You")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+            }
+
+            Spacer()
+
+            if canKick {
+                Button(action: onKick) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.red.opacity(0.7))
+                        .font(.title3)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func getMemberName() -> String {
+        if isCurrentUser {
+            return "You"
+        }
+        return contacts.getContact(whisperId: memberId)?.displayName ?? memberId
+    }
+}
+
+/// View for adding members to existing group
+struct AddMembersView: View {
+    let groupId: String
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var contactsService = ContactsService.shared
+    @ObservedObject var groupService = GroupService.shared
+    @State private var selectedMembers: Set<String> = []
+    @State private var isAdding = false
+    @State private var error: String?
+
+    private var currentMembers: Set<String> {
+        Set(groupService.getGroup(groupId)?.memberIds ?? [])
+    }
+
+    private var availableContacts: [Contact] {
+        contactsService.getAllContacts().filter { !currentMembers.contains($0.whisperId) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color.black.ignoresSafeArea()
+
+                if availableContacts.isEmpty {
+                    VStack(spacing: 16) {
+                        Image(systemName: "person.crop.circle.badge.checkmark")
+                            .font(.system(size: 50))
+                            .foregroundColor(.gray)
+
+                        Text("All contacts are already members")
+                            .foregroundColor(.gray)
+                    }
+                } else {
+                    List {
+                        ForEach(availableContacts) { contact in
+                            Button(action: { toggleMember(contact.whisperId) }) {
+                                HStack {
+                                    Circle()
+                                        .fill(Color.gray.opacity(0.3))
+                                        .frame(width: 40, height: 40)
+                                        .overlay(
+                                            Text(String(contact.displayName.prefix(1)).uppercased())
+                                                .font(.headline)
+                                                .foregroundColor(.white)
+                                        )
+
+                                    VStack(alignment: .leading) {
+                                        Text(contact.displayName)
+                                            .foregroundColor(.white)
+
+                                        if !contactsService.hasValidPublicKey(for: contact.whisperId) {
+                                            Text("No encryption key")
+                                                .font(.caption)
+                                                .foregroundColor(.orange)
+                                        }
+                                    }
+
+                                    Spacer()
+
+                                    if selectedMembers.contains(contact.whisperId) {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundColor(.blue)
+                                    } else {
+                                        Image(systemName: "circle")
+                                            .foregroundColor(.gray)
+                                    }
+                                }
+                            }
+                            .disabled(!contactsService.hasValidPublicKey(for: contact.whisperId))
+                            .listRowBackground(Color.black)
+                        }
+                    }
+                    .listStyle(.plain)
+                }
+
+                if let error = error {
+                    VStack {
+                        Spacer()
+                        Text(error)
+                            .font(.caption)
+                            .foregroundColor(.red)
+                            .padding()
+                    }
+                }
+            }
+            .navigationTitle("Add Members")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add") { addMembers() }
+                        .disabled(selectedMembers.isEmpty || isAdding)
+                }
+            }
+        }
+    }
+
+    private func toggleMember(_ whisperId: String) {
+        if selectedMembers.contains(whisperId) {
+            selectedMembers.remove(whisperId)
+        } else {
+            selectedMembers.insert(whisperId)
+        }
+    }
+
+    private func addMembers() {
+        isAdding = true
+        error = nil
+
+        Task {
+            do {
+                try await groupService.addMembers(Array(selectedMembers), to: groupId)
+                await MainActor.run {
+                    dismiss()
+                }
+            } catch {
+                await MainActor.run {
+                    self.error = error.localizedDescription
+                    isAdding = false
+                }
             }
         }
     }
