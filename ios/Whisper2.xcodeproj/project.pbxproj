@@ -41,6 +41,7 @@
 		4DC896EAF55B731AC7AD0594 /* SettingsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 523BDE39599BEE44A3A1818C /* SettingsViewModel.swift */; };
 		5557776237BEED2299E38455 /* Group.swift in Sources */ = {isa = PBXBuildFile; fileRef = B595D834E8FF0A68FABF1BB0 /* Group.swift */; };
 		60935D1A40FA6C8107053C4C /* MessagingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AD2F50A4E7C8E4ED9D66E9D /* MessagingService.swift */; };
+		AVATARSERVICEBUILD123456 /* AvatarService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AVATARSERVICEREF1234567 /* AvatarService.swift */; };
 		640C434ABE9683DA26E2EF39 /* PushNotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A44EFB5660D08CD9701DFB1 /* PushNotificationService.swift */; };
 		6749A5CBEB7764862F9556B8 /* Errors.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91CFF53EE68F243CCBA718EA /* Errors.swift */; };
 		6AFD259DEF1E32D390D1D5E2 /* BIP39WordList.swift in Sources */ = {isa = PBXBuildFile; fileRef = 671F437DD0162C14B3CC028F /* BIP39WordList.swift */; };
@@ -118,6 +119,7 @@
 		807A87F87EBAFFC25FBB25AB /* AudioMessageService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioMessageService.swift; sourceTree = "<group>"; };
 		835FFCAC544DA1C9FBF0223F /* ChatsListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatsListView.swift; sourceTree = "<group>"; };
 		8AD2F50A4E7C8E4ED9D66E9D /* MessagingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagingService.swift; sourceTree = "<group>"; };
+		AVATARSERVICEREF1234567 /* AvatarService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AvatarService.swift; sourceTree = "<group>"; };
 		8E726641F6F72BE366C875C5 /* AuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthService.swift; sourceTree = "<group>"; };
 		8EC6D3CDD8D494434163F367 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		913628273C6F97712E4D4A16 /* ContactProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactProfileView.swift; sourceTree = "<group>"; };
@@ -171,6 +173,7 @@
 				592A6478AACDE5B6048459F1 /* GroupService.swift */,
 				4F237BB66ABF70052E01BF04 /* KeychainService.swift */,
 				AAE3DC744882E5F3C0315653 /* LocationService.swift */,
+				AVATARSERVICEREF1234567 /* AvatarService.swift */,
 				8AD2F50A4E7C8E4ED9D66E9D /* MessagingService.swift */,
 				1A44EFB5660D08CD9701DFB1 /* PushNotificationService.swift */,
 				51F7A110626980AEE8B54904 /* RingbackTonePlayer.swift */,
@@ -553,6 +556,7 @@
 				2FBE2C3399BC8A408F7A5CB1 /* MessageRequest.swift in Sources */,
 				0430A7BC88DCC0D9E8D6E06D /* MessageRequestsView.swift in Sources */,
 				88D614AEB84C7CA199CB1F9F /* MessageTypes.swift in Sources */,
+				AVATARSERVICEBUILD123456 /* AvatarService.swift in Sources */,
 				60935D1A40FA6C8107053C4C /* MessagingService.swift in Sources */,
 				3765942B26DEB637DCA94ECE /* OutgoingCallView.swift in Sources */,
 				F9D9AA921B3346ADB9E6D417 /* VideoCallView.swift in Sources */,

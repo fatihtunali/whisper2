@@ -345,15 +345,16 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
         label.frame = CGRect(x: 0, y: scanRect.maxY + 20, width: view.bounds.width, height: 30)
         view.addSubview(label)
 
-        // Add gallery button
+        // Add gallery button - position at bottom with safe area
         let button = UIButton(type: .system)
         button.setImage(UIImage(systemName: "photo.on.rectangle"), for: .normal)
         button.setTitle(" Pick from Gallery", for: .normal)
         button.tintColor = .white
-        button.titleLabel?.font = .systemFont(ofSize: 16, weight: .medium)
-        button.backgroundColor = UIColor.white.withAlphaComponent(0.2)
+        button.titleLabel?.font = .systemFont(ofSize: 16, weight: .semibold)
+        button.backgroundColor = UIColor.systemBlue.withAlphaComponent(0.9)
         button.layer.cornerRadius = 12
-        button.frame = CGRect(x: 40, y: scanRect.maxY + 70, width: view.bounds.width - 80, height: 50)
+        let safeBottom = view.safeAreaInsets.bottom > 0 ? view.safeAreaInsets.bottom : 20
+        button.frame = CGRect(x: 40, y: view.bounds.height - 70 - safeBottom, width: view.bounds.width - 80, height: 50)
         button.addTarget(self, action: #selector(openGallery), for: .touchUpInside)
         view.addSubview(button)
         galleryButton = button
@@ -461,6 +462,12 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         previewLayer?.frame = view.layer.bounds
+
+        // Reposition gallery button with correct safe area
+        if let button = galleryButton {
+            let safeBottom = view.safeAreaInsets.bottom > 0 ? view.safeAreaInsets.bottom + 20 : 40
+            button.frame = CGRect(x: 40, y: view.bounds.height - 60 - safeBottom, width: view.bounds.width - 80, height: 50)
+        }
     }
 }
 

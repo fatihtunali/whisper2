@@ -4,34 +4,33 @@ import CoreImage.CIFilterBuiltins
 /// Profile view with QR code generation
 struct ProfileView: View {
     @StateObject private var viewModel = SettingsViewModel()
+    @ObservedObject private var avatarService = AvatarService.shared
     @State private var showCopiedAlert = false
     @State private var qrCodeImage: UIImage?
-    
+    @State private var showImagePicker = false
+    @State private var showImageSourcePicker = false
+    @State private var selectedImage: UIImage?
+    @State private var imagePickerSource: UIImagePickerController.SourceType = .photoLibrary
+
     private let context = CIContext()
     private let filter = CIFilter.qrCodeGenerator()
-    
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            
+
             ScrollView {
                 VStack(spacing: 24) {
-                    // Avatar
-                    Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [.blue, .purple],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
+                    // Avatar with edit button
+                    Button(action: { showImageSourcePicker = true }) {
+                        AvatarView(
+                            image: avatarService.myAvatar,
+                            name: viewModel.whisperId ?? "?",
+                            size: 100,
+                            showEditBadge: true
                         )
-                        .frame(width: 100, height: 100)
-                        .overlay(
-                            Image(systemName: "person.fill")
-                                .font(.system(size: 40))
-                                .foregroundColor(.white)
-                        )
-                        .padding(.top, 20)
+                    }
+                    .padding(.top, 20)
                     
                     // Whisper ID
                     VStack(spacing: 8) {
@@ -106,6 +105,31 @@ struct ProfileView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text("Whisper ID copied to clipboard")
+        }
+        .confirmationDialog("Change Profile Photo", isPresented: $showImageSourcePicker) {
+            Button("Take Photo") {
+                imagePickerSource = .camera
+                showImagePicker = true
+            }
+            Button("Choose from Library") {
+                imagePickerSource = .photoLibrary
+                showImagePicker = true
+            }
+            if avatarService.myAvatar != nil {
+                Button("Remove Photo", role: .destructive) {
+                    avatarService.deleteMyAvatar()
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .sheet(isPresented: $showImagePicker) {
+            AvatarImagePicker(image: $selectedImage, sourceType: imagePickerSource)
+        }
+        .onChange(of: selectedImage) { _, newImage in
+            if let image = newImage {
+                avatarService.saveMyAvatar(image)
+                selectedImage = nil
+            }
         }
     }
     

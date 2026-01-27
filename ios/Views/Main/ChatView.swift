@@ -125,9 +125,22 @@ struct ChatView: View {
                 )
             }
         }
-        .navigationTitle(viewModel.contactName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                Button(action: { showContactProfile = true }) {
+                    VStack(spacing: 2) {
+                        Text(viewModel.contactName)
+                            .font(.headline)
+                            .foregroundColor(.white)
+                        if let contact = ContactsService.shared.getContact(whisperId: conversation.peerId) {
+                            Text(contact.isOnline ? "Online" : "Tap for info")
+                                .font(.caption2)
+                                .foregroundColor(contact.isOnline ? .green : .gray)
+                        }
+                    }
+                }
+            }
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 16) {
                     // Voice call button

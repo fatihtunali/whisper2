@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// View showing contact profile details
 struct ContactProfileView: View {
@@ -6,6 +7,7 @@ struct ContactProfileView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var contactsService = ContactsService.shared
     @ObservedObject private var messagingService = MessagingService.shared
+    @ObservedObject private var avatarService = AvatarService.shared
     @State private var showEditNickname = false
     @State private var newNickname = ""
     @State private var showBlockConfirm = false
@@ -13,6 +15,11 @@ struct ContactProfileView: View {
     @State private var showClearChatConfirm = false
     @State private var navigateToChat = false
     @State private var showChatTheme = false
+    @State private var showImagePicker = false
+    @State private var showImageSourcePicker = false
+    @State private var selectedImage: UIImage?
+    @State private var imagePickerSource: UIImagePickerController.SourceType = .photoLibrary
+    @State private var contactAvatar: UIImage?
 
     private var contact: Contact? {
         contactsService.getContact(whisperId: peerId)
@@ -28,22 +35,16 @@ struct ContactProfileView: View {
 
             ScrollView {
                 VStack(spacing: 24) {
-                    // Avatar
-                    Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [.blue, .purple],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
+                    // Avatar with edit option
+                    Button(action: { showImageSourcePicker = true }) {
+                        AvatarView(
+                            image: contactAvatar,
+                            name: contact?.displayName ?? peerId,
+                            size: 120,
+                            showEditBadge: true
                         )
-                        .frame(width: 120, height: 120)
-                        .overlay(
-                            Text(String((contact?.displayName ?? "?").prefix(1)).uppercased())
-                                .font(.system(size: 50, weight: .semibold))
-                                .foregroundColor(.white)
-                        )
-                        .padding(.top, 20)
+                    }
+                    .padding(.top, 20)
 
                     // Name and status
                     VStack(spacing: 8) {
@@ -302,6 +303,36 @@ struct ContactProfileView: View {
                 peerId: peerId,
                 peerNickname: contact?.nickname
             ))
+        }
+        .confirmationDialog("Change Contact Photo", isPresented: $showImageSourcePicker) {
+            Button("Take Photo") {
+                imagePickerSource = .camera
+                showImagePicker = true
+            }
+            Button("Choose from Library") {
+                imagePickerSource = .photoLibrary
+                showImagePicker = true
+            }
+            if contactAvatar != nil {
+                Button("Remove Photo", role: .destructive) {
+                    avatarService.deleteContactAvatar(for: peerId)
+                    contactAvatar = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .sheet(isPresented: $showImagePicker) {
+            AvatarImagePicker(image: $selectedImage, sourceType: imagePickerSource)
+        }
+        .onChange(of: selectedImage) { _, newImage in
+            if let image = newImage {
+                avatarService.saveContactAvatar(image, for: peerId)
+                contactAvatar = image
+                selectedImage = nil
+            }
+        }
+        .onAppear {
+            contactAvatar = avatarService.getContactAvatar(for: peerId)
         }
     }
 
