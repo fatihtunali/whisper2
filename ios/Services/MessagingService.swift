@@ -766,8 +766,17 @@ final class MessagingService: ObservableObject {
     func setChatTheme(for conversationId: String, themeId: String) {
         if let index = conversations.firstIndex(where: { $0.peerId == conversationId }) {
             conversations[index].chatThemeId = themeId
-            saveConversationsToStorage()
+        } else {
+            // Create conversation if it doesn't exist
+            let contact = contactsService.getContact(whisperId: conversationId)
+            let conv = Conversation(
+                peerId: conversationId,
+                peerNickname: contact?.nickname,
+                chatThemeId: themeId
+            )
+            conversations.append(conv)
         }
+        saveConversationsToStorage()
     }
 
     /// Get chat theme for a conversation
