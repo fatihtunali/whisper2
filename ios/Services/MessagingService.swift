@@ -165,7 +165,8 @@ final class MessagingService: ObservableObject {
                     timestamp: timestamp,
                     nonce: nonce.base64EncodedString(),
                     ciphertext: ciphertext.base64EncodedString(),
-                    sig: signature.base64EncodedString()
+                    sig: signature.base64EncodedString(),
+                    attachment: msg.attachment
                 )
 
                 let frame = WsFrame(type: Constants.MessageType.sendMessage, payload: payload, requestId: msg.id)
@@ -286,11 +287,19 @@ final class MessagingService: ObservableObject {
         guard let publicKey = contactsService.getPublicKey(for: recipientId) else {
             throw CryptoError.invalidPublicKey
         }
-        return try await sendMessage(to: recipientId, content: content, contentType: contentType, recipientPublicKey: publicKey)
+        return try await sendMessage(to: recipientId, content: content, contentType: contentType, attachment: nil, recipientPublicKey: publicKey)
     }
 
-    /// Send message with content type and public key
-    func sendMessage(to recipientId: String, content: String, contentType: String, recipientPublicKey: Data) async throws -> Message {
+    /// Send message with attachment
+    func sendMessage(to recipientId: String, content: String, contentType: String, attachment: AttachmentPointer) async throws -> Message {
+        guard let publicKey = contactsService.getPublicKey(for: recipientId) else {
+            throw CryptoError.invalidPublicKey
+        }
+        return try await sendMessage(to: recipientId, content: content, contentType: contentType, attachment: attachment, recipientPublicKey: publicKey)
+    }
+
+    /// Send message with content type, optional attachment and public key
+    func sendMessage(to recipientId: String, content: String, contentType: String, attachment: AttachmentPointer?, recipientPublicKey: Data) async throws -> Message {
         guard let user = auth.currentUser,
               let sessionToken = user.sessionToken else {
             throw NetworkError.connectionFailed
@@ -333,11 +342,15 @@ final class MessagingService: ObservableObject {
             timestamp: timestamp,
             nonce: nonce.base64EncodedString(),
             ciphertext: ciphertext.base64EncodedString(),
-            sig: signature.base64EncodedString()
+            sig: signature.base64EncodedString(),
+            attachment: attachment
         )
 
         let frame = WsFrame(type: Constants.MessageType.sendMessage, payload: payload, requestId: messageId)
         try await ws.send(frame)
+
+        // For display, use content or generate preview based on attachment
+        let displayContent = content.isEmpty ? "[\(contentType.capitalized)]" : content
 
         let message = Message(
             id: messageId,
@@ -348,7 +361,8 @@ final class MessagingService: ObservableObject {
             contentType: contentType,
             timestamp: Date(timeIntervalSince1970: Double(timestamp) / 1000),
             status: .pending,
-            direction: .outgoing
+            direction: .outgoing,
+            attachment: attachment
         )
 
         await MainActor.run {
@@ -356,7 +370,7 @@ final class MessagingService: ObservableObject {
                 self.messages[recipientId] = []
             }
             self.messages[recipientId]?.append(message)
-            self.updateConversation(for: recipientId, lastMessage: content)
+            self.updateConversation(for: recipientId, lastMessage: displayContent)
             self.saveMessagesToStorage()
             self.saveConversationsToStorage()
         }
@@ -560,7 +574,8 @@ final class MessagingService: ObservableObject {
             timestamp: Date(timeIntervalSince1970: Double(payload.timestamp) / 1000),
             status: .delivered,
             direction: .incoming,
-            replyToId: payload.replyTo
+            replyToId: payload.replyTo,
+            attachment: payload.attachment
         )
         
         DispatchQueue.main.async {
@@ -569,7 +584,27 @@ final class MessagingService: ObservableObject {
             }
             self.messages[payload.from]?.append(message)
 
-            let previewContent = decryptedContent.hasPrefix("[") ? "New message" : decryptedContent
+            // Generate preview based on content type
+            var previewContent: String
+            if decryptedContent.hasPrefix("[") {
+                previewContent = "New message"
+            } else if payload.attachment != nil {
+                switch payload.msgType {
+                case "voice", "audio":
+                    previewContent = "🎵 Voice message"
+                case "image":
+                    previewContent = "📷 Photo"
+                case "video":
+                    previewContent = "🎬 Video"
+                case "file":
+                    previewContent = "📎 File"
+                default:
+                    previewContent = decryptedContent
+                }
+            } else {
+                previewContent = decryptedContent
+            }
+
             self.updateConversation(for: payload.from, lastMessage: previewContent, unreadIncrement: 1)
             self.messageReceivedSubject.send(message)
 

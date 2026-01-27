@@ -27,10 +27,11 @@ struct Message: Codable, Identifiable, Hashable {
     var status: MessageStatus
     let direction: MessageDirection
     var replyToId: String?
-    var attachmentId: String?
+    var attachmentId: String?  // Deprecated: use attachment.objectKey instead
+    var attachment: AttachmentPointer?  // Full attachment info for media messages
     let createdAt: Date
     var updatedAt: Date
-    
+
     init(
         id: String = UUID().uuidString.lowercased(),
         conversationId: String,
@@ -43,6 +44,7 @@ struct Message: Codable, Identifiable, Hashable {
         direction: MessageDirection,
         replyToId: String? = nil,
         attachmentId: String? = nil,
+        attachment: AttachmentPointer? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -57,6 +59,7 @@ struct Message: Codable, Identifiable, Hashable {
         self.direction = direction
         self.replyToId = replyToId
         self.attachmentId = attachmentId
+        self.attachment = attachment
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }

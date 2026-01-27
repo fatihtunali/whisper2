@@ -14,8 +14,8 @@ final class AttachmentService: ObservableObject {
     private let auth = AuthService.shared
     private let contacts = ContactsService.shared
 
-    // S3/Spaces configuration - these should come from server or be configured
-    private let uploadBaseURL = "https://whisper2-attachments.nyc3.digitaloceanspaces.com"
+    // Server API base URL for presigned URLs
+    private let serverBaseURL = Constants.baseURL
 
     // Cache for downloaded files
     private var downloadCache: [String: URL] = [:]
@@ -30,6 +30,23 @@ final class AttachmentService: ObservableObject {
 
     private init() {
         loadCacheIndex()
+    }
+
+    // MARK: - Presigned URL Response Types
+
+    private struct PresignUploadResponse: Codable {
+        let objectKey: String
+        let uploadUrl: String
+        let expiresAtMs: Int64
+        let headers: [String: String]
+    }
+
+    private struct PresignDownloadResponse: Codable {
+        let objectKey: String
+        let downloadUrl: String
+        let expiresAtMs: Int64
+        let sizeBytes: Int
+        let contentType: String
     }
 
     // MARK: - Cache Persistence
@@ -72,6 +89,10 @@ final class AttachmentService: ObservableObject {
             throw NetworkError.connectionFailed
         }
 
+        guard let sessionToken = auth.sessionToken else {
+            throw NetworkError.connectionFailed
+        }
+
         // Read file data
         let fileData = try Data(contentsOf: fileURL)
 
@@ -87,6 +108,11 @@ final class AttachmentService: ObservableObject {
             key: fileKey
         )
 
+        // Combine nonce and ciphertext for upload
+        var uploadData = Data()
+        uploadData.append(encryptedFile.0)  // nonce from secretBoxSeal
+        uploadData.append(encryptedFile.1)  // ciphertext
+
         // Encrypt file key for recipient using NaCl box
         let (keyBoxCiphertext, keyBoxNonce) = try crypto.encryptMessage(
             fileKey.base64EncodedString(),
@@ -96,32 +122,55 @@ final class AttachmentService: ObservableObject {
 
         // Determine content type
         let contentType = getContentType(for: fileURL)
+        print("[AttachmentService] Uploading file: \(fileURL.lastPathComponent), contentType: \(contentType), size: \(uploadData.count)")
 
-        // Generate object key (S3 path)
-        let objectKey = "attachments/\(user.whisperId)/\(messageId)/\(UUID().uuidString)"
+        // 1. Request presigned upload URL from server
+        let presignURL = URL(string: "\(serverBaseURL)/attachments/presign/upload")!
+        var presignRequest = URLRequest(url: presignURL)
+        presignRequest.httpMethod = "POST"
+        presignRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        presignRequest.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
 
-        // Upload to S3
-        let uploadURL = URL(string: "\(uploadBaseURL)/\(objectKey)")!
+        let presignBody: [String: Any] = [
+            "contentType": contentType,
+            "sizeBytes": uploadData.count
+        ]
+        presignRequest.httpBody = try JSONSerialization.data(withJSONObject: presignBody)
 
-        var request = URLRequest(url: uploadURL)
-        request.httpMethod = "PUT"
-        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
-        request.setValue("public-read", forHTTPHeaderField: "x-amz-acl")
+        let (presignData, presignResponse) = try await URLSession.shared.data(for: presignRequest)
+
+        guard let httpPresignResponse = presignResponse as? HTTPURLResponse,
+              (200...299).contains(httpPresignResponse.statusCode) else {
+            let errorMsg = String(data: presignData, encoding: .utf8) ?? "Unknown error"
+            print("[AttachmentService] Presign upload failed: \(errorMsg)")
+            throw NetworkError.serverError(code: "PRESIGN_FAILED", message: "Failed to get upload URL")
+        }
+
+        let presignResult = try JSONDecoder().decode(PresignUploadResponse.self, from: presignData)
+        print("[AttachmentService] Got presigned URL for objectKey: \(presignResult.objectKey)")
+
+        // 2. Upload to the presigned URL
+        guard let uploadURL = URL(string: presignResult.uploadUrl) else {
+            throw NetworkError.serverError(code: "INVALID_URL", message: "Invalid upload URL")
+        }
+
+        var uploadRequest = URLRequest(url: uploadURL)
+        uploadRequest.httpMethod = "PUT"
+
+        // Apply headers from server response
+        for (key, value) in presignResult.headers {
+            uploadRequest.setValue(value, forHTTPHeaderField: key)
+        }
 
         // Track progress
         await MainActor.run {
             uploadProgress[messageId] = 0
         }
 
-        // Combine nonce and ciphertext for upload
-        var uploadData = Data()
-        uploadData.append(encryptedFile.0)  // nonce from secretBoxSeal
-        uploadData.append(encryptedFile.1)  // ciphertext
+        let (_, uploadResponse) = try await uploadWithProgress(request: uploadRequest, data: uploadData, messageId: messageId)
 
-        let (_, response) = try await uploadWithProgress(request: request, data: uploadData, messageId: messageId)
-
-        guard let httpResponse = response as? HTTPURLResponse,
-              (200...299).contains(httpResponse.statusCode) else {
+        guard let httpUploadResponse = uploadResponse as? HTTPURLResponse,
+              (200...299).contains(httpUploadResponse.statusCode) else {
             throw NetworkError.serverError(code: "UPLOAD_FAILED", message: "File upload failed")
         }
 
@@ -130,15 +179,17 @@ final class AttachmentService: ObservableObject {
             uploadProgress.removeValue(forKey: messageId)
         }
 
+        print("[AttachmentService] Upload successful for objectKey: \(presignResult.objectKey)")
+
         // Create file key box
         let fileKeyBox = FileKeyBox(
             nonce: keyBoxNonce.base64EncodedString(),
             ciphertext: keyBoxCiphertext.base64EncodedString()
         )
 
-        // Return attachment pointer
+        // Return attachment pointer with server-provided objectKey
         return AttachmentPointer(
-            objectKey: objectKey,
+            objectKey: presignResult.objectKey,
             contentType: contentType,
             ciphertextSize: uploadData.count,
             fileNonce: fileNonce.base64EncodedString(),
@@ -183,14 +234,44 @@ final class AttachmentService: ObservableObject {
             throw NetworkError.connectionFailed
         }
 
+        guard let sessionToken = auth.sessionToken else {
+            throw NetworkError.connectionFailed
+        }
+
         // Check cache
         if let cachedURL = downloadCache[attachment.objectKey],
            FileManager.default.fileExists(atPath: cachedURL.path) {
             return cachedURL
         }
 
-        // Download encrypted file
-        let downloadURL = URL(string: "\(uploadBaseURL)/\(attachment.objectKey)")!
+        // 1. Request presigned download URL from server
+        let presignURL = URL(string: "\(serverBaseURL)/attachments/presign/download")!
+        var presignRequest = URLRequest(url: presignURL)
+        presignRequest.httpMethod = "POST"
+        presignRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        presignRequest.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
+
+        let presignBody: [String: Any] = [
+            "objectKey": attachment.objectKey
+        ]
+        presignRequest.httpBody = try JSONSerialization.data(withJSONObject: presignBody)
+
+        let (presignData, presignResponse) = try await URLSession.shared.data(for: presignRequest)
+
+        guard let httpPresignResponse = presignResponse as? HTTPURLResponse,
+              (200...299).contains(httpPresignResponse.statusCode) else {
+            let errorMsg = String(data: presignData, encoding: .utf8) ?? "Unknown error"
+            print("[AttachmentService] Presign download failed: \(errorMsg)")
+            throw NetworkError.serverError(code: "PRESIGN_FAILED", message: "Failed to get download URL")
+        }
+
+        let presignResult = try JSONDecoder().decode(PresignDownloadResponse.self, from: presignData)
+        print("[AttachmentService] Got presigned download URL for objectKey: \(presignResult.objectKey)")
+
+        // 2. Download from the presigned URL
+        guard let downloadURL = URL(string: presignResult.downloadUrl) else {
+            throw NetworkError.serverError(code: "INVALID_URL", message: "Invalid download URL")
+        }
 
         await MainActor.run {
             downloadProgress[attachment.objectKey] = 0
@@ -282,10 +363,43 @@ final class AttachmentService: ObservableObject {
     // MARK: - Helpers
 
     private func getContentType(for url: URL) -> String {
-        if let utType = UTType(filenameExtension: url.pathExtension) {
-            return utType.preferredMIMEType ?? "application/octet-stream"
+        let ext = url.pathExtension.lowercased()
+
+        // Use explicit mappings for known types to ensure server compatibility
+        switch ext {
+        case "m4a":
+            return "audio/m4a"
+        case "mp3":
+            return "audio/mpeg"
+        case "aac":
+            return "audio/aac"
+        case "ogg":
+            return "audio/ogg"
+        case "wav":
+            return "audio/wav"
+        case "jpg", "jpeg":
+            return "image/jpeg"
+        case "png":
+            return "image/png"
+        case "gif":
+            return "image/gif"
+        case "webp":
+            return "image/webp"
+        case "heic":
+            return "image/heic"
+        case "mp4":
+            return "video/mp4"
+        case "mov":
+            return "video/quicktime"
+        case "pdf":
+            return "application/pdf"
+        default:
+            // Fallback to UTType
+            if let utType = UTType(filenameExtension: ext) {
+                return utType.preferredMIMEType ?? "application/octet-stream"
+            }
+            return "application/octet-stream"
         }
-        return "application/octet-stream"
     }
 
     private func getFileExtension(for contentType: String) -> String {

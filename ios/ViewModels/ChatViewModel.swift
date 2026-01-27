@@ -160,12 +160,15 @@ final class ChatViewModel: ObservableObject {
                     messageId: messageId
                 )
 
-                // Send message with audio content type
-                let content = "\(Int(duration))|\(pointer.objectKey)"
+                // Content contains duration for display purposes
+                let content = "\(Int(duration))"
+
+                // Send message with audio content type and attachment pointer
                 _ = try await messagingService.sendMessage(
                     to: conversationId,
                     content: content,
-                    contentType: "audio"
+                    contentType: "voice",
+                    attachment: pointer
                 )
 
                 // Clean up local file
@@ -226,20 +229,26 @@ final class ChatViewModel: ObservableObject {
                 )
 
                 // Determine content type
-                let contentType = getContentType(for: url)
+                let mimeType = getContentType(for: url)
                 let messageContentType: String
-                if contentType.hasPrefix("image/") {
+                if mimeType.hasPrefix("image/") {
                     messageContentType = "image"
-                } else if contentType.hasPrefix("video/") {
+                } else if mimeType.hasPrefix("video/") {
                     messageContentType = "video"
+                } else if mimeType.hasPrefix("audio/") {
+                    messageContentType = "voice"
                 } else {
                     messageContentType = "file"
                 }
 
+                // Content is the filename for display
+                let filename = url.lastPathComponent
+
                 _ = try await messagingService.sendMessage(
                     to: conversationId,
-                    content: pointer.objectKey,
-                    contentType: messageContentType
+                    content: filename,
+                    contentType: messageContentType,
+                    attachment: pointer
                 )
 
                 // Clean up local file
