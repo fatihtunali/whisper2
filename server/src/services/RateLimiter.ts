@@ -73,12 +73,13 @@ export const RATE_LIMITS: Record<string, RateLimitConfig> = {
   default: { maxRequests: 30, windowSeconds: 60 },
 };
 
-// Stricter limits for IP-based (unauthenticated)
+// IP-based limits - generous for shared IP environments (schools, offices, NAT)
+// Multiple users can share the same public IP address
 export const IP_RATE_LIMITS: Record<string, RateLimitConfig> = {
-  register_begin: { maxRequests: 30, windowSeconds: 60 },
-  register_proof: { maxRequests: 30, windowSeconds: 60 },
-  ws_connect: { maxRequests: 60, windowSeconds: 60 },
-  default: { maxRequests: 100, windowSeconds: 60 },
+  register_begin: { maxRequests: 1000, windowSeconds: 60 },  // Many users registering
+  register_proof: { maxRequests: 1000, windowSeconds: 60 },
+  ws_connect: { maxRequests: 2000, windowSeconds: 60 },      // Allow many connections from same IP
+  default: { maxRequests: 5000, windowSeconds: 60 },         // High default for shared IP
 };
 
 // =============================================================================
