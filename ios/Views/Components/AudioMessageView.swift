@@ -187,18 +187,20 @@ struct VoiceMessagePreview: View {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 16) {
             // Play preview
             Button(action: togglePreview) {
                 Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.title2)
+                    .font(.system(size: 36))
                     .foregroundColor(.blue)
             }
+            .frame(width: 44, height: 44)
 
             // Duration
-            VStack(alignment: .leading) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text("Voice message")
-                    .font(.caption.bold())
+                    .font(.subheadline.bold())
+                    .foregroundColor(.white)
                 Text(audioService.formatDuration(duration))
                     .font(.caption)
                     .foregroundColor(.gray)
@@ -212,22 +214,32 @@ struct VoiceMessagePreview: View {
                 onCancel()
             }) {
                 Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 28))
                     .foregroundColor(.gray)
             }
+            .frame(width: 44, height: 44)
 
-            // Send
+            // Send - larger and more prominent
             Button(action: {
                 audioService.stop()
                 onSend()
             }) {
                 Image(systemName: "arrow.up.circle.fill")
-                    .font(.title2)
-                    .foregroundColor(.blue)
+                    .font(.system(size: 40))
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [.blue, .purple],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
             }
+            .frame(width: 50, height: 50)
         }
-        .padding(12)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
         .background(Color(.systemGray6))
-        .cornerRadius(12)
+        .cornerRadius(16)
     }
 
     private func togglePreview() {

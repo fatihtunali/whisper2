@@ -51,7 +51,7 @@ export const sendMessageSchema = {
     },
     msgType: {
       type: 'string',
-      enum: ['text', 'image', 'voice', 'file', 'system'],
+      enum: ['text', 'image', 'voice', 'audio', 'video', 'file', 'location', 'system'],
     },
     timestamp: {
       type: 'number',
