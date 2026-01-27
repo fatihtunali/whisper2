@@ -21,6 +21,7 @@ final class AuthService: ObservableObject {
     private var pendingChallenge: (id: String, bytes: Data)?
     private var authContinuation: CheckedContinuation<RegisterAckPayload, Error>?
     private var isAuthenticating = false  // Prevent duplicate auth attempts
+    private let authLock = NSLock()  // Thread-safe auth state
 
     private init() {
         setupMessageHandler()
@@ -43,12 +44,25 @@ final class AuthService: ObservableObject {
                         }
                     }
                     // Also reset authenticating flag on disconnect
+                    self.authLock.lock()
                     self.isAuthenticating = false
+                    // Cancel any pending auth continuation
+                    if let cont = self.authContinuation {
+                        self.authContinuation = nil
+                        self.authLock.unlock()
+                        cont.resume(throwing: AuthError.registrationFailed("Connection lost"))
+                    } else {
+                        self.authLock.unlock()
+                    }
 
                 case .connected:
                     // If we have stored credentials but not authenticated, re-authenticate
                     // Guard against duplicate auth attempts
-                    if !self.isAuthenticated && !self.isAuthenticating && self.keychain.whisperId != nil {
+                    self.authLock.lock()
+                    let shouldReconnect = !self.isAuthenticated && !self.isAuthenticating && self.keychain.whisperId != nil
+                    self.authLock.unlock()
+
+                    if shouldReconnect {
                         print("WebSocket connected - re-authenticating...")
                         Task {
                             do {
@@ -161,10 +175,20 @@ final class AuthService: ObservableObject {
     // MARK: - Reconnect with existing session
 
     func reconnect() async throws {
-        // Prevent duplicate auth attempts
+        // Prevent duplicate auth attempts with thread-safe check
+        authLock.lock()
         guard !isAuthenticating else {
+            authLock.unlock()
             print("Authentication already in progress, skipping")
             return
+        }
+        isAuthenticating = true
+        authLock.unlock()
+
+        defer {
+            authLock.lock()
+            isAuthenticating = false
+            authLock.unlock()
         }
 
         guard let encPriv = keychain.getData(forKey: Constants.StorageKey.encPrivateKey),
@@ -174,9 +198,6 @@ final class AuthService: ObservableObject {
               let savedWhisperId = keychain.whisperId else {
             throw AuthError.notAuthenticated
         }
-
-        isAuthenticating = true
-        defer { isAuthenticating = false }
 
         self.encKeyPair = CryptoService.KeyPair(publicKey: encPub, privateKey: encPriv)
         self.signKeyPair = CryptoService.KeyPair(publicKey: signPub, privateKey: signPriv)
@@ -257,19 +278,32 @@ final class AuthService: ObservableObject {
         signPrivateKey: Data
     ) async throws -> RegisterAckPayload {
         let deviceId = keychain.getOrCreateDeviceId()
-        
+
+        // Cancel any existing continuation to prevent leaks
+        authLock.lock()
+        if let existingContinuation = authContinuation {
+            authContinuation = nil
+            authLock.unlock()
+            existingContinuation.resume(throwing: AuthError.registrationFailed("Auth cancelled - new attempt started"))
+        } else {
+            authLock.unlock()
+        }
+
+        // Clear any stale challenge
+        pendingChallenge = nil
+
         // Step 1: Send register_begin
         let beginPayload = RegisterBeginPayload(deviceId: deviceId, whisperId: whisperId)
         let beginFrame = WsFrame(type: Constants.MessageType.registerBegin, payload: beginPayload)
         try await ws.send(beginFrame)
-        
+
         // Wait for challenge
         let challenge = try await waitForChallenge()
-        
+
         // Step 2: Sign challenge - SHA256(challengeBytes) then sign
         let challengeBytes = Data(base64Encoded: challenge.challenge)!
         let signature = try crypto.signChallenge(challengeBytes, privateKey: signPrivateKey)
-        
+
         // Step 3: Send register_proof
         let proofPayload = RegisterProofPayload(
             challengeId: challenge.challengeId,
@@ -281,10 +315,25 @@ final class AuthService: ObservableObject {
         )
         let proofFrame = WsFrame(type: Constants.MessageType.registerProof, payload: proofPayload)
         try await ws.send(proofFrame)
-        
-        // Wait for ack
+
+        // Wait for ack with timeout
         return try await withCheckedThrowingContinuation { continuation in
+            authLock.lock()
             self.authContinuation = continuation
+            authLock.unlock()
+
+            // Set a timeout to prevent hanging forever
+            Task {
+                try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
+                self.authLock.lock()
+                if let cont = self.authContinuation {
+                    self.authContinuation = nil
+                    self.authLock.unlock()
+                    cont.resume(throwing: AuthError.registrationFailed("Auth timeout"))
+                } else {
+                    self.authLock.unlock()
+                }
+            }
         }
     }
     
@@ -315,14 +364,20 @@ final class AuthService: ObservableObject {
             
         case Constants.MessageType.registerAck:
             if let frame = try? JSONDecoder().decode(WsFrame<RegisterAckPayload>.self, from: data) {
-                authContinuation?.resume(returning: frame.payload)
+                authLock.lock()
+                let cont = authContinuation
                 authContinuation = nil
+                authLock.unlock()
+                cont?.resume(returning: frame.payload)
             }
-            
+
         case Constants.MessageType.error:
             if let frame = try? JSONDecoder().decode(WsFrame<ErrorPayload>.self, from: data) {
-                authContinuation?.resume(throwing: AuthError.registrationFailed(frame.payload.message))
+                authLock.lock()
+                let cont = authContinuation
                 authContinuation = nil
+                authLock.unlock()
+                cont?.resume(throwing: AuthError.registrationFailed(frame.payload.message))
             }
             
         default:

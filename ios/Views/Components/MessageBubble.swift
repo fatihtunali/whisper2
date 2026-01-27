@@ -81,7 +81,7 @@ struct MessageBubble: View {
     @ViewBuilder
     private var contentView: some View {
         switch message.contentType {
-        case "audio":
+        case "audio", "voice":
             audioContent
         case "location":
             locationContent
@@ -207,6 +207,8 @@ struct AudioMessageBubbleContent: View {
     @StateObject private var audioService = AudioMessageService.shared
     @State private var audioURL: URL?
     @State private var duration: TimeInterval = 0
+    @State private var isDownloading = false
+    @State private var downloadError: String?
 
     private var isPlaying: Bool {
         audioService.isPlaying && audioService.currentPlayingId == message.id
@@ -216,20 +218,32 @@ struct AudioMessageBubbleContent: View {
         HStack(spacing: 12) {
             // Play/Pause button
             Button(action: togglePlayback) {
-                Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.system(size: 36))
-                    .foregroundColor(isOutgoing ? .white : .blue)
+                if isDownloading {
+                    ProgressView()
+                        .frame(width: 36, height: 36)
+                } else {
+                    Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                        .font(.system(size: 36))
+                        .foregroundColor(isOutgoing ? .white : .blue)
+                }
             }
+            .disabled(isDownloading)
 
             VStack(alignment: .leading, spacing: 4) {
                 // Waveform
                 WaveformView(progress: isPlaying ? audioService.playbackProgress : 0, isFromMe: isOutgoing)
                     .frame(width: 120, height: 24)
 
-                // Duration
-                Text(audioService.formatDuration(isPlaying ? duration * audioService.playbackProgress : duration))
-                    .font(.caption2)
-                    .foregroundColor(isOutgoing ? .white.opacity(0.7) : .gray)
+                // Duration or error
+                if let error = downloadError {
+                    Text(error)
+                        .font(.caption2)
+                        .foregroundColor(.red)
+                } else {
+                    Text(audioService.formatDuration(isPlaying ? duration * audioService.playbackProgress : duration))
+                        .font(.caption2)
+                        .foregroundColor(isOutgoing ? .white.opacity(0.7) : .gray)
+                }
             }
         }
         .padding(12)
@@ -241,23 +255,73 @@ struct AudioMessageBubbleContent: View {
     }
 
     private func parseAudioContent() {
-        // Parse content: "audio:duration:url" or just URL
+        // Parse duration from content (e.g., "6" for 6 seconds)
+        if let durationValue = TimeInterval(message.content) {
+            duration = durationValue
+        }
+
+        // If there's an attachment, we'll download it on play
+        // For legacy format "duration|url", try to parse
         let parts = message.content.components(separatedBy: "|")
         if parts.count >= 2 {
             duration = TimeInterval(parts[0]) ?? 0
             audioURL = URL(string: parts[1])
-        } else if let url = URL(string: message.content) {
-            audioURL = url
-            duration = audioService.getAudioDuration(url: url) ?? 0
         }
     }
 
     private func togglePlayback() {
-        guard let url = audioURL else { return }
         if isPlaying {
             audioService.pause()
-        } else {
+            return
+        }
+
+        // If we already have the URL, play it
+        if let url = audioURL {
             audioService.play(url: url, messageId: message.id)
+            return
+        }
+
+        // Need to download from attachment
+        guard let attachment = message.attachment else {
+            downloadError = "No audio file"
+            return
+        }
+
+        // For outgoing messages, we can't re-download (fileKeyBox was encrypted for recipient only)
+        if isOutgoing {
+            downloadError = "File unavailable"
+            return
+        }
+
+        // For incoming messages: use sender's public key to decrypt
+        guard let senderPublicKey = ContactsService.shared.getPublicKey(for: message.from) else {
+            downloadError = "Missing sender key"
+            return
+        }
+
+        isDownloading = true
+        downloadError = nil
+
+        Task {
+            do {
+                let url = try await AttachmentService.shared.downloadFile(attachment, senderPublicKey: senderPublicKey)
+                await MainActor.run {
+                    audioURL = url
+                    isDownloading = false
+                    // Get actual duration from file if not set
+                    if duration == 0 {
+                        duration = audioService.getAudioDuration(url: url) ?? 0
+                    }
+                    // Auto-play after download
+                    audioService.play(url: url, messageId: message.id)
+                }
+            } catch {
+                await MainActor.run {
+                    isDownloading = false
+                    downloadError = "Download failed"
+                    print("[AudioMessage] Download error: \(error)")
+                }
+            }
         }
     }
 }
