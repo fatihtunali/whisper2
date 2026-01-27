@@ -35,7 +35,6 @@
 		4345CA95B1C07469D92B6F41 /* AuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E726641F6F72BE366C875C5 /* AuthService.swift */; };
 		46C5F642B6FF36F42673C036 /* GroupChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15877D6FA5F146D8A29E2102 /* GroupChatView.swift */; };
 		46F27140A4B59906816440AA /* Contact.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C043E02CB8D20206D40CD67 /* Contact.swift */; };
-		495DBDF88E556D0152226D16 /* Pods_Whisper2.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8772646CB010942A22CBD5E2 /* Pods_Whisper2.framework */; };
 		4DC896EAF55B731AC7AD0594 /* SettingsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 523BDE39599BEE44A3A1818C /* SettingsViewModel.swift */; };
 		5557776237BEED2299E38455 /* Group.swift in Sources */ = {isa = PBXBuildFile; fileRef = B595D834E8FF0A68FABF1BB0 /* Group.swift */; };
 		60935D1A40FA6C8107053C4C /* MessagingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AD2F50A4E7C8E4ED9D66E9D /* MessagingService.swift */; };
@@ -46,6 +45,7 @@
 		788FCA92D5AB5D43C0F0D4A6 /* ContactsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D859D2B487F01661B47B810 /* ContactsViewModel.swift */; };
 		79628769133A548DB0D8075F /* AudioMessageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C9C79B5DDBC8DD49F0E3EE0 /* AudioMessageView.swift */; };
 		7BE8D74ECE2D1B14F25EF712 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68424DE7EBED910C2747F82E /* SettingsView.swift */; };
+		7DE205648261FE5AEFD88C20 /* Pods_Whisper2.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 27668E0EA9E55512A7D876E3 /* Pods_Whisper2.framework */; };
 		81F0D4582FE5EBA546CB8D2B /* CallHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B1E7A52019BE1DA7EFA8A61 /* CallHistory.swift */; };
 		8240398B67C10FE316B3B4A6 /* MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F19984AE23212340B9D8752 /* MainTabView.swift */; };
 		8631D020691DBDECD5C4A65F /* ChatsListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 835FFCAC544DA1C9FBF0223F /* ChatsListView.swift */; };
@@ -83,6 +83,8 @@
 		1C043E02CB8D20206D40CD67 /* Contact.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Contact.swift; sourceTree = "<group>"; };
 		1C6B39CBF6BBC62D35112D7E /* MessageRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageRequest.swift; sourceTree = "<group>"; };
 		1D859D2B487F01661B47B810 /* ContactsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactsViewModel.swift; sourceTree = "<group>"; };
+		2578AD173F617BBF3D1C4EDD /* Pods-Whisper2.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Whisper2.release.xcconfig"; path = "Target Support Files/Pods-Whisper2/Pods-Whisper2.release.xcconfig"; sourceTree = "<group>"; };
+		27668E0EA9E55512A7D876E3 /* Pods_Whisper2.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Whisper2.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		2958CE1BA04B7BED31E6BD54 /* ContactsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactsService.swift; sourceTree = "<group>"; };
 		2C17E44DB802D2B5FB585B61 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		309ED0240A34B7F30F68BFDA /* ContactRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactRow.swift; sourceTree = "<group>"; };
@@ -102,22 +104,20 @@
 		671F437DD0162C14B3CC028F /* BIP39WordList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BIP39WordList.swift; sourceTree = "<group>"; };
 		68424DE7EBED910C2747F82E /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		68D37B780FC446CF8D51C0E9 /* AttachmentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentView.swift; sourceTree = "<group>"; };
-		6AD7FF743762B5EF3F5F531D /* Pods-Whisper2.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Whisper2.debug.xcconfig"; path = "Target Support Files/Pods-Whisper2/Pods-Whisper2.debug.xcconfig"; sourceTree = "<group>"; };
 		7295A933E7E5494F1B50DE0A /* SeedPhraseView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeedPhraseView.swift; sourceTree = "<group>"; };
 		78DC4915E0A686295312943B /* ContactsListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactsListView.swift; sourceTree = "<group>"; };
 		7975B76D3788564E0E3976FA /* CallService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallService.swift; sourceTree = "<group>"; };
 		7B1E7A52019BE1DA7EFA8A61 /* CallHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallHistory.swift; sourceTree = "<group>"; };
 		807A87F87EBAFFC25FBB25AB /* AudioMessageService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioMessageService.swift; sourceTree = "<group>"; };
 		835FFCAC544DA1C9FBF0223F /* ChatsListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatsListView.swift; sourceTree = "<group>"; };
-		8772646CB010942A22CBD5E2 /* Pods_Whisper2.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Whisper2.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		8AD2F50A4E7C8E4ED9D66E9D /* MessagingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagingService.swift; sourceTree = "<group>"; };
 		8E726641F6F72BE366C875C5 /* AuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthService.swift; sourceTree = "<group>"; };
 		8EC6D3CDD8D494434163F367 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		913628273C6F97712E4D4A16 /* ContactProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactProfileView.swift; sourceTree = "<group>"; };
 		91CFF53EE68F243CCBA718EA /* Errors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Errors.swift; sourceTree = "<group>"; };
 		95F395710803E4D290B1B443 /* User.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = User.swift; sourceTree = "<group>"; };
-		9A95C249EEADA1F6BFA14B91 /* Pods-Whisper2.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Whisper2.release.xcconfig"; path = "Target Support Files/Pods-Whisper2/Pods-Whisper2.release.xcconfig"; sourceTree = "<group>"; };
 		9C652DDDA3A343C9A3387381 /* Constants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Constants.swift; sourceTree = "<group>"; };
+		A5C11BE1304D6EABBCB49A7D /* Pods-Whisper2.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Whisper2.debug.xcconfig"; path = "Target Support Files/Pods-Whisper2/Pods-Whisper2.debug.xcconfig"; sourceTree = "<group>"; };
 		A780635AD5C6CA3786637510 /* AttachmentService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentService.swift; sourceTree = "<group>"; };
 		AAE3DC744882E5F3C0315653 /* LocationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationService.swift; sourceTree = "<group>"; };
 		AB09CA68D33A6B1E9C0B824B /* GroupListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupListView.swift; sourceTree = "<group>"; };
@@ -140,11 +140,11 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		8748343EE752AA7092CE5C95 /* Frameworks */ = {
+		95B21AC64DAB5068059AF936 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				495DBDF88E556D0152226D16 /* Pods_Whisper2.framework in Frameworks */,
+				7DE205648261FE5AEFD88C20 /* Pods_Whisper2.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -270,17 +270,9 @@
 				E86AFB3E55A10FF3E2464A38 /* ViewModels */,
 				47991160A237B9B992A5832B /* Views */,
 				3B6A4B920FB9597B204A6664 /* Products */,
-				7C50FB2E80348AC25842BCAA /* Pods */,
-				4F1433D92E4365AEDB58CB2E /* Frameworks */,
+				8BDB966B6D3C3C140681AB31 /* Pods */,
+				ED34C8D10EE67C6BB7F0A9B1 /* Frameworks */,
 			);
-			sourceTree = "<group>";
-		};
-		4F1433D92E4365AEDB58CB2E /* Frameworks */ = {
-			isa = PBXGroup;
-			children = (
-				8772646CB010942A22CBD5E2 /* Pods_Whisper2.framework */,
-			);
-			name = Frameworks;
 			sourceTree = "<group>";
 		};
 		79F5A2E74F4DD31E1B016EBF /* App */ = {
@@ -293,16 +285,6 @@
 			path = App;
 			sourceTree = "<group>";
 		};
-		7C50FB2E80348AC25842BCAA /* Pods */ = {
-			isa = PBXGroup;
-			children = (
-				6AD7FF743762B5EF3F5F531D /* Pods-Whisper2.debug.xcconfig */,
-				9A95C249EEADA1F6BFA14B91 /* Pods-Whisper2.release.xcconfig */,
-			);
-			name = Pods;
-			path = Pods;
-			sourceTree = "<group>";
-		};
 		87A31150D5173B6AC0AB4F30 /* Crypto */ = {
 			isa = PBXGroup;
 			children = (
@@ -311,6 +293,16 @@
 				4A8308EA090F09230C1D4CB5 /* KeyDerivation.swift */,
 			);
 			path = Crypto;
+			sourceTree = "<group>";
+		};
+		8BDB966B6D3C3C140681AB31 /* Pods */ = {
+			isa = PBXGroup;
+			children = (
+				A5C11BE1304D6EABBCB49A7D /* Pods-Whisper2.debug.xcconfig */,
+				2578AD173F617BBF3D1C4EDD /* Pods-Whisper2.release.xcconfig */,
+			);
+			name = Pods;
+			path = Pods;
 			sourceTree = "<group>";
 		};
 		9BFCD991A685851629395561 /* Group */ = {
@@ -359,6 +351,14 @@
 			path = ViewModels;
 			sourceTree = "<group>";
 		};
+		ED34C8D10EE67C6BB7F0A9B1 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				27668E0EA9E55512A7D876E3 /* Pods_Whisper2.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -366,12 +366,12 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 8F19CDA7D3C4D5401FAA683E /* Build configuration list for PBXNativeTarget "Whisper2" */;
 			buildPhases = (
-				4811BD45674CB8BBC4D53BEA /* [CP] Check Pods Manifest.lock */,
+				D056DD45740E925B559D5557 /* [CP] Check Pods Manifest.lock */,
 				4E2A210072B1814D34262614 /* Increment Build Number */,
 				C47DBCF44DF0698DFD62E863 /* Sources */,
 				941BBF0C92D3D1B45F85EC46 /* Resources */,
-				8748343EE752AA7092CE5C95 /* Frameworks */,
-				3095B373647C98EC070DEA25 /* [CP] Embed Pods Frameworks */,
+				95B21AC64DAB5068059AF936 /* Frameworks */,
+				405A2DB758FC07C026C3CDBF /* [CP] Embed Pods Frameworks */,
 			);
 			buildRules = (
 			);
@@ -429,7 +429,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		3095B373647C98EC070DEA25 /* [CP] Embed Pods Frameworks */ = {
+		405A2DB758FC07C026C3CDBF /* [CP] Embed Pods Frameworks */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -444,28 +444,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-Whisper2/Pods-Whisper2-frameworks.sh\"\n";
-			showEnvVarsInLog = 0;
-		};
-		4811BD45674CB8BBC4D53BEA /* [CP] Check Pods Manifest.lock */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-				"${PODS_PODFILE_DIR_PATH}/Podfile.lock",
-				"${PODS_ROOT}/Manifest.lock",
-			);
-			name = "[CP] Check Pods Manifest.lock";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-				"$(DERIVED_FILE_DIR)/Pods-Whisper2-checkManifestLockResult.txt",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
 			showEnvVarsInLog = 0;
 		};
 		4E2A210072B1814D34262614 /* Increment Build Number */ = {
@@ -485,6 +463,28 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "#!/bin/bash\nbuildNumber=$(/usr/libexec/PlistBuddy -c \"Print CFBundleVersion\" \"${PROJECT_DIR}/Info.plist\")\nbuildNumber=$(($buildNumber + 1))\n/usr/libexec/PlistBuddy -c \"Set :CFBundleVersion $buildNumber\" \"${PROJECT_DIR}/Info.plist\"\necho \"Build number incremented to $buildNumber\"\n";
+			showEnvVarsInLog = 0;
+		};
+		D056DD45740E925B559D5557 /* [CP] Check Pods Manifest.lock */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"${PODS_PODFILE_DIR_PATH}/Podfile.lock",
+				"${PODS_ROOT}/Manifest.lock",
+			);
+			name = "[CP] Check Pods Manifest.lock";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/Pods-Whisper2-checkManifestLockResult.txt",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
 			showEnvVarsInLog = 0;
 		};
 /* End PBXShellScriptBuildPhase section */
@@ -695,7 +695,7 @@
 		};
 		67FBB52C6B2EDE77A9F404AF /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 9A95C249EEADA1F6BFA14B91 /* Pods-Whisper2.release.xcconfig */;
+			baseConfigurationReference = 2578AD173F617BBF3D1C4EDD /* Pods-Whisper2.release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Whisper2.entitlements;
@@ -714,7 +714,7 @@
 		};
 		9A1FB7CB78D59C197743CA27 /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 6AD7FF743762B5EF3F5F531D /* Pods-Whisper2.debug.xcconfig */;
+			baseConfigurationReference = A5C11BE1304D6EABBCB49A7D /* Pods-Whisper2.debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Whisper2.entitlements;

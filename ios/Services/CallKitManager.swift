@@ -5,10 +5,13 @@ import AVFoundation
 
 /// Delegate protocol for CallKit events
 protocol CallKitManagerDelegate: AnyObject {
+    func callKitDidStartCall(callId: String)
     func callKitDidAnswerCall(callId: String)
     func callKitDidEndCall(callId: String)
     func callKitDidMuteCall(callId: String, muted: Bool)
     func callKitDidHoldCall(callId: String, onHold: Bool)
+    func callKitAudioSessionDidActivate()
+    func callKitAudioSessionDidDeactivate()
 }
 
 /// Manager for CallKit integration - provides native iOS call UI
@@ -159,11 +162,16 @@ extension CallKitManager: CXProviderDelegate {
     }
 
     func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
+        guard let callId = getCallId(for: action.callUUID) else {
+            action.fail()
+            return
+        }
+
         // Configure audio session for outgoing call
         configureAudioSession()
 
-        // Report that call started connecting
-        provider.reportOutgoingCall(with: action.callUUID, startedConnectingAt: Date())
+        // Notify delegate to start WebRTC connection
+        delegate?.callKitDidStartCall(callId: callId)
 
         action.fulfill()
     }
@@ -219,11 +227,13 @@ extension CallKitManager: CXProviderDelegate {
     func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
         // Audio session activated - WebRTC can now use audio
         print("CallKit audio session activated")
+        delegate?.callKitAudioSessionDidActivate()
     }
 
     func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
         // Audio session deactivated
         print("CallKit audio session deactivated")
+        delegate?.callKitAudioSessionDidDeactivate()
     }
 
     // MARK: - Audio Configuration

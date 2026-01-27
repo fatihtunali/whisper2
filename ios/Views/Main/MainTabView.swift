@@ -3,7 +3,6 @@ import SwiftUI
 /// Main tab bar view
 struct MainTabView: View {
     @StateObject private var chatsViewModel = ChatsViewModel()
-    @StateObject private var incomingCallViewModel = IncomingCallViewModel()
     @ObservedObject private var callService = CallService.shared
     @State private var selectedTab = 0
     @State private var showCallView = false
@@ -42,42 +41,31 @@ struct MainTabView: View {
         .preferredColorScheme(.dark)
         .onChange(of: callService.callState) { _, newState in
             switch newState {
-            case .initiating, .connecting, .connected, .reconnecting:
+            case .initiating:
+                // Outgoing call started - show CallView
                 showCallView = true
-                incomingCallViewModel.showIncomingCall = false
             case .ringing:
+                // For outgoing calls: show CallView (waiting for answer)
+                // For incoming calls: CallKit handles the UI, don't show CallView yet
                 if callService.activeCall?.isOutgoing == true {
                     showCallView = true
                 }
-                // Incoming calls are handled by IncomingCallViewModel
+            case .connecting, .connected, .reconnecting:
+                // Call is being connected or active - show CallView
+                showCallView = true
             case .ended:
                 // Keep showing for a moment to display end reason
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                     showCallView = false
-                    incomingCallViewModel.showIncomingCall = false
                 }
             case .idle:
                 showCallView = false
-                incomingCallViewModel.showIncomingCall = false
             }
         }
         .fullScreenCover(isPresented: $showCallView) {
             CallView()
         }
-        .fullScreenCover(isPresented: $incomingCallViewModel.showIncomingCall) {
-            if let payload = incomingCallViewModel.incomingCall {
-                IncomingCallView(
-                    callPayload: payload,
-                    onAnswer: {
-                        incomingCallViewModel.answerCall()
-                        showCallView = true
-                    },
-                    onDecline: {
-                        incomingCallViewModel.declineCall()
-                    }
-                )
-            }
-        }
+        // NOTE: IncomingCallView removed - CallKit handles incoming call UI natively on iOS
     }
 }
 

@@ -38,6 +38,12 @@ final class CallService: NSObject, ObservableObject {
     @Published private(set) var turnCredentials: TurnCredentialsPayload?
     @Published private(set) var callHistory: [CallRecord] = []
 
+    // Store incoming call payload for CallKit answer flow
+    private var pendingIncomingCall: CallIncomingPayload?
+
+    // Store outgoing call info for CallKit start flow
+    private var pendingOutgoingCall: (peerId: String, isVideo: Bool)?
+
     // WebRTC components
     private var peerConnectionFactory: RTCPeerConnectionFactory?
     private var peerConnection: RTCPeerConnection?
@@ -118,13 +124,13 @@ final class CallService: NSObject, ObservableObject {
 
     // MARK: - Initiate Call
 
+    /// Request to start an outgoing call - CallKit will handle the UI
     func initiateCall(to peerId: String, isVideo: Bool) async throws {
-        guard let user = auth.currentUser,
-              let sessionToken = user.sessionToken else {
+        guard auth.currentUser?.sessionToken != nil else {
             throw NetworkError.connectionFailed
         }
 
-        guard let recipientPublicKey = contacts.getPublicKey(for: peerId) else {
+        guard contacts.getPublicKey(for: peerId) != nil else {
             throw CryptoError.invalidPublicKey
         }
 
@@ -142,25 +148,57 @@ final class CallService: NSObject, ObservableObject {
             }
         }
 
-        // Fetch TURN credentials first
+        // Generate callId
+        let callId = UUID().uuidString.lowercased()
+
+        // Store pending outgoing call info
+        pendingOutgoingCall = (peerId: peerId, isVideo: isVideo)
+
+        // Update state
+        let contact = contacts.getContact(whisperId: peerId)
+        await MainActor.run {
+            self.activeCall = ActiveCall(
+                callId: callId,
+                peerId: peerId,
+                peerName: contact?.displayName,
+                isVideo: isVideo,
+                isOutgoing: true,
+                state: .initiating
+            )
+            self.callState = .initiating
+        }
+
+        // Request CallKit to start the call - CallKit will show native call UI
+        // When CallKit confirms, callKitDidStartCall will be triggered to setup WebRTC
+        callKitManager?.startOutgoingCall(callId: callId, handle: peerId, hasVideo: isVideo)
+    }
+
+    /// Actually start the WebRTC connection (called after CallKit confirms)
+    private func startOutgoingCallConnection() async throws {
+        guard let call = activeCall,
+              let user = auth.currentUser,
+              let sessionToken = user.sessionToken,
+              let pending = pendingOutgoingCall,
+              let recipientPublicKey = contacts.getPublicKey(for: pending.peerId) else {
+            throw NetworkError.connectionFailed
+        }
+
+        // Fetch TURN credentials
         try await fetchTurnCredentials()
 
         // Wait for credentials with retry
         var attempts = 0
         while turnCredentials == nil && attempts < 10 {
-            try await Task.sleep(nanoseconds: 200_000_000) // 0.2 second
+            try await Task.sleep(nanoseconds: 200_000_000)
             attempts += 1
         }
 
-        // Continue even without TURN (will try direct connection)
         if turnCredentials == nil {
             print("Warning: No TURN credentials received, attempting direct connection")
         }
 
-        let callId = UUID().uuidString.lowercased()
-
         // Create peer connection and generate offer
-        try await createPeerConnection(isVideo: isVideo)
+        try await createPeerConnection(isVideo: pending.isVideo)
         let sdpOffer = try await createOffer()
 
         // Encrypt SDP
@@ -174,22 +212,22 @@ final class CallService: NSObject, ObservableObject {
         // Sign
         let signature = try crypto.signMessage(
             messageType: Constants.MessageType.callInitiate,
-            messageId: callId,
+            messageId: call.callId,
             from: user.whisperId,
-            to: peerId,
+            to: pending.peerId,
             timestamp: timestamp,
             nonce: nonce,
             ciphertext: ciphertext,
             privateKey: user.signPrivateKey
         )
 
-        // Send initiate
+        // Send initiate to server
         let payload = CallInitiatePayload(
             sessionToken: sessionToken,
-            callId: callId,
+            callId: call.callId,
             from: user.whisperId,
-            to: peerId,
-            isVideo: isVideo,
+            to: pending.peerId,
+            isVideo: pending.isVideo,
             timestamp: timestamp,
             nonce: nonce.base64EncodedString(),
             ciphertext: ciphertext.base64EncodedString(),
@@ -199,22 +237,11 @@ final class CallService: NSObject, ObservableObject {
         let frame = WsFrame(type: Constants.MessageType.callInitiate, payload: payload)
         try await ws.send(frame)
 
-        // Update state
-        let contact = contacts.getContact(whisperId: peerId)
-        await MainActor.run {
-            self.activeCall = ActiveCall(
-                callId: callId,
-                peerId: peerId,
-                peerName: contact?.nickname,
-                isVideo: isVideo,
-                isOutgoing: true,
-                state: .initiating
-            )
-            self.callState = .initiating
-        }
+        // Clear pending
+        pendingOutgoingCall = nil
 
-        // Report to CallKit
-        callKitManager?.startOutgoingCall(callId: callId, handle: peerId, hasVideo: isVideo)
+        // Report connecting to CallKit
+        callKitManager?.reportOutgoingCallStartedConnecting(callId: call.callId)
     }
 
     // MARK: - Answer Call
@@ -653,7 +680,10 @@ final class CallService: NSObject, ObservableObject {
 
         let payload = frame.payload
 
-        // Report to CallKit for native call UI
+        // Store pending incoming call for CallKit answer flow
+        pendingIncomingCall = payload
+
+        // Report to CallKit for native call UI (CallKit handles the incoming call screen)
         let contact = contacts.getContact(whisperId: payload.from)
         callKitManager?.reportIncomingCall(
             callId: payload.callId,
@@ -675,8 +705,8 @@ final class CallService: NSObject, ObservableObject {
             self.callState = .ringing
         }
 
-        // Notify PushNotificationService callback if set
-        PushNotificationService.shared.onIncomingCall?(payload)
+        // NOTE: Don't call PushNotificationService.onIncomingCall here
+        // CallKit handles the incoming call UI natively on iOS
     }
 
     private func handleCallAnswer(_ data: Data) {
@@ -978,13 +1008,45 @@ extension CallService: RTCPeerConnectionDelegate {
 
 extension CallService: CallKitManagerDelegate {
 
-    func callKitDidAnswerCall(callId: String) {
-        // Find the incoming call payload and answer it
-        // This is triggered when user answers via CallKit UI
-        guard let call = activeCall, call.callId == callId else { return }
+    func callKitDidStartCall(callId: String) {
+        // CallKit confirmed outgoing call start - now setup WebRTC connection
+        guard activeCall?.callId == callId, activeCall?.isOutgoing == true else {
+            print("CallKit start: Call mismatch for callId: \(callId)")
+            return
+        }
 
-        // We need the original incoming payload to answer
-        // For now, we'll handle this through the normal flow
+        Task {
+            do {
+                try await startOutgoingCallConnection()
+            } catch {
+                print("Failed to start outgoing call connection: \(error)")
+                callKitManager?.endCall(callId: callId)
+                await MainActor.run {
+                    self.callState = .ended(reason: .failed)
+                }
+            }
+        }
+    }
+
+    func callKitDidAnswerCall(callId: String) {
+        // User answered incoming call via CallKit UI - start the WebRTC connection
+        guard let payload = pendingIncomingCall, payload.callId == callId else {
+            print("CallKit answer: No pending call found for callId: \(callId)")
+            return
+        }
+
+        Task {
+            do {
+                try await answerCall(payload)
+                pendingIncomingCall = nil
+            } catch {
+                print("Failed to answer call via CallKit: \(error)")
+                callKitManager?.endCall(callId: callId)
+                await MainActor.run {
+                    self.callState = .ended(reason: .failed)
+                }
+            }
+        }
     }
 
     func callKitDidEndCall(callId: String) {
@@ -995,10 +1057,24 @@ extension CallService: CallKitManagerDelegate {
 
     func callKitDidMuteCall(callId: String, muted: Bool) {
         localAudioTrack?.isEnabled = !muted
-        activeCall?.isMuted = muted
+        DispatchQueue.main.async {
+            self.activeCall?.isMuted = muted
+        }
     }
 
     func callKitDidHoldCall(callId: String, onHold: Bool) {
-        // TODO: Implement hold functionality
+        // Handle hold if needed
+        localAudioTrack?.isEnabled = !onHold
+    }
+
+    func callKitAudioSessionDidActivate() {
+        // Audio session is now active - WebRTC can use audio
+        // This is important for proper audio routing
+        print("Audio session activated - WebRTC audio enabled")
+    }
+
+    func callKitAudioSessionDidDeactivate() {
+        // Audio session deactivated
+        print("Audio session deactivated")
     }
 }
