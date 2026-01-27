@@ -1214,38 +1214,20 @@ extension CallService: CallKitManagerDelegate {
         // Audio session is now active - WebRTC can use audio
         print("CallKit audio session activated")
 
-        // Configure RTCAudioSession to use CallKit's audio session
-        let rtcAudioSession = RTCAudioSession.sharedInstance()
-        rtcAudioSession.lockForConfiguration()
-        do {
-            // Tell WebRTC that audio session is already configured by CallKit
-            try rtcAudioSession.setCategory(AVAudioSession.Category.playAndRecord.rawValue,
-                                            with: .allowBluetooth)
-            try rtcAudioSession.setMode(AVAudioSession.Mode.voiceChat.rawValue)
-            try rtcAudioSession.setActive(true)
-            print("RTCAudioSession configured successfully")
-        } catch {
-            print("Failed to configure RTCAudioSession: \(error)")
-        }
-        rtcAudioSession.unlockForConfiguration()
+        // Tell WebRTC's audio session that it's been activated by CallKit
+        RTCAudioSession.sharedInstance().audioSessionDidActivate(AVAudioSession.sharedInstance())
 
         // Ensure audio track is enabled
         localAudioTrack?.isEnabled = true
-        print("Audio session activated - WebRTC audio enabled")
+        print("Audio session activated - WebRTC audio enabled, track enabled: \(localAudioTrack?.isEnabled ?? false)")
     }
 
     func callKitAudioSessionDidDeactivate() {
         // Audio session deactivated
         print("CallKit audio session deactivated")
 
-        let rtcAudioSession = RTCAudioSession.sharedInstance()
-        rtcAudioSession.lockForConfiguration()
-        do {
-            try rtcAudioSession.setActive(false)
-        } catch {
-            print("Failed to deactivate RTCAudioSession: \(error)")
-        }
-        rtcAudioSession.unlockForConfiguration()
+        // Tell WebRTC's audio session that it's been deactivated
+        RTCAudioSession.sharedInstance().audioSessionDidDeactivate(AVAudioSession.sharedInstance())
 
         print("Audio session deactivated")
     }
