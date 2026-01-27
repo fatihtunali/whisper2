@@ -718,7 +718,7 @@ final class MessagingService: ObservableObject {
         // Update messages array and save if any changes were made
         if needsSave {
             messages[conversationId] = msgs
-            saveMessages()
+            saveMessagesToStorage()
         }
     }
     
