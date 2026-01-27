@@ -15,6 +15,7 @@ import { RedisKeys, TTL } from '../db/redis-keys';
 import { connectionManager } from './ConnectionManager';
 import { logger } from '../utils/logger';
 import { sendFcmMessage, isFirebaseReady } from './firebase';
+import * as apn from 'apn';
 
 // =============================================================================
 // TYPES
@@ -69,6 +70,70 @@ const FORBIDDEN_FIELDS = [
   'content',
   'plaintext',
 ] as const;
+
+// =============================================================================
+// APNS CONFIGURATION
+// =============================================================================
+
+const APNS_KEY_ID = process.env.APNS_KEY_ID || '';
+const APNS_TEAM_ID = process.env.APNS_TEAM_ID || '';
+const APNS_KEY_PATH = process.env.APNS_KEY_PATH || '';
+const APNS_BUNDLE_ID = process.env.APNS_BUNDLE_ID || '';
+const APNS_PRODUCTION = process.env.APNS_PRODUCTION === 'true';
+
+// APNs providers (initialized lazily)
+let apnsProvider: apn.Provider | null = null;
+let voipProvider: apn.Provider | null = null;
+
+function getApnsProvider(): apn.Provider | null {
+  if (apnsProvider) return apnsProvider;
+
+  if (!APNS_KEY_ID || !APNS_TEAM_ID || !APNS_KEY_PATH || !APNS_BUNDLE_ID) {
+    logger.warn('APNs not configured: missing environment variables');
+    return null;
+  }
+
+  try {
+    apnsProvider = new apn.Provider({
+      token: {
+        key: APNS_KEY_PATH,
+        keyId: APNS_KEY_ID,
+        teamId: APNS_TEAM_ID,
+      },
+      production: APNS_PRODUCTION,
+    });
+    logger.info('APNs provider initialized');
+    return apnsProvider;
+  } catch (error) {
+    logger.error({ error }, 'Failed to initialize APNs provider');
+    return null;
+  }
+}
+
+function getVoipProvider(): apn.Provider | null {
+  if (voipProvider) return voipProvider;
+
+  if (!APNS_KEY_ID || !APNS_TEAM_ID || !APNS_KEY_PATH || !APNS_BUNDLE_ID) {
+    logger.warn('VoIP push not configured: missing environment variables');
+    return null;
+  }
+
+  try {
+    voipProvider = new apn.Provider({
+      token: {
+        key: APNS_KEY_PATH,
+        keyId: APNS_KEY_ID,
+        teamId: APNS_TEAM_ID,
+      },
+      production: APNS_PRODUCTION,
+    });
+    logger.info('VoIP provider initialized');
+    return voipProvider;
+  } catch (error) {
+    logger.error({ error }, 'Failed to initialize VoIP provider');
+    return null;
+  }
+}
 
 // =============================================================================
 // PUSH SERVICE
@@ -286,7 +351,6 @@ export class PushService {
 
   /**
    * Send APNs push (iOS).
-   * NOTE: This is a stub - in production, integrate with Apple Push Notification Service.
    */
   private async sendApns(
     device: DeviceInfo,
@@ -297,32 +361,76 @@ export class PushService {
       return { sent: false, skipped: true, reason: 'no_token' };
     }
 
-    // TODO: Integrate with actual APNs provider (e.g., node-apn, @parse/node-apn)
-    // For now, this is a stub that simulates success
+    const provider = getApnsProvider();
+    if (!provider) {
+      logger.warn({ deviceId: device.deviceId }, 'APNs provider not available');
+      return { sent: false, skipped: true, reason: 'apns_not_configured' };
+    }
 
-    // In production:
-    // - Use APNs HTTP/2 provider
-    // - Send to device.pushToken
-    // - Handle "BadDeviceToken" response → call handleInvalidToken()
-    // - Use "alert" or "background" based on reason
+    try {
+      const notification = new apn.Notification();
+      notification.topic = APNS_BUNDLE_ID;
+      notification.expiry = Math.floor(Date.now() / 1000) + 60; // 1 minute expiry
 
-    logger.debug(
-      { deviceId: device.deviceId, platform: 'ios', reason },
-      'APNs push simulated (stub)'
-    );
+      if (reason === 'call') {
+        // High priority for calls
+        notification.priority = 10;
+        notification.pushType = 'alert';
+        notification.alert = {
+          title: 'Incoming Call',
+          body: 'You have an incoming call',
+        };
+        notification.sound = 'default';
+      } else {
+        // Background push for messages
+        notification.priority = 5;
+        notification.pushType = 'background';
+        notification.contentAvailable = true;
+      }
 
-    // Simulate success
-    return {
-      sent: true,
-      skipped: false,
-      provider: 'apns',
-      ticketId: `apns_${Date.now()}`,
-    };
+      notification.payload = {
+        type: payload.type,
+        reason: payload.reason,
+        whisperId: payload.whisperId,
+      };
+
+      const result = await provider.send(notification, device.pushToken);
+
+      if (result.failed.length > 0) {
+        const failure = result.failed[0];
+        logger.warn(
+          { deviceId: device.deviceId, error: failure.response },
+          'APNs push failed'
+        );
+
+        // Handle invalid token
+        if (failure.response?.reason === 'BadDeviceToken' ||
+            failure.response?.reason === 'Unregistered') {
+          await this.handleInvalidToken(payload.whisperId, device.deviceId, 'push');
+        }
+
+        return { sent: false, skipped: false, reason: failure.response?.reason || 'apns_error' };
+      }
+
+      logger.info(
+        { deviceId: device.deviceId, reason },
+        'APNs push sent successfully'
+      );
+
+      return {
+        sent: true,
+        skipped: false,
+        provider: 'apns',
+        ticketId: `apns_${Date.now()}`,
+      };
+    } catch (error) {
+      logger.error({ error, deviceId: device.deviceId }, 'APNs push error');
+      return { sent: false, skipped: false, reason: 'apns_exception' };
+    }
   }
 
   /**
    * Send VoIP push (iOS CallKit).
-   * NOTE: This is a stub - in production, integrate with Apple VoIP Push.
    */
   private async sendVoip(
     device: DeviceInfo,
@@ -332,21 +440,62 @@ export class PushService {
       return { sent: false, skipped: true, reason: 'no_voip_token' };
     }
 
-    // TODO: Integrate with APNs VoIP push
-    // - Use PushKit topic
-    // - Handle "BadDeviceToken" response
+    const provider = getVoipProvider();
+    if (!provider) {
+      logger.warn({ deviceId: device.deviceId }, 'VoIP provider not available');
+      return { sent: false, skipped: true, reason: 'voip_not_configured' };
+    }
 
-    logger.debug(
-      { deviceId: device.deviceId, platform: 'ios' },
-      'VoIP push simulated (stub)'
-    );
+    try {
+      const notification = new apn.Notification();
+      // VoIP push uses .voip suffix on bundle ID
+      notification.topic = `${APNS_BUNDLE_ID}.voip`;
+      notification.pushType = 'voip';
+      notification.priority = 10; // VoIP must be high priority
+      notification.expiry = Math.floor(Date.now() / 1000) + 30; // 30 second expiry for calls
 
-    return {
-      sent: true,
-      skipped: false,
-      provider: 'voip',
-      ticketId: `voip_${Date.now()}`,
-    };
+      notification.payload = {
+        type: payload.type,
+        reason: payload.reason,
+        whisperId: payload.whisperId,
+        aps: {
+          'content-available': 1,
+        },
+      };
+
+      const result = await provider.send(notification, device.voipToken);
+
+      if (result.failed.length > 0) {
+        const failure = result.failed[0];
+        logger.warn(
+          { deviceId: device.deviceId, error: failure.response },
+          'VoIP push failed'
+        );
+
+        // Handle invalid token
+        if (failure.response?.reason === 'BadDeviceToken' ||
+            failure.response?.reason === 'Unregistered') {
+          await this.handleInvalidToken(payload.whisperId, device.deviceId, 'voip');
+        }
+
+        return { sent: false, skipped: false, reason: failure.response?.reason || 'voip_error' };
+      }
+
+      logger.info(
+        { deviceId: device.deviceId },
+        'VoIP push sent successfully'
+      );
+
+      return {
+        sent: true,
+        skipped: false,
+        provider: 'voip',
+        ticketId: `voip_${Date.now()}`,
+      };
+    } catch (error) {
+      logger.error({ error, deviceId: device.deviceId }, 'VoIP push error');
+      return { sent: false, skipped: false, reason: 'voip_exception' };
+    }
   }
 
   /**
