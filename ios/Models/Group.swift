@@ -86,3 +86,36 @@ struct GroupMessagePayload: Codable {
     let sig: String
     let attachment: AttachmentPointer?
 }
+
+/// Group invite - pending invitation to join a group
+struct GroupInvite: Codable, Identifiable {
+    let id: String  // groupId
+    let groupId: String
+    let title: String
+    let inviterId: String  // Who invited (creator or admin)
+    let inviterName: String?
+    let memberIds: [String]
+    let memberCount: Int
+    let createdAt: Date
+    let receivedAt: Date
+
+    init(
+        groupId: String,
+        title: String,
+        inviterId: String,
+        inviterName: String? = nil,
+        memberIds: [String],
+        createdAt: Date = Date(),
+        receivedAt: Date = Date()
+    ) {
+        self.id = groupId
+        self.groupId = groupId
+        self.title = title
+        self.inviterId = inviterId
+        self.inviterName = inviterName
+        self.memberIds = memberIds
+        self.memberCount = memberIds.count
+        self.createdAt = createdAt
+        self.receivedAt = receivedAt
+    }
+}

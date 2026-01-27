@@ -388,6 +388,22 @@ struct GroupSendMessagePayload: Codable {
     }
 }
 
+struct GroupInviteResponsePayload: Codable {
+    let protocolVersion: Int
+    let cryptoVersion: Int
+    let sessionToken: String
+    let groupId: String
+    let accept: Bool
+
+    init(sessionToken: String, groupId: String, accept: Bool) {
+        self.protocolVersion = Constants.protocolVersion
+        self.cryptoVersion = Constants.cryptoVersion
+        self.sessionToken = sessionToken
+        self.groupId = groupId
+        self.accept = accept
+    }
+}
+
 // MARK: - Push Token Update (from server protocol.ts Section 8)
 
 struct UpdateTokensPayload: Codable {

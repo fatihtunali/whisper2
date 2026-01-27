@@ -76,6 +76,7 @@ enum Constants {
         static let groupEvent = "group_event"
         static let groupUpdate = "group_update"
         static let groupSendMessage = "group_send_message"
+        static let groupInviteResponse = "group_invite_response"
         
         // Calls
         static let getTurnCredentials = "get_turn_credentials"

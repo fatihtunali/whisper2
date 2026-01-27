@@ -5,24 +5,58 @@ struct GroupListView: View {
     @ObservedObject var groupService = GroupService.shared
     @State private var showCreateGroup = false
 
+    private var pendingInvites: [GroupInvite] {
+        groupService.getPendingInvites()
+    }
+
+    private var hasContent: Bool {
+        !groupService.getAllGroups().isEmpty || !pendingInvites.isEmpty
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
                 Color.black.ignoresSafeArea()
 
-                if groupService.getAllGroups().isEmpty {
+                if !hasContent {
                     EmptyGroupsView(showCreateGroup: $showCreateGroup)
                 } else {
                     List {
-                        ForEach(groupService.getAllGroups()) { group in
-                            NavigationLink(destination: GroupChatView(group: group)) {
-                                GroupRow(group: group)
+                        // Pending invites section
+                        if !pendingInvites.isEmpty {
+                            Section {
+                                ForEach(pendingInvites) { invite in
+                                    GroupInviteRow(invite: invite)
+                                        .listRowBackground(Color.black)
+                                        .listRowSeparatorTint(Color.gray.opacity(0.3))
+                                }
+                            } header: {
+                                Text("Pending Invites")
+                                    .foregroundColor(.orange)
+                                    .fontWeight(.semibold)
                             }
-                            .listRowBackground(Color.black)
-                            .listRowSeparatorTint(Color.gray.opacity(0.3))
+                        }
+
+                        // Groups section
+                        if !groupService.getAllGroups().isEmpty {
+                            Section {
+                                ForEach(groupService.getAllGroups()) { group in
+                                    NavigationLink(destination: GroupChatView(group: group)) {
+                                        GroupRow(group: group)
+                                    }
+                                    .listRowBackground(Color.black)
+                                    .listRowSeparatorTint(Color.gray.opacity(0.3))
+                                }
+                            } header: {
+                                if !pendingInvites.isEmpty {
+                                    Text("My Groups")
+                                        .foregroundColor(.gray)
+                                }
+                            }
                         }
                     }
                     .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
                 }
             }
             .navigationTitle("Groups")
@@ -36,6 +70,89 @@ struct GroupListView: View {
             .sheet(isPresented: $showCreateGroup) {
                 CreateGroupView()
             }
+        }
+    }
+}
+
+/// Row for a group invite
+struct GroupInviteRow: View {
+    let invite: GroupInvite
+    @State private var isProcessing = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                // Group avatar
+                ZStack {
+                    Circle()
+                        .fill(Color.orange.opacity(0.3))
+                        .frame(width: 56, height: 56)
+
+                    Image(systemName: "person.3.fill")
+                        .font(.title3)
+                        .foregroundColor(.orange)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(invite.title)
+                        .font(.headline)
+                        .foregroundColor(.white)
+
+                    Text("\(invite.inviterName ?? invite.inviterId) invited you")
+                        .font(.subheadline)
+                        .foregroundColor(.gray)
+
+                    Text("\(invite.memberCount) members")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+
+                Spacer()
+            }
+
+            // Accept/Decline buttons
+            HStack(spacing: 12) {
+                Button(action: declineInvite) {
+                    Text("Decline")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(.red)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(Color.red.opacity(0.2))
+                        .cornerRadius(8)
+                }
+                .disabled(isProcessing)
+
+                Button(action: acceptInvite) {
+                    Text("Accept")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(Color.blue)
+                        .cornerRadius(8)
+                }
+                .disabled(isProcessing)
+            }
+        }
+        .padding(.vertical, 8)
+    }
+
+    private func acceptInvite() {
+        isProcessing = true
+        Task {
+            try? await GroupService.shared.acceptInvite(invite.groupId)
+            await MainActor.run { isProcessing = false }
+        }
+    }
+
+    private func declineInvite() {
+        isProcessing = true
+        Task {
+            try? await GroupService.shared.declineInvite(invite.groupId)
+            await MainActor.run { isProcessing = false }
         }
     }
 }

@@ -7,6 +7,7 @@ final class GroupService: ObservableObject {
 
     @Published private(set) var groups: [String: ChatGroup] = [:]  // groupId -> ChatGroup
     @Published private(set) var groupMessages: [String: [Message]] = [:]  // groupId -> messages
+    @Published private(set) var groupInvites: [String: GroupInvite] = [:]  // groupId -> invite
 
     private let ws = WebSocketService.shared
     private let auth = AuthService.shared
@@ -17,6 +18,7 @@ final class GroupService: ObservableObject {
 
     private let groupsStorageKey = "whisper2.groups.data"
     private let groupMessagesStorageKey = "whisper2.group.messages.data"
+    private let groupInvitesStorageKey = "whisper2.group.invites.data"
 
     private init() {
         loadFromStorage()
@@ -134,6 +136,68 @@ final class GroupService: ObservableObject {
             groupMessages.removeValue(forKey: groupId)
             saveToStorage()
         }
+    }
+
+    // MARK: - Group Invites
+
+    /// Accept a group invite
+    func acceptInvite(_ groupId: String) async throws {
+        guard let invite = groupInvites[groupId],
+              let sessionToken = auth.currentUser?.sessionToken else {
+            throw NetworkError.connectionFailed
+        }
+
+        // Send accept to server
+        let payload = GroupInviteResponsePayload(
+            sessionToken: sessionToken,
+            groupId: groupId,
+            accept: true
+        )
+
+        let frame = WsFrame(type: Constants.MessageType.groupInviteResponse, payload: payload)
+        try await ws.send(frame)
+
+        // Add group locally
+        await MainActor.run {
+            let group = ChatGroup(
+                id: invite.groupId,
+                title: invite.title,
+                memberIds: invite.memberIds,
+                creatorId: invite.inviterId,
+                createdAt: invite.createdAt
+            )
+            self.groups[groupId] = group
+            self.groupInvites.removeValue(forKey: groupId)
+            self.saveToStorage()
+        }
+    }
+
+    /// Decline a group invite
+    func declineInvite(_ groupId: String) async throws {
+        guard let sessionToken = auth.currentUser?.sessionToken else {
+            throw NetworkError.connectionFailed
+        }
+
+        // Send decline to server
+        let payload = GroupInviteResponsePayload(
+            sessionToken: sessionToken,
+            groupId: groupId,
+            accept: false
+        )
+
+        let frame = WsFrame(type: Constants.MessageType.groupInviteResponse, payload: payload)
+        try await ws.send(frame)
+
+        // Remove invite locally
+        await MainActor.run {
+            self.groupInvites.removeValue(forKey: groupId)
+            self.saveToStorage()
+        }
+    }
+
+    /// Get all pending group invites
+    func getPendingInvites() -> [GroupInvite] {
+        return Array(groupInvites.values).sorted { $0.receivedAt > $1.receivedAt }
     }
 
     // MARK: - Send Group Message
@@ -283,16 +347,35 @@ final class GroupService: ObservableObject {
         DispatchQueue.main.async {
             switch eventType {
             case .created:
-                // New group created (we were added)
+                // New group created - we received an invite
+                // If we are the creator, add directly; otherwise create an invite
                 if let memberIds = payload.memberIds, let title = payload.title {
-                    let group = ChatGroup(
-                        id: payload.groupId,
-                        title: title,
-                        memberIds: memberIds,
-                        creatorId: payload.actorId ?? "",
-                        createdAt: Date(timeIntervalSince1970: Double(payload.timestamp) / 1000)
-                    )
-                    self.groups[payload.groupId] = group
+                    let isCreator = payload.actorId == self.auth.currentUser?.whisperId
+
+                    if isCreator {
+                        // We created the group, add it directly
+                        let group = ChatGroup(
+                            id: payload.groupId,
+                            title: title,
+                            memberIds: memberIds,
+                            creatorId: payload.actorId ?? "",
+                            createdAt: Date(timeIntervalSince1970: Double(payload.timestamp) / 1000)
+                        )
+                        self.groups[payload.groupId] = group
+                    } else {
+                        // We were invited - create a group invite
+                        let inviterName = self.contacts.getContact(whisperId: payload.actorId ?? "")?.displayName
+                        let invite = GroupInvite(
+                            groupId: payload.groupId,
+                            title: title,
+                            inviterId: payload.actorId ?? "",
+                            inviterName: inviterName,
+                            memberIds: memberIds,
+                            createdAt: Date(timeIntervalSince1970: Double(payload.timestamp) / 1000),
+                            receivedAt: Date()
+                        )
+                        self.groupInvites[payload.groupId] = invite
+                    }
                 }
 
             case .memberAdded:
@@ -463,6 +546,12 @@ final class GroupService: ObservableObject {
            let decoded = try? JSONDecoder().decode([String: [Message]].self, from: data) {
             groupMessages = decoded
         }
+
+        // Load group invites
+        if let data = keychain.getData(forKey: groupInvitesStorageKey),
+           let decoded = try? JSONDecoder().decode([GroupInvite].self, from: data) {
+            groupInvites = Dictionary(uniqueKeysWithValues: decoded.map { ($0.groupId, $0) })
+        }
     }
 
     private func saveToStorage() {
@@ -475,6 +564,12 @@ final class GroupService: ObservableObject {
         // Save group messages
         if let data = try? JSONEncoder().encode(groupMessages) {
             keychain.setData(data, forKey: groupMessagesStorageKey)
+        }
+
+        // Save group invites
+        let invitesArray = Array(groupInvites.values)
+        if let data = try? JSONEncoder().encode(invitesArray) {
+            keychain.setData(data, forKey: groupInvitesStorageKey)
         }
     }
 
@@ -490,8 +585,10 @@ final class GroupService: ObservableObject {
     func clearAllData() {
         groups.removeAll()
         groupMessages.removeAll()
+        groupInvites.removeAll()
         keychain.delete(key: groupsStorageKey)
         keychain.delete(key: groupMessagesStorageKey)
+        keychain.delete(key: groupInvitesStorageKey)
     }
 }
 
