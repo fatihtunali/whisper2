@@ -100,6 +100,11 @@ struct MessageRequestRow: View {
     let onDecline: () -> Void
     let onBlock: () -> Void
 
+    /// Whether we have the sender's public key (can accept directly without QR scan)
+    private var hasPublicKey: Bool {
+        request.senderEncPublicKey != nil && request.senderEncPublicKey!.count == 32
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
@@ -134,16 +139,18 @@ struct MessageRequestRow: View {
                 Spacer()
             }
 
-            // Info banner - updated message
+            // Info banner - different message based on whether we have public key
             HStack(spacing: 8) {
-                Image(systemName: "lock.shield.fill")
-                    .foregroundColor(.orange)
-                Text("Scan QR to preview messages, then decide to accept or block")
+                Image(systemName: hasPublicKey ? "checkmark.shield.fill" : "lock.shield.fill")
+                    .foregroundColor(hasPublicKey ? .green : .orange)
+                Text(hasPublicKey
+                    ? "Preview messages and decide to accept or block"
+                    : "Scan QR to preview messages, then decide to accept or block")
                     .font(.caption)
                     .foregroundColor(.gray)
             }
             .padding(10)
-            .background(Color.orange.opacity(0.1))
+            .background(hasPublicKey ? Color.green.opacity(0.1) : Color.orange.opacity(0.1))
             .cornerRadius(8)
 
             // Action buttons
@@ -173,8 +180,8 @@ struct MessageRequestRow: View {
 
                 Button(action: onPreview) {
                     HStack {
-                        Image(systemName: "qrcode.viewfinder")
-                        Text("Preview")
+                        Image(systemName: hasPublicKey ? "eye.fill" : "qrcode.viewfinder")
+                        Text(hasPublicKey ? "Review" : "Preview")
                     }
                     .font(.subheadline)
                     .fontWeight(.semibold)
@@ -183,7 +190,7 @@ struct MessageRequestRow: View {
                     .padding(.vertical, 10)
                     .background(
                         LinearGradient(
-                            colors: [.blue, .purple],
+                            colors: hasPublicKey ? [.green, .green.opacity(0.7)] : [.blue, .purple],
                             startPoint: .leading,
                             endPoint: .trailing
                         )
@@ -538,6 +545,11 @@ class MessageRequestsViewModel: ObservableObject {
         setupBindings()
     }
 
+    deinit {
+        // Explicitly cancel all subscriptions to prevent race conditions during teardown
+        cancellables.removeAll()
+    }
+
     private func setupBindings() {
         contactsService.$messageRequests
             .receive(on: DispatchQueue.main)
@@ -547,7 +559,8 @@ class MessageRequestsViewModel: ObservableObject {
                     .sorted { $0.lastReceivedAt > $1.lastReceivedAt }
             }
             .sink { [weak self] requests in
-                self?.requests = requests
+                guard let self = self else { return }
+                self.requests = requests
             }
             .store(in: &cancellables)
     }
@@ -556,11 +569,19 @@ class MessageRequestsViewModel: ObservableObject {
         requests = contactsService.getMessageRequests()
     }
 
-    /// Show QR scanner to preview messages
+    /// Show preview for messages - skip QR scanner if public key is already available
     func showPreviewSheet(for request: MessageRequest) {
         selectedRequest = request
-        scannedPublicKey = nil
-        showQRScanner = true
+
+        // If we already have the sender's public key, skip QR scanner
+        if let publicKey = request.senderEncPublicKey, publicKey.count == 32 {
+            scannedPublicKey = publicKey
+            showPreviewMessages = true
+        } else {
+            // Need QR scan to get public key
+            scannedPublicKey = nil
+            showQRScanner = true
+        }
     }
 
     /// Called after QR is scanned - show message preview

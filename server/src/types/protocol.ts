@@ -192,6 +192,7 @@ export interface MessageReceivedPayload {
   replyTo?: string; // omit if not present
   reactions?: Record<string, string[]>; // omit if empty
   attachment?: AttachmentPointer; // omit if not present
+  senderEncPublicKey?: string; // base64, included for message requests from unknown senders
 }
 
 // Delivery receipt (Section 4.3)

@@ -357,6 +357,9 @@ export class MessageRouter {
       sig,
     };
 
+    // Include sender's encryption public key (for message requests from unknown senders)
+    messageReceived.senderEncPublicKey = senderKeys.enc_public_key;
+
     // Only include optional fields when present (not null/undefined)
     if (payload.replyTo) {
       messageReceived.replyTo = payload.replyTo;

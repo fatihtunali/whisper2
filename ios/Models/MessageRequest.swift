@@ -10,7 +10,8 @@ struct MessageRequest: Codable, Identifiable, Hashable {
     let firstReceivedAt: Date
     var lastReceivedAt: Date
     var status: MessageRequestStatus
-    
+    var senderEncPublicKey: Data?  // Sender's encryption public key (for accepting without QR)
+
     init(
         id: String = UUID().uuidString,
         senderId: String,
@@ -19,7 +20,8 @@ struct MessageRequest: Codable, Identifiable, Hashable {
         messageCount: Int = 1,
         firstReceivedAt: Date = Date(),
         lastReceivedAt: Date = Date(),
-        status: MessageRequestStatus = .pending
+        status: MessageRequestStatus = .pending,
+        senderEncPublicKey: Data? = nil
     ) {
         self.id = id
         self.senderId = senderId
@@ -29,6 +31,7 @@ struct MessageRequest: Codable, Identifiable, Hashable {
         self.firstReceivedAt = firstReceivedAt
         self.lastReceivedAt = lastReceivedAt
         self.status = status
+        self.senderEncPublicKey = senderEncPublicKey
     }
     
     // Hashable

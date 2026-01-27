@@ -202,6 +202,7 @@ struct MessageReceivedPayload: Codable {
     let replyTo: String?
     let reactions: [String: [String]]?  // emoji -> whisperId[]
     let attachment: AttachmentPointer?
+    let senderEncPublicKey: String?  // base64, included for message requests from unknown senders
 }
 
 struct DeliveryReceiptPayload: Codable {

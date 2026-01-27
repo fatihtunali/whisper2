@@ -198,18 +198,27 @@ final class ContactsService: ObservableObject {
     func addMessageRequest(senderId: String, messageId: String, payload: MessageReceivedPayload) {
         // Don't create request if blocked
         guard !isBlocked(whisperId: senderId) else { return }
-        
+
         // Don't create request if already a contact
         guard !hasContact(whisperId: senderId) else { return }
-        
+
+        // Extract sender's public key from payload (if available)
+        var senderPublicKey: Data? = nil
+        if let keyB64 = payload.senderEncPublicKey,
+           let keyData = Data(base64Encoded: keyB64) {
+            senderPublicKey = keyData
+        }
+
         // Store the pending message
         if pendingMessages[senderId] == nil {
             pendingMessages[senderId] = []
         }
         pendingMessages[senderId]?.append(payload)
-        
+
         // Create or update request
         if var request = messageRequests[senderId] {
+            // Update existing request - keep the public key if we have it
+            let publicKey = senderPublicKey ?? request.senderEncPublicKey
             request = MessageRequest(
                 id: request.id,
                 senderId: request.senderId,
@@ -218,19 +227,22 @@ final class ContactsService: ObservableObject {
                 messageCount: request.messageCount + 1,
                 firstReceivedAt: request.firstReceivedAt,
                 lastReceivedAt: Date(),
-                status: request.status
+                status: request.status,
+                senderEncPublicKey: publicKey
             )
             messageRequests[senderId] = request
         } else {
+            // Create new request with sender's public key
             let request = MessageRequest(
                 senderId: senderId,
                 firstMessageId: messageId,
                 firstMessagePreview: "[Encrypted message]",
-                messageCount: 1
+                messageCount: 1,
+                senderEncPublicKey: senderPublicKey
             )
             messageRequests[senderId] = request
         }
-        
+
         saveRequestsToStorage()
         savePendingMessagesToStorage()
     }
