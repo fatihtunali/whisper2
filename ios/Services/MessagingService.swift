@@ -864,10 +864,10 @@ final class MessagingService: ObservableObject {
     /// This message is not sent over the network, only stored locally
     func addLocalMessage(_ message: Message) {
         DispatchQueue.main.async {
-            if self.messages[message.conversationId] == nil {
-                self.messages[message.conversationId] = []
-            }
-            self.messages[message.conversationId]?.append(message)
+            // Create new array with appended message to trigger @Published update
+            var conversationMessages = self.messages[message.conversationId] ?? []
+            conversationMessages.append(message)
+            self.messages[message.conversationId] = conversationMessages
 
             // Generate preview based on content type
             var previewContent: String
@@ -884,7 +884,7 @@ final class MessagingService: ObservableObject {
                     previewContent = isVideo ? "Missed video call" : "Missed call"
                 case "declined":
                     previewContent = isVideo ? "Declined video call" : "Declined call"
-                case "no_answer":
+                case "noAnswer":
                     previewContent = isVideo ? "Unanswered video call" : "Unanswered call"
                 case "failed":
                     previewContent = "Call failed"
