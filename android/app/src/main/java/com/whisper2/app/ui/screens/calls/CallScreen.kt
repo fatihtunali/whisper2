@@ -78,9 +78,11 @@ fun CallScreen(
         }
     }
 
-    // Initiate outgoing call when permissions granted
-    LaunchedEffect(permissionsGranted, peerId, isVideo, isOutgoing) {
-        if (permissionsGranted && isOutgoing && peerId != null && callState == CallState.Idle) {
+    // Initiate outgoing call when permissions granted (only once)
+    var callInitiated by remember { mutableStateOf(false) }
+    LaunchedEffect(permissionsGranted, isOutgoing) {
+        if (permissionsGranted && isOutgoing && peerId != null && !callInitiated) {
+            callInitiated = true
             viewModel.initiateCall(peerId, isVideo)
         }
     }

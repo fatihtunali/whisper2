@@ -259,6 +259,33 @@ data class CallRingingNotificationPayload(
     val from: String
 )
 
+// Incoming call_answer notification from server (no sessionToken/protocolVersion)
+data class CallAnswerNotificationPayload(
+    val callId: String,
+    val from: String,
+    val timestamp: Long,
+    val nonce: String,
+    val ciphertext: String,
+    val sig: String
+)
+
+// Incoming call_ice_candidate notification from server (no sessionToken/protocolVersion)
+data class CallIceCandidateNotificationPayload(
+    val callId: String,
+    val from: String,
+    val timestamp: Long,
+    val nonce: String,
+    val ciphertext: String,
+    val sig: String
+)
+
+// Incoming call_end notification from server (minimal payload)
+data class CallEndNotificationPayload(
+    val callId: String,
+    val from: String,
+    val reason: String
+)
+
 // System
 data class PingPayload(val timestamp: Long)
 data class PongPayload(val timestamp: Long, val serverTime: Long)

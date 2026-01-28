@@ -12,12 +12,22 @@ import com.whisper2.app.data.local.db.dao.CallRecordDao
 import com.whisper2.app.data.local.db.dao.ContactDao
 import com.whisper2.app.data.local.db.entities.CallRecordEntity
 import com.whisper2.app.data.local.prefs.SecureStorage
-import com.whisper2.app.data.network.ws.*
+import com.whisper2.app.data.network.ws.CallAnswerNotificationPayload
+import com.whisper2.app.data.network.ws.CallAnswerPayload
+import com.whisper2.app.data.network.ws.CallEndNotificationPayload
+import com.whisper2.app.data.network.ws.CallEndPayload
+import com.whisper2.app.data.network.ws.CallIceCandidateNotificationPayload
+import com.whisper2.app.data.network.ws.CallIceCandidatePayload
+import com.whisper2.app.data.network.ws.CallIncomingPayload
+import com.whisper2.app.data.network.ws.CallInitiatePayload
+import com.whisper2.app.data.network.ws.GetTurnCredentialsPayload
+import com.whisper2.app.data.network.ws.TurnCredentialsPayload
+import com.whisper2.app.data.network.ws.WsClientImpl
+import com.whisper2.app.data.network.ws.WsFrame
 import com.whisper2.app.di.ApplicationScope
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
-import kotlin.time.Duration.Companion.seconds
 import org.json.JSONObject
 import org.webrtc.*
 import java.util.UUID
@@ -133,27 +143,11 @@ class CallService @Inject constructor(
 
     // MARK: - TURN Credentials
 
-    private suspend fun fetchTurnCredentials(): TurnCredentialsPayload? {
-        val sessionToken = secureStorage.sessionToken ?: return null
-
-        // Clear previous credentials
-        _turnCredentials.value = null
+    private suspend fun fetchTurnCredentials() {
+        val sessionToken = secureStorage.sessionToken ?: return
 
         val payload = GetTurnCredentialsPayload(sessionToken = sessionToken)
         wsClient.send(WsFrame(Constants.MsgType.GET_TURN_CREDENTIALS, payload = payload))
-
-        // Wait for credentials with timeout
-        return withTimeoutOrNull(5000L) {
-            _turnCredentials.first { it != null }
-        }
-    }
-
-    private suspend fun ensureTurnCredentials(): TurnCredentialsPayload? {
-        // Return cached if available and not too old
-        _turnCredentials.value?.let { return it }
-
-        // Fetch fresh credentials
-        return fetchTurnCredentials()
     }
 
     // MARK: - Initiate Call
@@ -171,10 +165,10 @@ class CallService @Inject constructor(
         } ?: return Result.failure(Exception("Contact public key not found"))
 
         return try {
-            // Fetch TURN credentials and wait for them
-            val turn = ensureTurnCredentials()
-            if (turn == null) {
-                Logger.w("No TURN credentials available, proceeding without TURN")
+            // Fetch TURN credentials
+            if (_turnCredentials.value == null) {
+                fetchTurnCredentials()
+                delay(1000) // Wait for credentials
             }
 
             val callId = UUID.randomUUID().toString().lowercase()
@@ -258,10 +252,10 @@ class CallService @Inject constructor(
         } ?: return Result.failure(Exception("Sender public key not found"))
 
         return try {
-            // Fetch TURN credentials and wait for them
-            val turn = ensureTurnCredentials()
-            if (turn == null) {
-                Logger.w("No TURN credentials available, proceeding without TURN")
+            // Fetch TURN if needed
+            if (_turnCredentials.value == null) {
+                fetchTurnCredentials()
+                delay(1000)
             }
 
             // Decrypt SDP offer
@@ -741,8 +735,11 @@ class CallService @Inject constructor(
 
     private fun handleCallAnswer(frame: WsFrame<JsonElement>) {
         try {
-            val payload = gson.fromJson(frame.payload, CallAnswerPayload::class.java)
+            // Server sends minimal payload: { callId, from, timestamp, nonce, ciphertext, sig }
+            val payload = gson.fromJson(frame.payload, CallAnswerNotificationPayload::class.java)
             val encPrivateKey = secureStorage.encPrivateKey ?: return
+
+            Logger.d("Received call_answer: callId=${payload.callId}, from=${payload.from}")
 
             scope.launch {
                 val contact = contactDao.getContactById(payload.from)
@@ -777,7 +774,8 @@ class CallService @Inject constructor(
 
     private fun handleIceCandidate(frame: WsFrame<JsonElement>) {
         try {
-            val payload = gson.fromJson(frame.payload, CallIceCandidatePayload::class.java)
+            // Server sends minimal payload: { callId, from, timestamp, nonce, ciphertext, sig }
+            val payload = gson.fromJson(frame.payload, CallIceCandidateNotificationPayload::class.java)
             val encPrivateKey = secureStorage.encPrivateKey ?: return
 
             scope.launch {
@@ -815,12 +813,15 @@ class CallService @Inject constructor(
 
     private fun handleCallEnd(frame: WsFrame<JsonElement>) {
         try {
-            val payload = gson.fromJson(frame.payload, CallEndPayload::class.java)
+            // Server sends minimal payload: { callId, from, reason }
+            val payload = gson.fromJson(frame.payload, CallEndNotificationPayload::class.java)
             val reason = try {
                 CallEndReason.valueOf(payload.reason.uppercase())
             } catch (e: Exception) {
                 CallEndReason.ENDED
             }
+
+            Logger.d("Received call_end: callId=${payload.callId}, from=${payload.from}, reason=${payload.reason}")
 
             scope.launch {
                 _activeCall.value?.let { call ->
