@@ -155,13 +155,22 @@ fun CallScreen(
     var localRenderer by remember { mutableStateOf<SurfaceViewRenderer?>(null) }
     var remoteRenderer by remember { mutableStateOf<SurfaceViewRenderer?>(null) }
 
+    // Log video state for debugging
+    LaunchedEffect(activeCall, eglContext) {
+        com.whisper2.app.core.Logger.d("[CallScreen] activeCall?.isVideo=${activeCall?.isVideo}, eglContext=${if (eglContext != null) "exists" else "NULL"}")
+    }
+
     // Cleanup renderers on dispose
     DisposableEffect(Unit) {
         onDispose {
-            localRenderer?.release()
-            remoteRenderer?.release()
-            viewModel.setLocalVideoSink(null)
-            viewModel.setRemoteVideoSink(null)
+            try {
+                localRenderer?.release()
+                remoteRenderer?.release()
+                viewModel.setLocalVideoSink(null)
+                viewModel.setRemoteVideoSink(null)
+            } catch (e: Exception) {
+                com.whisper2.app.core.Logger.e("[CallScreen] Error releasing renderers: ${e.message}")
+            }
         }
     }
 
@@ -180,11 +189,17 @@ fun CallScreen(
             AndroidView(
                 factory = { ctx ->
                     SurfaceViewRenderer(ctx).apply {
-                        setMirror(false)
-                        setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
-                        init(eglContext, null)
-                        remoteRenderer = this
-                        viewModel.setRemoteVideoSink(this)
+                        try {
+                            setMirror(false)
+                            setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
+                            if (eglContext != null) {
+                                init(eglContext, null)
+                                remoteRenderer = this
+                                viewModel.setRemoteVideoSink(this)
+                            }
+                        } catch (e: Exception) {
+                            com.whisper2.app.core.Logger.e("[CallScreen] Error initializing remote renderer: ${e.message}")
+                        }
                     }
                 },
                 modifier = Modifier.fillMaxSize()
@@ -202,11 +217,17 @@ fun CallScreen(
                 AndroidView(
                     factory = { ctx ->
                         SurfaceViewRenderer(ctx).apply {
-                            setMirror(true)  // Mirror front camera
-                            setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
-                            init(eglContext, null)
-                            localRenderer = this
-                            viewModel.setLocalVideoSink(this)
+                            try {
+                                setMirror(true)  // Mirror front camera
+                                setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
+                                if (eglContext != null) {
+                                    init(eglContext, null)
+                                    localRenderer = this
+                                    viewModel.setLocalVideoSink(this)
+                                }
+                            } catch (e: Exception) {
+                                com.whisper2.app.core.Logger.e("[CallScreen] Error initializing local renderer: ${e.message}")
+                            }
                         }
                     },
                     modifier = Modifier.fillMaxSize()

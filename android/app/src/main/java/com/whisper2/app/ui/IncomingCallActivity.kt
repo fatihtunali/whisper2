@@ -81,10 +81,14 @@ class IncomingCallActivity : ComponentActivity() {
                     LaunchedEffect(autoAnswer) {
                         if (autoAnswer) {
                             Logger.d("[IncomingCallActivity] Auto-answering call")
-                            viewModel.setConnectionActive()
-                            viewModel.answerCall()
-                            CallForegroundService.stopService(this@IncomingCallActivity)
-                            answered = true
+                            try {
+                                viewModel.setConnectionActive()
+                                viewModel.answerCall()
+                                CallForegroundService.stopService(this@IncomingCallActivity)
+                                answered = true
+                            } catch (e: Exception) {
+                                Logger.e("[IncomingCallActivity] Error auto-answering: ${e.message}")
+                            }
                         }
                     }
 

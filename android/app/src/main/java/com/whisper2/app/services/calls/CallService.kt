@@ -145,12 +145,55 @@ class CallService @Inject constructor(
         eglBase = EglBase.create()
         val eglContext = eglBase!!.eglBaseContext
 
+        // Use hardware encoder with fallback
         val encoderFactory = DefaultVideoEncoderFactory(
             eglContext,
-            true,
-            true
+            true,  // enableIntelVp8Encoder
+            true   // enableH264HighProfile
         )
-        val decoderFactory = DefaultVideoDecoderFactory(eglContext)
+
+        // Create a robust decoder factory that handles H.264 from iOS
+        // Use hardware decoder first (HardwareVideoDecoderFactory) with software fallback
+        val hardwareDecoderFactory = HardwareVideoDecoderFactory(eglContext)
+        val softwareDecoderFactory = SoftwareVideoDecoderFactory()
+
+        // Wrap in a fallback factory that tries hardware first, then software
+        val decoderFactory = object : VideoDecoderFactory {
+            override fun createDecoder(codecInfo: VideoCodecInfo): VideoDecoder? {
+                Logger.d("[CallService] Creating decoder for codec: ${codecInfo.name}")
+                return try {
+                    // Try hardware decoder first
+                    hardwareDecoderFactory.createDecoder(codecInfo)?.also {
+                        Logger.d("[CallService] Using hardware decoder for ${codecInfo.name}")
+                    } ?: run {
+                        // Fallback to software decoder
+                        Logger.d("[CallService] Hardware decoder unavailable, trying software for ${codecInfo.name}")
+                        softwareDecoderFactory.createDecoder(codecInfo)
+                    }
+                } catch (e: Exception) {
+                    Logger.e("[CallService] Hardware decoder failed, using software: ${e.message}")
+                    try {
+                        softwareDecoderFactory.createDecoder(codecInfo)
+                    } catch (e2: Exception) {
+                        Logger.e("[CallService] Software decoder also failed: ${e2.message}")
+                        null
+                    }
+                }
+            }
+
+            override fun getSupportedCodecs(): Array<VideoCodecInfo> {
+                // Combine codecs from both factories, prioritizing hardware
+                val hwCodecs = hardwareDecoderFactory.supportedCodecs.toMutableList()
+                val swCodecs = softwareDecoderFactory.supportedCodecs
+                for (codec in swCodecs) {
+                    if (hwCodecs.none { it.name == codec.name }) {
+                        hwCodecs.add(codec)
+                    }
+                }
+                Logger.d("[CallService] Supported decoder codecs: ${hwCodecs.map { it.name }}")
+                return hwCodecs.toTypedArray()
+            }
+        }
 
         peerConnectionFactory = PeerConnectionFactory.builder()
             .setVideoEncoderFactory(encoderFactory)
