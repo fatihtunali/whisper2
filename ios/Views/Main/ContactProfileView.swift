@@ -369,7 +369,12 @@ struct ContactProfileView: View {
     }
 
     private func deleteContact() {
+        // Delete the conversation and messages first
+        messagingService.deleteConversation(conversationId: peerId)
+        // Delete the contact
         contactsService.deleteContact(whisperId: peerId)
+        // Delete contact avatar
+        AvatarService.shared.deleteContactAvatar(for: peerId)
         dismiss()
     }
 

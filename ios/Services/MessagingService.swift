@@ -887,6 +887,20 @@ final class MessagingService: ObservableObject {
         }
     }
 
+    /// Delete a conversation completely (chat and messages)
+    func deleteConversation(conversationId: String) {
+        // Remove messages
+        messages.removeValue(forKey: conversationId)
+        saveMessagesToStorage()
+
+        // Remove conversation
+        if let index = conversations.firstIndex(where: { $0.peerId == conversationId }) {
+            conversations.remove(at: index)
+            saveConversationsToStorage()
+            updateAppBadge()
+        }
+    }
+
     /// Set chat theme for a conversation
     func setChatTheme(for conversationId: String, themeId: String) {
         if let index = conversations.firstIndex(where: { $0.peerId == conversationId }) {

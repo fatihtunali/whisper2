@@ -33,11 +33,11 @@ final class ChatsViewModel: ObservableObject {
     }
     
     func deleteConversations(at offsets: IndexSet) {
-        // Remove from local list
-        // In a real app, you might want to archive/delete on server too
-        var updatedConversations = conversations
-        updatedConversations.remove(atOffsets: offsets)
-        conversations = updatedConversations
+        // Get the conversation IDs to delete
+        let conversationsToDelete = offsets.map { conversations[$0] }
+        for conversation in conversationsToDelete {
+            messagingService.deleteConversation(conversationId: conversation.peerId)
+        }
     }
     
     func markAsRead(_ conversationId: String) {

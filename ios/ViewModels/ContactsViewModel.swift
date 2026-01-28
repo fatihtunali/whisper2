@@ -106,11 +106,21 @@ final class ContactsViewModel: ObservableObject {
     func deleteContacts(at offsets: IndexSet) {
         let contactsToDelete = offsets.map { contacts[$0] }
         for contact in contactsToDelete {
+            // Delete conversation and messages
+            MessagingService.shared.deleteConversation(conversationId: contact.whisperId)
+            // Delete contact avatar
+            AvatarService.shared.deleteContactAvatar(for: contact.whisperId)
+            // Delete contact
             contactsService.deleteContact(whisperId: contact.whisperId)
         }
     }
-    
+
     func deleteContact(_ contact: Contact) {
+        // Delete conversation and messages
+        MessagingService.shared.deleteConversation(conversationId: contact.whisperId)
+        // Delete contact avatar
+        AvatarService.shared.deleteContactAvatar(for: contact.whisperId)
+        // Delete contact
         contactsService.deleteContact(whisperId: contact.whisperId)
     }
     
