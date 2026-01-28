@@ -757,13 +757,20 @@ class CallService @Inject constructor(
         peerConnection?.createOffer(object : SdpObserver {
             override fun onCreateSuccess(desc: SessionDescription?) {
                 // Log SDP to verify m=video line exists
-                val sdp = desc?.description ?: ""
+                var sdp = desc?.description ?: ""
                 val hasVideoMLine = sdp.contains("m=video")
                 Logger.i("[CallService] Created offer - hasVideoMLine=$hasVideoMLine")
                 if (isVideo && !hasVideoMLine) {
                     Logger.e("[CallService] WARNING: Video call but SDP has no m=video line!")
                 }
-                peerConnection?.setLocalDescription(SdpObserverAdapter(), desc)
+
+                // Prefer VP8 codec for cross-platform compatibility
+                if (isVideo) {
+                    sdp = preferVp8Codec(sdp)
+                }
+
+                val modifiedDesc = SessionDescription(desc?.type, sdp)
+                peerConnection?.setLocalDescription(SdpObserverAdapter(), modifiedDesc)
                 cont.resume(sdp) {}
             }
             override fun onSetSuccess() {}
@@ -784,13 +791,20 @@ class CallService @Inject constructor(
         peerConnection?.createAnswer(object : SdpObserver {
             override fun onCreateSuccess(desc: SessionDescription?) {
                 // Log SDP to verify m=video line exists
-                val sdp = desc?.description ?: ""
+                var sdp = desc?.description ?: ""
                 val hasVideoMLine = sdp.contains("m=video")
                 Logger.i("[CallService] Created answer - hasVideoMLine=$hasVideoMLine")
                 if (isVideo && !hasVideoMLine) {
                     Logger.e("[CallService] WARNING: Video call but answer SDP has no m=video line!")
                 }
-                peerConnection?.setLocalDescription(SdpObserverAdapter(), desc)
+
+                // Prefer VP8 codec for cross-platform compatibility
+                if (isVideo) {
+                    sdp = preferVp8Codec(sdp)
+                }
+
+                val modifiedDesc = SessionDescription(desc?.type, sdp)
+                peerConnection?.setLocalDescription(SdpObserverAdapter(), modifiedDesc)
                 cont.resume(sdp) {}
             }
             override fun onSetSuccess() {}
@@ -799,6 +813,52 @@ class CallService @Inject constructor(
             }
             override fun onSetFailure(error: String?) {}
         }, constraints)
+    }
+
+    /**
+     * Prefer VP8 codec over H.264 for better cross-platform compatibility.
+     * iOS often sends H.264 which can cause decode issues on Android.
+     * VP8 is universally supported and more stable.
+     */
+    private fun preferVp8Codec(sdp: String): String {
+        val lines = sdp.split("\r\n").toMutableList()
+        var videoMLineIndex = -1
+        var vp8PayloadType: String? = null
+
+        // Find the m=video line and VP8 payload type
+        for (i in lines.indices) {
+            val line = lines[i]
+            if (line.startsWith("m=video")) {
+                videoMLineIndex = i
+            }
+            // Find VP8 payload type from rtpmap
+            if (line.contains("VP8/90000")) {
+                val match = Regex("a=rtpmap:(\\d+) VP8/90000").find(line)
+                vp8PayloadType = match?.groupValues?.get(1)
+                Logger.d("[CallService] Found VP8 payload type: $vp8PayloadType")
+            }
+        }
+
+        if (videoMLineIndex == -1 || vp8PayloadType == null) {
+            Logger.d("[CallService] No video line or VP8 not found, returning original SDP")
+            return sdp
+        }
+
+        // Reorder payload types in m=video line to put VP8 first
+        val mLine = lines[videoMLineIndex]
+        val parts = mLine.split(" ").toMutableList()
+        if (parts.size > 3) {
+            // Format: m=video PORT PROTO PAYLOAD_TYPES...
+            val payloadTypes = parts.subList(3, parts.size).toMutableList()
+            if (payloadTypes.remove(vp8PayloadType)) {
+                payloadTypes.add(0, vp8PayloadType)
+                val newMLine = parts.subList(0, 3).joinToString(" ") + " " + payloadTypes.joinToString(" ")
+                lines[videoMLineIndex] = newMLine
+                Logger.i("[CallService] Reordered codecs to prefer VP8: $newMLine")
+            }
+        }
+
+        return lines.joinToString("\r\n")
     }
 
     /**
