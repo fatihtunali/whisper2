@@ -864,8 +864,13 @@ final class CallService: NSObject, ObservableObject {
         )
 
         let offer = try await pc.offer(for: constraints)
-        try await pc.setLocalDescription(offer)
-        return offer.sdp
+
+        // Prefer VP8 codec for better cross-platform compatibility
+        let modifiedSdp = preferVP8Codec(sdp: offer.sdp)
+        let modifiedOffer = RTCSessionDescription(type: .offer, sdp: modifiedSdp)
+
+        try await pc.setLocalDescription(modifiedOffer)
+        return modifiedSdp
     }
 
     private func createAnswer() async throws -> String {
@@ -882,8 +887,77 @@ final class CallService: NSObject, ObservableObject {
         )
 
         let answer = try await pc.answer(for: constraints)
-        try await pc.setLocalDescription(answer)
-        return answer.sdp
+
+        // Prefer VP8 codec for better cross-platform compatibility
+        let modifiedSdp = preferVP8Codec(sdp: answer.sdp)
+        let modifiedAnswer = RTCSessionDescription(type: .answer, sdp: modifiedSdp)
+
+        try await pc.setLocalDescription(modifiedAnswer)
+        return modifiedSdp
+    }
+
+    /// Modify SDP to prefer VP8 codec over H264 for better cross-platform compatibility
+    /// VP8 is widely supported on both iOS and Android
+    private func preferVP8Codec(sdp: String) -> String {
+        var lines = sdp.components(separatedBy: "\r\n")
+        var result: [String] = []
+
+        var videoMLineIndex: Int?
+        var vp8PayloadType: String?
+
+        // First pass: find VP8 payload type and video m-line
+        for (index, line) in lines.enumerated() {
+            if line.hasPrefix("m=video") {
+                videoMLineIndex = index
+            }
+            // Find VP8 payload type from rtpmap
+            if line.contains("VP8/90000") {
+                // Extract payload type: "a=rtpmap:96 VP8/90000" -> "96"
+                let parts = line.components(separatedBy: ":")
+                if parts.count >= 2 {
+                    let payloadParts = parts[1].components(separatedBy: " ")
+                    if !payloadParts.isEmpty {
+                        vp8PayloadType = payloadParts[0]
+                    }
+                }
+            }
+        }
+
+        // If we found VP8 and the video m-line, reorder codecs
+        if let mLineIndex = videoMLineIndex, let vp8PT = vp8PayloadType {
+            for (index, line) in lines.enumerated() {
+                if index == mLineIndex && line.hasPrefix("m=video") {
+                    // Reorder codec payload types to put VP8 first
+                    // m=video 9 UDP/TLS/RTP/SAVPF 96 97 98 99 100 101
+                    var parts = line.components(separatedBy: " ")
+                    if parts.count > 3 {
+                        // parts[0] = "m=video", parts[1] = port, parts[2] = protocol
+                        // parts[3...] = payload types
+                        let fixedParts = Array(parts[0...2])
+                        var payloadTypes = Array(parts[3...])
+
+                        // Remove VP8 from current position and add at front
+                        if let vp8Index = payloadTypes.firstIndex(of: vp8PT) {
+                            payloadTypes.remove(at: vp8Index)
+                            payloadTypes.insert(vp8PT, at: 0)
+                        }
+
+                        let newLine = (fixedParts + payloadTypes).joined(separator: " ")
+                        result.append(newLine)
+                        print("VP8 preferred in SDP: \(newLine)")
+                    } else {
+                        result.append(line)
+                    }
+                } else {
+                    result.append(line)
+                }
+            }
+            return result.joined(separator: "\r\n")
+        }
+
+        // No VP8 found, return original SDP
+        print("VP8 not found in SDP, using original")
+        return sdp
     }
 
     // MARK: - ICE Candidate
