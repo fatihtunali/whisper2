@@ -18,6 +18,7 @@ struct MessageRequestsView: View {
                         ForEach(viewModel.requests) { request in
                             MessageRequestRow(
                                 request: request,
+                                onAccept: { viewModel.acceptRequestDirectly(request) },
                                 onPreview: { viewModel.showPreviewSheet(for: request) },
                                 onDecline: { viewModel.declineRequest(request) },
                                 onBlock: { viewModel.blockRequest(request) }
@@ -96,6 +97,7 @@ struct EmptyRequestsView: View {
 /// Row for a message request
 struct MessageRequestRow: View {
     let request: MessageRequest
+    let onAccept: () -> Void
     let onPreview: () -> Void
     let onDecline: () -> Void
     let onBlock: () -> Void
@@ -144,7 +146,7 @@ struct MessageRequestRow: View {
                 Image(systemName: hasPublicKey ? "checkmark.shield.fill" : "lock.shield.fill")
                     .foregroundColor(hasPublicKey ? .green : .orange)
                 Text(hasPublicKey
-                    ? "Preview messages and decide to accept or block"
+                    ? "Ready to accept - messages will be decrypted automatically"
                     : "Scan QR to preview messages, then decide to accept or block")
                     .font(.caption)
                     .foregroundColor(.gray)
@@ -153,49 +155,98 @@ struct MessageRequestRow: View {
             .background(hasPublicKey ? Color.green.opacity(0.1) : Color.orange.opacity(0.1))
             .cornerRadius(8)
 
-            // Action buttons
-            HStack(spacing: 12) {
-                Button(action: onBlock) {
-                    HStack {
-                        Image(systemName: "hand.raised.fill")
-                        Text("Block")
-                    }
-                    .font(.subheadline)
-                    .foregroundColor(.red)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background(Color.red.opacity(0.15))
-                    .cornerRadius(8)
-                }
-
-                Button(action: onDecline) {
-                    Text("Ignore")
+            // Action buttons - different layout based on whether we have public key
+            if hasPublicKey {
+                // Has public key: Accept, Ignore, Block
+                HStack(spacing: 12) {
+                    Button(action: onBlock) {
+                        HStack {
+                            Image(systemName: "hand.raised.fill")
+                            Text("Block")
+                        }
                         .font(.subheadline)
-                        .foregroundColor(.gray)
+                        .foregroundColor(.red)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
-                        .background(Color.gray.opacity(0.2))
+                        .background(Color.red.opacity(0.15))
                         .cornerRadius(8)
-                }
-
-                Button(action: onPreview) {
-                    HStack {
-                        Image(systemName: hasPublicKey ? "eye.fill" : "qrcode.viewfinder")
-                        Text(hasPublicKey ? "Review" : "Preview")
                     }
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background(
-                        LinearGradient(
-                            colors: hasPublicKey ? [.green, .green.opacity(0.7)] : [.blue, .purple],
-                            startPoint: .leading,
-                            endPoint: .trailing
+
+                    Button(action: onDecline) {
+                        Text("Ignore")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(Color.gray.opacity(0.2))
+                            .cornerRadius(8)
+                    }
+
+                    Button(action: onAccept) {
+                        HStack {
+                            Image(systemName: "checkmark.circle.fill")
+                            Text("Accept")
+                        }
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(
+                            LinearGradient(
+                                colors: [.green, .green.opacity(0.7)],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
                         )
-                    )
-                    .cornerRadius(8)
+                        .cornerRadius(8)
+                    }
+                }
+            } else {
+                // No public key: Block, Ignore, Scan QR
+                HStack(spacing: 12) {
+                    Button(action: onBlock) {
+                        HStack {
+                            Image(systemName: "hand.raised.fill")
+                            Text("Block")
+                        }
+                        .font(.subheadline)
+                        .foregroundColor(.red)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(Color.red.opacity(0.15))
+                        .cornerRadius(8)
+                    }
+
+                    Button(action: onDecline) {
+                        Text("Ignore")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(Color.gray.opacity(0.2))
+                            .cornerRadius(8)
+                    }
+
+                    Button(action: onPreview) {
+                        HStack {
+                            Image(systemName: "qrcode.viewfinder")
+                            Text("Scan QR")
+                        }
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(
+                            LinearGradient(
+                                colors: [.blue, .purple],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .cornerRadius(8)
+                    }
                 }
             }
         }
@@ -593,6 +644,16 @@ class MessageRequestsViewModel: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             self?.showPreviewMessages = true
         }
+    }
+
+    /// Accept the request directly (when public key is available in the request)
+    func acceptRequestDirectly(_ request: MessageRequest) {
+        guard let publicKey = request.senderEncPublicKey, publicKey.count == 32 else {
+            // Fallback to QR scan if no valid public key
+            showPreviewSheet(for: request)
+            return
+        }
+        contactsService.acceptMessageRequest(senderId: request.senderId, publicKey: publicKey)
     }
 
     /// Accept the request and add to contacts (called from preview)
