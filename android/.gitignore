@@ -16,6 +16,7 @@ captures/
 # Keystore (keep safe, don't commit)
 *.jks
 *.keystore
+keystore.properties
 
 # Local settings
 .claude/settings.local.json

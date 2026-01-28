@@ -35,12 +35,11 @@ sealed class CallState {
 }
 
 enum class CallEndReason {
-    ENDED,
+    ENDED,      // Normal end or cancelled
     DECLINED,
     BUSY,
     TIMEOUT,
-    FAILED,
-    CANCELLED
+    FAILED
 }
 
 data class ActiveCall(
@@ -860,7 +859,6 @@ class CallService @Inject constructor(
             CallEndReason.BUSY -> "busy"
             CallEndReason.TIMEOUT -> if (call.isOutgoing) "no_answer" else "missed"
             CallEndReason.FAILED -> "failed"
-            CallEndReason.CANCELLED -> "cancelled"
         }
 
         val duration = call.startTime?.let {

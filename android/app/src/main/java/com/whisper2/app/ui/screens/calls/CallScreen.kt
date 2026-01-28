@@ -378,6 +378,5 @@ private fun getEndReasonText(reason: CallEndReason): String {
         CallEndReason.BUSY -> "User busy"
         CallEndReason.TIMEOUT -> "No answer"
         CallEndReason.FAILED -> "Call failed"
-        CallEndReason.CANCELLED -> "Call cancelled"
     }
 }
