@@ -356,10 +356,13 @@ final class ChatViewModel: ObservableObject {
 
     deinit {
         typingTimer?.invalidate()
-        // Send typing stopped when leaving chat
-        if isTyping {
-            Task { @MainActor in
-                try? await MessagingService.shared.sendTypingIndicator(to: conversationId, isTyping: false)
+        // Capture conversationId before self is deallocated
+        // and only send if we were actually typing
+        let wasTyping = isTyping
+        let convId = conversationId
+        if wasTyping {
+            Task {
+                try? await MessagingService.shared.sendTypingIndicator(to: convId, isTyping: false)
             }
         }
     }
