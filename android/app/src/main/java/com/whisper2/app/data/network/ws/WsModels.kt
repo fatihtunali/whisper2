@@ -298,3 +298,22 @@ data class UpdateTokensPayload(
     val sessionToken: String,
     val pushToken: String
 )
+
+// Session
+data class SessionRefreshPayload(
+    val protocolVersion: Int = Constants.PROTOCOL_VERSION,
+    val cryptoVersion: Int = Constants.CRYPTO_VERSION,
+    val sessionToken: String
+)
+
+data class SessionRefreshAckPayload(
+    val sessionToken: String,
+    val sessionExpiresAt: Long,
+    val serverTime: Long
+)
+
+data class LogoutPayload(
+    val protocolVersion: Int = Constants.PROTOCOL_VERSION,
+    val cryptoVersion: Int = Constants.CRYPTO_VERSION,
+    val sessionToken: String
+)

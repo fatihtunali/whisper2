@@ -46,6 +46,11 @@ class MessageHandler @Inject constructor(
 
     init {
         startListening()
+        // Clear any stale typing indicators from previous sessions
+        scope.launch {
+            conversationDao.clearAllTyping()
+            Logger.d("[MessageHandler] Cleared all stale typing indicators")
+        }
     }
 
     private fun startListening() {
@@ -72,6 +77,12 @@ class MessageHandler @Inject constructor(
             }
             Constants.MsgType.TYPING_NOTIFICATION -> {
                 handleTypingNotification(frame.payload)
+            }
+            Constants.MsgType.MESSAGE_DELETED -> {
+                handleMessageDeleted(frame.payload)
+            }
+            Constants.MsgType.MESSAGE_DELIVERED -> {
+                handleMessageDelivered(frame.payload)
             }
         }
     }
@@ -121,6 +132,11 @@ class MessageHandler @Inject constructor(
 
             // Emit for UI
             _newMessages.emit(message)
+
+            // Clear typing indicator when message is received (they finished typing)
+            conversationDao.setTyping(msg.from, false)
+            typingTimeoutJobs[msg.from]?.cancel()
+            _typingNotifications.emit(TypingNotificationPayload(msg.from, false))
 
             // Send delivery receipt
             sendDeliveryReceipt(msg.messageId, msg.from, "delivered")
@@ -294,6 +310,9 @@ class MessageHandler @Inject constructor(
         }
     }
 
+    // Track typing timeout jobs per user
+    private val typingTimeoutJobs = mutableMapOf<String, Job>()
+
     /**
      * Handle typing notification from another user.
      */
@@ -301,9 +320,63 @@ class MessageHandler @Inject constructor(
         try {
             val notification = gson.fromJson(payload, TypingNotificationPayload::class.java)
             Logger.d("[MessageHandler] Typing notification from ${notification.from}: ${notification.isTyping}")
+
+            // Update database so ChatsListScreen shows typing indicator
+            conversationDao.setTyping(notification.from, notification.isTyping)
+
+            // Cancel any existing timeout for this user
+            typingTimeoutJobs[notification.from]?.cancel()
+
+            // If user is typing, set a timeout to auto-clear after 5 seconds
+            if (notification.isTyping) {
+                typingTimeoutJobs[notification.from] = scope.launch {
+                    delay(5000)
+                    conversationDao.setTyping(notification.from, false)
+                    // Also emit to clear in ChatViewModel
+                    _typingNotifications.emit(TypingNotificationPayload(notification.from, false))
+                    Logger.d("[MessageHandler] Auto-cleared typing for ${notification.from}")
+                }
+            }
+
+            // Emit for ChatScreen UI
             _typingNotifications.emit(notification)
         } catch (e: Exception) {
             Logger.e("[MessageHandler] Failed to handle typing notification", e)
+        }
+    }
+
+    /**
+     * Handle message deleted notification from server.
+     * Server sends this when someone deletes a message for everyone.
+     */
+    private suspend fun handleMessageDeleted(payload: JsonElement) {
+        try {
+            val data = gson.fromJson(payload, MessageDeletedPayload::class.java)
+            Logger.d("[MessageHandler] Message deleted: ${data.messageId} by ${data.deletedBy}")
+
+            if (data.deleteForEveryone) {
+                // Delete message from local database
+                messageDao.deleteById(data.messageId)
+                Logger.d("[MessageHandler] Deleted message ${data.messageId} from database")
+            }
+        } catch (e: Exception) {
+            Logger.e("[MessageHandler] Failed to handle message deleted", e)
+        }
+    }
+
+    /**
+     * Handle message delivered notification from server.
+     * Server sends this to sender when recipient confirms delivery.
+     */
+    private suspend fun handleMessageDelivered(payload: JsonElement) {
+        try {
+            val data = gson.fromJson(payload, MessageDeliveredPayload::class.java)
+            Logger.d("[MessageHandler] Message delivered: ${data.messageId} status=${data.status}")
+
+            // Update message status in database
+            messageDao.updateStatus(data.messageId, data.status)
+        } catch (e: Exception) {
+            Logger.e("[MessageHandler] Failed to handle message delivered", e)
         }
     }
 

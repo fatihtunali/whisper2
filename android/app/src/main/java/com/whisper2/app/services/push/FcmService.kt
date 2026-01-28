@@ -1,11 +1,9 @@
 package com.whisper2.app.services.push
 
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
@@ -34,14 +32,15 @@ class FcmService : FirebaseMessagingService() {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     companion object {
-        private const val CHANNEL_ID = "whisper2_messages"
-        private const val CHANNEL_NAME = "Messages"
-        private const val NOTIFICATION_ID = 1001
+        private const val CHANNEL_ID_MESSAGES = "messages"
+        private const val CHANNEL_ID_CALLS = "calls"
+        private const val NOTIFICATION_ID_MESSAGE = 1001
+        private const val NOTIFICATION_ID_CALL = 2001
     }
 
     override fun onCreate() {
         super.onCreate()
-        createNotificationChannel()
+        // Notification channels are created in App.kt
     }
 
     override fun onNewToken(token: String) {
@@ -58,25 +57,93 @@ class FcmService : FirebaseMessagingService() {
     override fun onMessageReceived(message: RemoteMessage) {
         super.onMessageReceived(message)
         Logger.i("[FcmService] FCM message received from: ${message.from}")
+        Logger.d("[FcmService] Data payload: ${message.data}")
+        Logger.d("[FcmService] Notification payload: ${message.notification?.let { "title=${it.title}, body=${it.body}" } ?: "null"}")
 
         val data = message.data
         val pushType = data["type"]
+        val pushReason = data["reason"]
+        Logger.d("[FcmService] Push type: $pushType, reason: $pushReason")
 
-        when (pushType) {
-            "message" -> handleMessagePush(data)
-            "call" -> handleCallPush(data)
-            "group" -> handleGroupPush(data)
-            "wakeup" -> handleWakeupPush()
-            else -> {
-                // Generic notification from RemoteMessage.notification
-                message.notification?.let { notification ->
-                    showNotification(
-                        title = notification.title ?: "Whisper2",
-                        body = notification.body ?: "New message"
-                    )
+        // Server sends type="wake" with reason="message"|"call"|"system"
+        if (pushType == "wake") {
+            when (pushReason) {
+                "message" -> handleWakeMessage()
+                "call" -> handleWakeCall()
+                "system" -> handleWakeSystem()
+                else -> {
+                    Logger.d("[FcmService] Unknown wake reason: $pushReason")
+                    handleWakeSystem() // Default to system wake
+                }
+            }
+        } else {
+            // Legacy format support
+            when (pushType) {
+                "message" -> handleMessagePush(data)
+                "call" -> handleCallPush(data)
+                "group" -> handleGroupPush(data)
+                "wakeup" -> handleWakeupPush()
+                else -> {
+                    Logger.d("[FcmService] Unknown push type, checking for notification payload")
+                    // Generic notification from RemoteMessage.notification
+                    message.notification?.let { notification ->
+                        Logger.d("[FcmService] Showing generic notification")
+                        showNotification(
+                            title = notification.title ?: "Whisper2",
+                            body = notification.body ?: "New message"
+                        )
+                    } ?: run {
+                        // If no notification payload but has data, show data as notification
+                        if (data.isNotEmpty()) {
+                            Logger.d("[FcmService] Showing notification from data payload")
+                            showNotification(
+                                title = data["title"] ?: "Whisper2",
+                                body = data["body"] ?: data["message"] ?: "New notification"
+                            )
+                        }
+                    }
                 }
             }
         }
+    }
+
+    /**
+     * Handle wake push for new messages.
+     * Server sends type=wake, reason=message when there are pending messages.
+     */
+    private fun handleWakeMessage() {
+        Logger.i("[FcmService] Wake push for message - showing notification and connecting")
+
+        // Show notification
+        showNotification(
+            title = "Whisper2",
+            body = "You have new messages"
+        )
+
+        // Wake up WebSocket to fetch pending messages
+        wakeUpConnection()
+    }
+
+    /**
+     * Handle wake push for incoming call.
+     * NOTE: We do NOT show a notification here. The WebSocket will receive
+     * the call_incoming message and the Telecom/CallForegroundService will
+     * show the proper incoming call UI with answer/decline buttons.
+     */
+    private fun handleWakeCall() {
+        Logger.i("[FcmService] Wake push for call - waking connection (no notification, Telecom handles UI)")
+
+        // Only wake up WebSocket for call signaling
+        // The call_incoming handler will show proper UI via CallForegroundService
+        wakeUpConnection()
+    }
+
+    /**
+     * Handle wake push for system notification.
+     */
+    private fun handleWakeSystem() {
+        Logger.i("[FcmService] Wake push for system - connecting to check updates")
+        wakeUpConnection()
     }
 
     private fun handleMessagePush(data: Map<String, String>) {
@@ -176,23 +243,6 @@ class FcmService : FirebaseMessagingService() {
         }
     }
 
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                CHANNEL_NAME,
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = "Whisper2 message notifications"
-                enableVibration(true)
-                setShowBadge(true)
-            }
-
-            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            manager.createNotificationChannel(channel)
-        }
-    }
-
     private fun showNotification(
         title: String,
         body: String,
@@ -214,7 +264,10 @@ class FcmService : FirebaseMessagingService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+        val channelId = if (isCall) CHANNEL_ID_CALLS else CHANNEL_ID_MESSAGES
+        val notificationId = if (isCall) NOTIFICATION_ID_CALL else NOTIFICATION_ID_MESSAGE
+
+        val notification = NotificationCompat.Builder(this, channelId)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
             .setContentText(body)
@@ -225,6 +278,7 @@ class FcmService : FirebaseMessagingService() {
             .build()
 
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.notify(NOTIFICATION_ID, notification)
+        manager.notify(notificationId, notification)
+        Logger.i("[FcmService] Notification posted - id: $notificationId, title: $title, channel: $channelId")
     }
 }

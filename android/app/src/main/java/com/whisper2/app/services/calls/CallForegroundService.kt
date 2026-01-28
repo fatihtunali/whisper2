@@ -104,13 +104,14 @@ class CallForegroundService : Service() {
         isVideo: Boolean
     ) {
         // Full screen intent - opens IncomingCallActivity
+        // Use SINGLE_TOP to reuse existing activity instead of creating new one
         val fullScreenIntent = Intent(this, IncomingCallActivity::class.java).apply {
             putExtra(EXTRA_CALL_ID, callId)
             putExtra(EXTRA_CALLER_ID, callerId)
             putExtra(EXTRA_CALLER_NAME, callerName)
             putExtra(EXTRA_IS_VIDEO, isVideo)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
                     Intent.FLAG_ACTIVITY_NO_USER_ACTION
         }
         val fullScreenPendingIntent = PendingIntent.getActivity(
@@ -119,13 +120,14 @@ class CallForegroundService : Service() {
         )
 
         // Answer action - launch IncomingCallActivity with answer flag
+        // Use SINGLE_TOP to reuse existing activity
         val answerIntent = Intent(this, IncomingCallActivity::class.java).apply {
             putExtra(EXTRA_CALL_ID, callId)
             putExtra(EXTRA_CALLER_ID, callerId)
             putExtra(EXTRA_CALLER_NAME, callerName)
             putExtra(EXTRA_IS_VIDEO, isVideo)
             putExtra("auto_answer", true)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
         val answerPendingIntent = PendingIntent.getActivity(
             this, 1, answerIntent,

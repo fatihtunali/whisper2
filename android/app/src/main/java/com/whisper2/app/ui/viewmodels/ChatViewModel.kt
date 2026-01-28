@@ -74,6 +74,10 @@ class ChatViewModel @Inject constructor(
     val error: StateFlow<String?> = _error.asStateFlow()
 
     fun loadConversation(peerId: String) {
+        // Reset typing state when entering a new conversation
+        typingTimeoutJob?.cancel()
+        _peerIsTyping.value = false
+
         _peerId.value = peerId
         viewModelScope.launch {
             conversationDao.markAsRead(peerId)

@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -265,77 +266,162 @@ fun ProfileBottomSheet(
     onDismiss: () -> Unit,
     onCopyId: () -> Unit
 ) {
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = Color(0xFF1A1A1A)
+    var showFullScreenQr by remember { mutableStateOf(false) }
+
+    if (showFullScreenQr && qrCodeData != null) {
+        FullScreenQrView(
+            qrCodeData = qrCodeData,
+            whisperId = whisperId,
+            onBack = { showFullScreenQr = false }
+        )
+    } else {
+        ModalBottomSheet(
+            onDismissRequest = onDismiss,
+            containerColor = Color(0xFF1A1A1A)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // Avatar
+                Box(
+                    modifier = Modifier
+                        .size(80.dp)
+                        .background(
+                            Brush.linearGradient(listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6))),
+                            CircleShape
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.Person, null, tint = Color.White, modifier = Modifier.size(48.dp))
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Whisper ID
+                Text(
+                    whisperId ?: "Not registered",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Copy button
+                OutlinedButton(
+                    onClick = onCopyId,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF3B82F6))
+                ) {
+                    Icon(Icons.Default.ContentCopy, null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Copy ID")
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // QR Code (clickable for full screen)
+                qrCodeData?.let { data ->
+                    Text(
+                        "Tap QR to enlarge",
+                        color = Color.Gray,
+                        fontSize = 12.sp
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Box(
+                        modifier = Modifier.clickable { showFullScreenQr = true }
+                    ) {
+                        QrCodeImage(data = data, size = 200)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Device ID
+                deviceId?.let {
+                    Text(
+                        "Device: ${it.take(8)}...",
+                        color = Color.Gray,
+                        fontSize = 12.sp
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+            }
+        }
+    }
+}
+
+@Composable
+fun FullScreenQrView(
+    qrCodeData: String,
+    whisperId: String?,
+    onBack: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
     ) {
+        // Back button
+        IconButton(
+            onClick = onBack,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(16.dp)
+                .size(48.dp)
+                .background(Color.White.copy(alpha = 0.1f), CircleShape)
+        ) {
+            Icon(
+                Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "Back",
+                tint = Color.White
+            )
+        }
+
+        // QR Code centered
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .fillMaxSize()
+                .padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
-            // Avatar
-            Box(
-                modifier = Modifier
-                    .size(80.dp)
-                    .background(
-                        Brush.linearGradient(listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6))),
-                        CircleShape
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(Icons.Default.Person, null, tint = Color.White, modifier = Modifier.size(48.dp))
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Whisper ID
             Text(
-                whisperId ?: "Not registered",
-                fontFamily = FontFamily.Monospace,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White
+                "My QR Code",
+                color = Color.White,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold
             )
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Copy button
-            OutlinedButton(
-                onClick = onCopyId,
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF3B82F6))
-            ) {
-                Icon(Icons.Default.ContentCopy, null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Copy ID")
-            }
+            Text(
+                "Let others scan this to add you",
+                color = Color.Gray,
+                fontSize = 14.sp
+            )
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            // Large QR Code
+            QrCodeImage(data = qrCodeData, size = 300)
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // QR Code
-            qrCodeData?.let { data ->
+            // Whisper ID
+            whisperId?.let {
                 Text(
-                    "Scan to add contact",
-                    color = Color.Gray,
-                    fontSize = 12.sp
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                QrCodeImage(data = data, size = 200)
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Device ID
-            deviceId?.let {
-                Text(
-                    "Device: ${it.take(8)}...",
-                    color = Color.Gray,
-                    fontSize = 12.sp
+                    it,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Color.White
                 )
             }
-
-            Spacer(modifier = Modifier.height(24.dp))
         }
     }
 }
