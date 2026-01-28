@@ -251,6 +251,9 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
     var previewLayer: AVCaptureVideoPreviewLayer?
     var onScan: ((String) -> Void)?
     private var galleryButton: UIButton?
+    private var overlayView: UIView?
+    private var borderView: UIView?
+    private var instructionLabel: UILabel?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -307,34 +310,21 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
     }
 
     private func addScanOverlay() {
-        let overlayView = UIView(frame: view.bounds)
-        overlayView.backgroundColor = UIColor.black.withAlphaComponent(0.5)
-
-        // Cut out center square
-        let scanSize: CGFloat = 250
-        let scanRect = CGRect(
-            x: (view.bounds.width - scanSize) / 2,
-            y: (view.bounds.height - scanSize) / 2,
-            width: scanSize,
-            height: scanSize
-        )
-
-        let path = UIBezierPath(rect: view.bounds)
-        path.append(UIBezierPath(roundedRect: scanRect, cornerRadius: 12).reversing())
-
-        let maskLayer = CAShapeLayer()
-        maskLayer.path = path.cgPath
-        overlayView.layer.mask = maskLayer
-
-        view.addSubview(overlayView)
+        // Create overlay
+        let overlay = UIView()
+        overlay.backgroundColor = UIColor.black.withAlphaComponent(0.5)
+        overlay.tag = 100
+        view.addSubview(overlay)
+        overlayView = overlay
 
         // Add border to scan area
-        let borderView = UIView(frame: scanRect)
-        borderView.layer.borderColor = UIColor.white.cgColor
-        borderView.layer.borderWidth = 2
-        borderView.layer.cornerRadius = 12
-        borderView.backgroundColor = .clear
-        view.addSubview(borderView)
+        let border = UIView()
+        border.layer.borderColor = UIColor.white.cgColor
+        border.layer.borderWidth = 2
+        border.layer.cornerRadius = 12
+        border.backgroundColor = .clear
+        view.addSubview(border)
+        borderView = border
 
         // Add instruction label
         let label = UILabel()
@@ -342,10 +332,10 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
         label.textColor = .white
         label.font = .systemFont(ofSize: 16, weight: .medium)
         label.textAlignment = .center
-        label.frame = CGRect(x: 0, y: scanRect.maxY + 20, width: view.bounds.width, height: 30)
         view.addSubview(label)
+        instructionLabel = label
 
-        // Add gallery button - position at bottom with safe area
+        // Add gallery button
         let button = UIButton(type: .system)
         button.setImage(UIImage(systemName: "photo.on.rectangle"), for: .normal)
         button.setTitle(" Pick from Gallery", for: .normal)
@@ -353,11 +343,11 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
         button.titleLabel?.font = .systemFont(ofSize: 16, weight: .semibold)
         button.backgroundColor = UIColor.systemBlue.withAlphaComponent(0.9)
         button.layer.cornerRadius = 12
-        let safeBottom = view.safeAreaInsets.bottom > 0 ? view.safeAreaInsets.bottom : 20
-        button.frame = CGRect(x: 40, y: view.bounds.height - 70 - safeBottom, width: view.bounds.width - 80, height: 50)
         button.addTarget(self, action: #selector(openGallery), for: .touchUpInside)
         view.addSubview(button)
         galleryButton = button
+
+        // Layout will be done in viewDidLayoutSubviews
     }
 
     @objc private func openGallery() {
@@ -463,10 +453,35 @@ class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsD
         super.viewDidLayoutSubviews()
         previewLayer?.frame = view.layer.bounds
 
-        // Reposition gallery button with correct safe area
+        let scanSize: CGFloat = 250
+        let scanRect = CGRect(
+            x: (view.bounds.width - scanSize) / 2,
+            y: (view.bounds.height - scanSize) / 2 - 40,
+            width: scanSize,
+            height: scanSize
+        )
+
+        // Update overlay with cutout
+        if let overlay = overlayView {
+            overlay.frame = view.bounds
+            let path = UIBezierPath(rect: view.bounds)
+            path.append(UIBezierPath(roundedRect: scanRect, cornerRadius: 12).reversing())
+            let maskLayer = CAShapeLayer()
+            maskLayer.path = path.cgPath
+            overlay.layer.mask = maskLayer
+        }
+
+        // Update border
+        borderView?.frame = scanRect
+
+        // Update instruction label
+        instructionLabel?.frame = CGRect(x: 0, y: scanRect.maxY + 20, width: view.bounds.width, height: 30)
+
+        // Update gallery button position
         if let button = galleryButton {
             let safeBottom = view.safeAreaInsets.bottom > 0 ? view.safeAreaInsets.bottom + 20 : 40
             button.frame = CGRect(x: 40, y: view.bounds.height - 60 - safeBottom, width: view.bounds.width - 80, height: 50)
+            view.bringSubviewToFront(button)
         }
     }
 }
