@@ -4,15 +4,16 @@ import Combine
 /// Messaging service for sending and receiving messages
 final class MessagingService: ObservableObject {
     static let shared = MessagingService()
-    
+
     @Published var conversations: [Conversation] = []
     @Published var messages: [String: [Message]] = [:] // conversationId -> messages
-    
+
     private let ws = WebSocketService.shared
     private let auth = AuthService.shared
     private let keychain = KeychainService.shared
     private let contactsService = ContactsService.shared
     private let crypto = CryptoService.shared
+    private let pushService = PushNotificationService.shared
     private var cancellables = Set<AnyCancellable>()
     
     private let messageReceivedSubject = PassthroughSubject<Message, Never>()
@@ -818,11 +819,16 @@ final class MessagingService: ObservableObject {
         }
         
         conversations.sort { ($0.lastMessageTime ?? .distantPast) > ($1.lastMessageTime ?? .distantPast) }
+        updateAppBadge()
     }
-    
+
     func markAsRead(conversationId: String) {
         if let index = conversations.firstIndex(where: { $0.peerId == conversationId }) {
-            conversations[index].unreadCount = 0
+            if conversations[index].unreadCount > 0 {
+                conversations[index].unreadCount = 0
+                saveConversationsToStorage()
+                updateAppBadge()
+            }
         }
 
         guard var msgs = messages[conversationId] else { return }
@@ -852,6 +858,16 @@ final class MessagingService: ObservableObject {
     
     func getMessages(for conversationId: String) -> [Message] {
         messages[conversationId] ?? []
+    }
+
+    // MARK: - Badge Management
+
+    /// Update app badge with total unread count
+    private func updateAppBadge() {
+        let totalUnread = conversations.reduce(0) { $0 + $1.unreadCount }
+        Task { @MainActor in
+            pushService.updateBadgeCount(totalUnread)
+        }
     }
 
     // MARK: - Clear All Data
