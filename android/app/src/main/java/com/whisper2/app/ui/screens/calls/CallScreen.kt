@@ -15,6 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -25,6 +26,7 @@ import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.whisper2.app.services.calls.CallEndReason
 import com.whisper2.app.services.calls.CallState
+import com.whisper2.app.ui.theme.*
 import kotlinx.coroutines.delay
 
 @Composable
@@ -104,7 +106,11 @@ fun CallScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black),
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(MetalBlack, MetalDark, MetalNavy)
+                    )
+                ),
             contentAlignment = Alignment.Center
         ) {
             Column(
@@ -114,18 +120,18 @@ fun CallScreen(
                 Icon(
                     Icons.Default.MicOff,
                     contentDescription = null,
-                    tint = Color.Red,
+                    tint = StatusError,
                     modifier = Modifier.size(64.dp)
                 )
                 Text(
                     text = if (isVideo) "Camera and microphone permission required"
                            else "Microphone permission required",
-                    color = Color.White,
+                    color = TextPrimary,
                     fontSize = 16.sp
                 )
                 Text(
                     text = "Please enable in Settings",
-                    color = Color.Gray,
+                    color = TextSecondary,
                     fontSize = 14.sp
                 )
             }
@@ -136,7 +142,11 @@ fun CallScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(MetalBlack, MetalDark, MetalNavy)
+                )
+            )
     ) {
         // Video views would go here for video calls
         // For now, we show audio call UI
@@ -149,20 +159,34 @@ fun CallScreen(
         ) {
             Spacer(modifier = Modifier.height(60.dp))
 
-            // Avatar (for audio calls)
+            // Avatar (for audio calls) with pulsing animation
             if (activeCall?.isVideo != true) {
+                val pulseScale by rememberInfiniteTransition(label = "pulse").animateFloat(
+                    initialValue = 1f,
+                    targetValue = 1.08f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(1000, easing = EaseInOutSine),
+                        repeatMode = RepeatMode.Reverse
+                    ),
+                    label = "pulseScale"
+                )
+
                 Box(
                     modifier = Modifier
-                        .size(100.dp)
+                        .size((100 * pulseScale).dp)
                         .clip(CircleShape)
-                        .background(Color.Gray.copy(alpha = 0.3f)),
+                        .background(
+                            Brush.radialGradient(
+                                colors = listOf(MetalSurface2, MetalSurface1, MetalSlate)
+                            )
+                        ),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = (activeCall?.peerName ?: activeCall?.peerId ?: "?").take(1).uppercase(),
                         fontSize = 40.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = Color.White
+                        color = TextPrimary
                     )
                 }
             }
@@ -174,16 +198,21 @@ fun CallScreen(
                 text = activeCall?.peerName ?: activeCall?.peerId ?: "Unknown",
                 fontSize = 24.sp,
                 fontWeight = FontWeight.SemiBold,
-                color = Color.White
+                color = TextPrimary
             )
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Status/Duration
+            // Status/Duration with color based on state
+            val statusColor = when (callState) {
+                CallState.Connected -> CallActive
+                is CallState.Ended -> StatusError
+                else -> TextSecondary
+            }
             Text(
                 text = getStatusText(callState, callDuration),
                 fontSize = 14.sp,
-                color = Color.Gray
+                color = statusColor
             )
 
             Spacer(modifier = Modifier.weight(1f))
@@ -263,13 +292,17 @@ private fun CallControlsView(
             }
         }
 
-        // End call button
+        // End call button - vibrant red with glow effect
         IconButton(
             onClick = onEndCall,
             modifier = Modifier
                 .size(70.dp)
                 .clip(CircleShape)
-                .background(Color.Red)
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(CallDecline, StatusErrorMuted)
+                    )
+                )
         ) {
             Icon(
                 Icons.Default.CallEnd,
@@ -297,12 +330,17 @@ private fun CallControlButton(
             modifier = Modifier
                 .size(56.dp)
                 .clip(CircleShape)
-                .background(if (isActive) Color.White else Color.Gray.copy(alpha = 0.3f))
+                .background(
+                    if (isActive)
+                        Brush.radialGradient(listOf(TextPrimary, MetalGlow))
+                    else
+                        Brush.radialGradient(listOf(MetalSurface2, MetalSurface1))
+                )
         ) {
             Icon(
                 icon,
                 contentDescription = label,
-                tint = if (isActive) Color.Black else Color.White,
+                tint = if (isActive) MetalDark else TextPrimary,
                 modifier = Modifier.size(24.dp)
             )
         }
@@ -310,7 +348,7 @@ private fun CallControlButton(
         Text(
             text = label,
             fontSize = 10.sp,
-            color = Color.Gray
+            color = TextTertiary
         )
     }
 }

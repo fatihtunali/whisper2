@@ -7,13 +7,12 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.whisper2.app.ui.theme.*
 
 sealed class MainTab(val route: String, val title: String, val icon: ImageVector) {
     object Chats : MainTab("chats", "Chats", Icons.AutoMirrored.Filled.Chat)
@@ -36,7 +35,7 @@ fun MainScreen(
 
     Scaffold(
         bottomBar = {
-            NavigationBar(containerColor = Color(0xFF1A1A1A)) {
+            NavigationBar(containerColor = MetalNavy) {
                 val navBackStackEntry by navController.currentBackStackEntryAsState()
                 val currentRoute = navBackStackEntry?.destination?.route
 
@@ -53,17 +52,17 @@ fun MainScreen(
                             }
                         },
                         colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = Color(0xFF3B82F6),
-                            selectedTextColor = Color(0xFF3B82F6),
-                            unselectedIconColor = Color.Gray,
-                            unselectedTextColor = Color.Gray,
-                            indicatorColor = Color(0xFF3B82F6).copy(alpha = 0.1f)
+                            selectedIconColor = PrimaryBlue,
+                            selectedTextColor = PrimaryBlue,
+                            unselectedIconColor = TextTertiary,
+                            unselectedTextColor = TextTertiary,
+                            indicatorColor = PrimaryBlue.copy(alpha = 0.15f)
                         )
                     )
                 }
             }
         },
-        containerColor = Color.Black
+        containerColor = MetalDark
     ) { padding ->
         NavHost(
             navController = navController,

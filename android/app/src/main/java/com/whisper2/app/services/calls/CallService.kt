@@ -17,6 +17,7 @@ import com.whisper2.app.di.ApplicationScope
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlin.time.Duration.Companion.seconds
 import org.json.JSONObject
 import org.webrtc.*
 import java.util.UUID
@@ -133,11 +134,27 @@ class CallService @Inject constructor(
 
     // MARK: - TURN Credentials
 
-    suspend fun fetchTurnCredentials() {
-        val sessionToken = secureStorage.sessionToken ?: return
+    private suspend fun fetchTurnCredentials(): TurnCredentialsPayload? {
+        val sessionToken = secureStorage.sessionToken ?: return null
+
+        // Clear previous credentials
+        _turnCredentials.value = null
 
         val payload = GetTurnCredentialsPayload(sessionToken = sessionToken)
         wsClient.send(WsFrame(Constants.MsgType.GET_TURN_CREDENTIALS, payload = payload))
+
+        // Wait for credentials with timeout
+        return withTimeoutOrNull(5000L) {
+            _turnCredentials.first { it != null }
+        }
+    }
+
+    private suspend fun ensureTurnCredentials(): TurnCredentialsPayload? {
+        // Return cached if available and not too old
+        _turnCredentials.value?.let { return it }
+
+        // Fetch fresh credentials
+        return fetchTurnCredentials()
     }
 
     // MARK: - Initiate Call
@@ -155,9 +172,11 @@ class CallService @Inject constructor(
         } ?: return Result.failure(Exception("Contact public key not found"))
 
         return try {
-            // Fetch TURN credentials
-            fetchTurnCredentials()
-            delay(500) // Wait for credentials
+            // Fetch TURN credentials and wait for them
+            val turn = ensureTurnCredentials()
+            if (turn == null) {
+                Logger.w("No TURN credentials available, proceeding without TURN")
+            }
 
             val callId = UUID.randomUUID().toString().lowercase()
 
@@ -240,10 +259,10 @@ class CallService @Inject constructor(
         } ?: return Result.failure(Exception("Sender public key not found"))
 
         return try {
-            // Fetch TURN if needed
-            if (_turnCredentials.value == null) {
-                fetchTurnCredentials()
-                delay(500)
+            // Fetch TURN credentials and wait for them
+            val turn = ensureTurnCredentials()
+            if (turn == null) {
+                Logger.w("No TURN credentials available, proceeding without TURN")
             }
 
             // Decrypt SDP offer

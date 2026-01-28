@@ -22,6 +22,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.whisper2.app.ui.theme.*
 import com.whisper2.app.ui.viewmodels.ChatsViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -38,23 +39,23 @@ fun ChatsListScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Chats", color = Color.White, fontWeight = FontWeight.Bold) },
+                title = { Text("Chats", color = TextPrimary, fontWeight = FontWeight.Bold) },
                 actions = {
                     if (pendingRequests > 0) {
                         IconButton(onClick = { /* Show requests */ }) {
-                            BadgedBox(badge = { Badge { Text("$pendingRequests") } }) {
-                                Icon(Icons.Default.Inbox, "Requests", tint = Color.White)
+                            BadgedBox(badge = { Badge(containerColor = PrimaryBlue) { Text("$pendingRequests") } }) {
+                                Icon(Icons.Default.Inbox, "Requests", tint = TextPrimary)
                             }
                         }
                     }
                     IconButton(onClick = { showNewChat = true }) {
-                        Icon(Icons.Default.Edit, "New Chat", tint = Color.White)
+                        Icon(Icons.Default.Edit, "New Chat", tint = PrimaryBlue)
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Black)
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MetalDark)
             )
         },
-        containerColor = Color.Black
+        containerColor = MetalDark
     ) { padding ->
         Column(modifier = Modifier.padding(padding)) {
             // Message requests banner

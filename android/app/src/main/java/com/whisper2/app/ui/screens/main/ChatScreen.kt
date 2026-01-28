@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.whisper2.app.ui.components.MessageBubble
 import com.whisper2.app.ui.components.MessageInputBar
+import com.whisper2.app.ui.theme.*
 import com.whisper2.app.ui.viewmodels.ChatViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -59,65 +60,66 @@ fun ChatScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Text(contactName, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                        Text(contactName, color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
                         if (isTyping) {
-                            Text("typing...", color = Color(0xFF3B82F6), fontSize = 12.sp)
+                            Text("typing...", color = PrimaryBlue, fontSize = 12.sp)
                         }
                     }
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = PrimaryBlue)
                     }
                 },
                 actions = {
                     IconButton(onClick = onVoiceCall, enabled = canSendMessages) {
-                        Icon(Icons.Default.Phone, "Voice Call", tint = if (canSendMessages) Color.White else Color.Gray)
+                        Icon(Icons.Default.Phone, "Voice Call", tint = if (canSendMessages) CallAccept else TextDisabled)
                     }
                     IconButton(onClick = onVideoCall, enabled = canSendMessages) {
-                        Icon(Icons.Default.Videocam, "Video Call", tint = if (canSendMessages) Color.White else Color.Gray)
+                        Icon(Icons.Default.Videocam, "Video Call", tint = if (canSendMessages) PrimaryBlue else TextDisabled)
                     }
                     // More options menu like iOS
                     var showMenu by remember { mutableStateOf(false) }
                     Box {
                         IconButton(onClick = { showMenu = true }) {
-                            Icon(Icons.Default.MoreVert, "More", tint = Color.White)
+                            Icon(Icons.Default.MoreVert, "More", tint = TextSecondary)
                         }
                         DropdownMenu(
                             expanded = showMenu,
-                            onDismissRequest = { showMenu = false }
+                            onDismissRequest = { showMenu = false },
+                            containerColor = MetalSlate
                         ) {
                             DropdownMenuItem(
-                                text = { Text("View Profile") },
+                                text = { Text("View Profile", color = TextPrimary) },
                                 onClick = {
                                     showMenu = false
                                     onNavigateToProfile()
                                 },
-                                leadingIcon = { Icon(Icons.Default.Person, null) }
+                                leadingIcon = { Icon(Icons.Default.Person, null, tint = TextSecondary) }
                             )
                             DropdownMenuItem(
-                                text = { Text("Search Messages") },
+                                text = { Text("Search Messages", color = TextPrimary) },
                                 onClick = { showMenu = false },
-                                leadingIcon = { Icon(Icons.Default.Search, null) }
+                                leadingIcon = { Icon(Icons.Default.Search, null, tint = TextSecondary) }
                             )
                             DropdownMenuItem(
-                                text = { Text("Mute Notifications") },
+                                text = { Text("Mute Notifications", color = TextPrimary) },
                                 onClick = { showMenu = false },
-                                leadingIcon = { Icon(Icons.Default.NotificationsOff, null) }
+                                leadingIcon = { Icon(Icons.Default.NotificationsOff, null, tint = TextSecondary) }
                             )
-                            HorizontalDivider()
+                            HorizontalDivider(color = BorderDefault)
                             DropdownMenuItem(
-                                text = { Text("Clear Chat", color = Color(0xFFEF4444)) },
+                                text = { Text("Clear Chat", color = StatusError) },
                                 onClick = { showMenu = false },
-                                leadingIcon = { Icon(Icons.Default.Delete, null, tint = Color(0xFFEF4444)) }
+                                leadingIcon = { Icon(Icons.Default.Delete, null, tint = StatusError) }
                             )
                         }
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF1A1A1A))
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MetalNavy)
             )
         },
-        containerColor = Color.Black
+        containerColor = MetalDark
     ) { padding ->
         Column(
             modifier = Modifier
@@ -129,22 +131,22 @@ fun ChatScreen(
             if (!canSendMessages) {
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    color = Color(0xFFF59E0B).copy(alpha = 0.1f)
+                    color = StatusWarningMuted.copy(alpha = 0.3f)
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.Warning, null, tint = Color(0xFFF59E0B), modifier = Modifier.size(20.dp))
+                        Icon(Icons.Default.Warning, null, tint = StatusWarning, modifier = Modifier.size(20.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             "Scan contact's QR code to enable messaging",
-                            color = Color(0xFFF59E0B),
+                            color = StatusWarning,
                             fontSize = 12.sp,
                             modifier = Modifier.weight(1f)
                         )
                         TextButton(onClick = { /* Scan QR */ }) {
-                            Text("Scan", color = Color(0xFF3B82F6))
+                            Text("Scan", color = PrimaryBlue)
                         }
                     }
                 }
@@ -154,17 +156,17 @@ fun ChatScreen(
             error?.let { err ->
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    color = Color(0xFFEF4444).copy(alpha = 0.1f)
+                    color = StatusErrorMuted.copy(alpha = 0.3f)
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.Error, null, tint = Color(0xFFEF4444), modifier = Modifier.size(20.dp))
+                        Icon(Icons.Default.Error, null, tint = StatusError, modifier = Modifier.size(20.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(err, color = Color(0xFFEF4444), fontSize = 12.sp, modifier = Modifier.weight(1f))
+                        Text(err, color = StatusError, fontSize = 12.sp, modifier = Modifier.weight(1f))
                         TextButton(onClick = { viewModel.clearError() }) {
-                            Text("Dismiss", color = Color.Gray)
+                            Text("Dismiss", color = TextTertiary)
                         }
                     }
                 }
@@ -195,7 +197,7 @@ fun ChatScreen(
                 ) {
                     TypingIndicator()
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("$contactName is typing...", color = Color.Gray, fontSize = 12.sp)
+                    Text("$contactName is typing...", color = PrimaryBlue, fontSize = 12.sp)
                 }
             }
 
@@ -223,11 +225,11 @@ fun ChatScreen(
 fun TypingIndicator() {
     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         repeat(3) { index ->
-            val alpha by remember { mutableFloatStateOf(0.3f + (index * 0.2f)) }
+            val alpha by remember { mutableFloatStateOf(0.4f + (index * 0.2f)) }
             Box(
                 modifier = Modifier
                     .size(6.dp)
-                    .background(Color.Gray.copy(alpha = alpha), CircleShape)
+                    .background(PrimaryBlue.copy(alpha = alpha), CircleShape)
             )
         }
     }
