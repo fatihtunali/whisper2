@@ -1,66 +1,47 @@
 package com.whisper2.app.core
 
-/**
- * Whisper2 Core Constants
- * All frozen configuration values in one place
- * DO NOT CHANGE AFTER LAUNCH - breaks cross-platform recovery
- */
+/** FROZEN CONSTANTS - Must match server/iOS exactly */
 object Constants {
-
-    // Protocol Version
+    const val WS_URL = "wss://whisper2.aiakademiturkiye.com/ws"
+    const val BASE_URL = "https://whisper2.aiakademiturkiye.com"
     const val PROTOCOL_VERSION = 1
     const val CRYPTO_VERSION = 1
 
-    // Server Configuration
-    // Connect via nginx on default HTTPS/WSS port (443)
-    // Nginx proxies to internal port 3051
-    object Server {
-        const val BASE_URL = "https://whisper2.aiakademiturkiye.com"
-        const val WS_URL = "wss://whisper2.aiakademiturkiye.com/ws"
-        const val PORT = 3051 // Internal port (used by server, not client)
+    // Crypto (FROZEN)
+    const val BIP39_SEED_LENGTH = 64
+    const val BIP39_ITERATIONS = 2048
+    const val BIP39_SALT = "mnemonic"
+    const val HKDF_SALT = "whisper"
+    const val ENCRYPTION_DOMAIN = "whisper/enc"
+    const val SIGNING_DOMAIN = "whisper/sign"
+    const val CONTACTS_DOMAIN = "whisper/contacts"
 
-        val httpBaseUrl: String get() = BASE_URL // No port = default 443
-        val webSocketUrl: String get() = WS_URL // WebSocket path is /ws
-    }
+    const val NACL_NONCE_SIZE = 24
+    const val NACL_KEY_SIZE = 32
+    const val NACL_PUBLIC_KEY_SIZE = 32
+    const val NACL_SECRET_KEY_SIZE = 32
+    const val NACL_SIGN_SECRET_KEY_SIZE = 64
+    const val NACL_SIGNATURE_SIZE = 64
+    const val NACL_BOX_MAC_SIZE = 16
 
-    // TURN Server Configuration (must match server .env TURN_URLS)
-    object Turn {
-        const val HOST = "turn2.aiakademiturkiye.com"
-        const val PORT = 3479
-        const val TLS_PORT = 5350
+    const val TIMESTAMP_SKEW_MS = 10 * 60 * 1000L
+    const val SESSION_TTL_DAYS = 7
+    const val MAX_GROUP_MEMBERS = 50
+    const val MAX_ATTACHMENT_SIZE = 100 * 1024 * 1024L
+    const val MAX_BACKUP_SIZE = 256 * 1024
 
-        val urls: List<String> get() = listOf(
-            "turn:$HOST:$PORT?transport=udp",
-            "turn:$HOST:$PORT?transport=tcp",
-            "turns:$HOST:$TLS_PORT?transport=tcp"
-        )
-    }
+    const val HEARTBEAT_INTERVAL_MS = 30_000L
+    const val RECONNECT_BASE_DELAY_MS = 1000L
+    const val RECONNECT_MAX_DELAY_MS = 30_000L
+    const val RECONNECT_MAX_ATTEMPTS = 5
+    const val CALL_RING_TIMEOUT_MS = 30_000L
 
-    // Crypto Constants (FROZEN - DO NOT CHANGE)
-    object Crypto {
-        const val NONCE_LENGTH = 24
-        const val KEY_LENGTH = 32
-        const val PUBLIC_KEY_LENGTH = 32
-        const val SECRET_KEY_LENGTH = 32
-        const val SIGNATURE_LENGTH = 64
-        const val SEED_LENGTH = 32
-        const val BIP39_SEED_LENGTH = 64  // Full BIP39 seed is 64 bytes
-        const val CHALLENGE_SIZE = 32
+    const val DATABASE_NAME = "whisper2_db"
+    const val SECURE_PREFS_NAME = "whisper2_secure_prefs"
+    const val KEYSTORE_ALIAS = "whisper2_wrapper_key"
+    const val PLATFORM = "android"
 
-        // HKDF parameters (FROZEN - MUST match across all platforms for recovery)
-        const val HKDF_SALT = "whisper"
-        const val ENCRYPTION_DOMAIN = "whisper/enc"
-        const val SIGNING_DOMAIN = "whisper/sign"
-        const val CONTACTS_DOMAIN = "whisper/contacts"
-
-        // WhisperID format (server-generated)
-        // Format: WSP-XXXX-XXXX-XXXX (Base32: A-Z, 2-7)
-        const val WHISPER_ID_PREFIX = "WSP-"
-        const val WHISPER_ID_BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
-    }
-
-    // Message Types (must match server protocol.ts MessageTypes)
-    object MessageType {
+    object MsgType {
         // Auth
         const val REGISTER_BEGIN = "register_begin"
         const val REGISTER_CHALLENGE = "register_challenge"
@@ -69,7 +50,6 @@ object Constants {
         const val SESSION_REFRESH = "session_refresh"
         const val SESSION_REFRESH_ACK = "session_refresh_ack"
         const val LOGOUT = "logout"
-        const val UPDATE_TOKENS = "update_tokens"
 
         // Messaging
         const val SEND_MESSAGE = "send_message"
@@ -79,6 +59,8 @@ object Constants {
         const val MESSAGE_DELIVERED = "message_delivered"
         const val FETCH_PENDING = "fetch_pending"
         const val PENDING_MESSAGES = "pending_messages"
+        const val DELETE_MESSAGE = "delete_message"
+        const val MESSAGE_DELETED = "message_deleted"
 
         // Groups
         const val GROUP_CREATE = "group_create"
@@ -91,68 +73,63 @@ object Constants {
         const val TURN_CREDENTIALS = "turn_credentials"
         const val CALL_INITIATE = "call_initiate"
         const val CALL_INCOMING = "call_incoming"
-        const val CALL_RINGING = "call_ringing"
         const val CALL_ANSWER = "call_answer"
         const val CALL_ICE_CANDIDATE = "call_ice_candidate"
         const val CALL_END = "call_end"
+        const val CALL_RINGING = "call_ringing"
 
-        // Presence & Typing
+        // Push tokens
+        const val UPDATE_TOKENS = "update_tokens"
+
+        // Presence
         const val PRESENCE_UPDATE = "presence_update"
         const val TYPING = "typing"
         const val TYPING_NOTIFICATION = "typing_notification"
 
-        // System
+        // Ping/Pong
         const val PING = "ping"
         const val PONG = "pong"
+
+        // Error
         const val ERROR = "error"
-        const val FORCE_LOGOUT = "force_logout"
     }
 
-    // Error Codes (must match server protocol.ts ErrorCode)
+    object ContentType {
+        const val TEXT = "text"
+        const val IMAGE = "image"
+        const val AUDIO = "audio"
+        const val FILE = "file"
+        const val LOCATION = "location"
+    }
+
+    object MessageStatus {
+        const val PENDING = "pending"
+        const val SENT = "sent"
+        const val DELIVERED = "delivered"
+        const val READ = "read"
+        const val FAILED = "failed"
+    }
+
+    object Direction {
+        const val INCOMING = "incoming"
+        const val OUTGOING = "outgoing"
+    }
+
     object ErrorCode {
-        const val NOT_REGISTERED = "NOT_REGISTERED"
         const val AUTH_FAILED = "AUTH_FAILED"
-        const val INVALID_PAYLOAD = "INVALID_PAYLOAD"
         const val INVALID_TIMESTAMP = "INVALID_TIMESTAMP"
+        const val INVALID_SIGNATURE = "INVALID_SIGNATURE"
+        const val USER_NOT_FOUND = "USER_NOT_FOUND"
+        const val SESSION_EXPIRED = "SESSION_EXPIRED"
         const val RATE_LIMITED = "RATE_LIMITED"
-        const val USER_BANNED = "USER_BANNED"
-        const val NOT_FOUND = "NOT_FOUND"
-        const val FORBIDDEN = "FORBIDDEN"
-        const val INTERNAL_ERROR = "INTERNAL_ERROR"
     }
 
-    // Timeouts (milliseconds)
-    object Timeout {
-        const val WS_CONNECT = 10_000L
-        const val WS_RECONNECT_BASE = 1_000L
-        const val WS_RECONNECT_MAX = 30_000L
-        const val HTTP_REQUEST = 30_000L
-        const val CALL_STATE_TTL = 180_000L
-        const val PING_INTERVAL = 30_000L
-        const val PONG_TIMEOUT = 10_000L
-    }
-
-    // Storage Keys
-    object StorageKey {
-        const val ENC_PRIVATE_KEY = "whisper2.enc.private"
-        const val ENC_PUBLIC_KEY = "whisper2.enc.public"
-        const val SIGN_PRIVATE_KEY = "whisper2.sign.private"
-        const val SIGN_PUBLIC_KEY = "whisper2.sign.public"
-        const val SESSION_TOKEN = "whisper2.session.token"
-        const val SESSION_EXPIRY = "whisper2.session.expiry"
-        const val DEVICE_ID = "whisper2.device.id"
-        const val WHISPER_ID = "whisper2.whisper.id"
-        const val CONTACTS_KEY = "whisper2.contacts.key"
-        const val FCM_TOKEN = "whisper2.fcm.token"
-    }
-
-    // Limits
-    object Limits {
-        const val MAX_MESSAGE_SIZE = 64 * 1024 // 64KB
-        const val MAX_ATTACHMENT_SIZE = 100 * 1024 * 1024 // 100MB
-        const val MAX_GROUP_MEMBERS = 256
-        const val MAX_DISPLAY_NAME_LENGTH = 64
-        const val MAX_GROUP_TITLE_LENGTH = 128
-        const val OUTBOX_MAX_RETRIES = 5
+    object CallEndReason {
+        const val ENDED = "ended"
+        const val DECLINED = "declined"
+        const val BUSY = "busy"
+        const val TIMEOUT = "timeout"
+        const val FAILED = "failed"
+        const val CANCELLED = "cancelled"
     }
 }

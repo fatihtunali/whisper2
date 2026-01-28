@@ -1,51 +1,50 @@
 package com.whisper2.app.di
 
 import com.google.gson.Gson
-import com.google.gson.GsonBuilder
 import com.whisper2.app.core.Constants
-import com.whisper2.app.core.Logger
+import com.whisper2.app.data.network.api.WhisperApi
+import com.whisper2.app.data.network.api.AttachmentsApi
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import okhttp3.OkHttpClient
-import okhttp3.logging.HttpLoggingInterceptor
+import retrofit2.Retrofit
+import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
+import javax.inject.Qualifier
 import javax.inject.Singleton
+
+@Qualifier annotation class WsClient
+@Qualifier annotation class HttpClient
 
 @Module
 @InstallIn(SingletonComponent::class)
 object NetworkModule {
+    @Provides @Singleton @WsClient
+    fun provideWsClient(): OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.SECONDS)
+        .pingInterval(30, TimeUnit.SECONDS)
+        .build()
 
-    private var instanceCount = 0
+    @Provides @Singleton @HttpClient
+    fun provideHttpClient(): OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
+        .build()
 
-    @Provides
-    @Singleton
-    fun provideGson(): Gson {
-        instanceCount++
-        Logger.info("Gson instance created (#$instanceCount)", Logger.Category.NETWORK)
-        return GsonBuilder()
-            .setDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
-            .create()
-    }
+    @Provides @Singleton
+    fun provideRetrofit(@HttpClient client: OkHttpClient, gson: Gson): Retrofit = Retrofit.Builder()
+        .baseUrl(Constants.BASE_URL)
+        .client(client)
+        .addConverterFactory(GsonConverterFactory.create(gson))
+        .build()
 
-    @Provides
-    @Singleton
-    fun provideOkHttpClient(): OkHttpClient {
-        instanceCount++
-        Logger.info("OkHttpClient instance created (#$instanceCount)", Logger.Category.NETWORK)
+    @Provides @Singleton
+    fun provideWhisperApi(retrofit: Retrofit): WhisperApi = retrofit.create(WhisperApi::class.java)
 
-        val loggingInterceptor = HttpLoggingInterceptor { message ->
-            Logger.debug(message, Logger.Category.NETWORK)
-        }.apply {
-            level = HttpLoggingInterceptor.Level.BODY
-        }
-
-        return OkHttpClient.Builder()
-            .connectTimeout(Constants.Timeout.WS_CONNECT, TimeUnit.MILLISECONDS)
-            .readTimeout(Constants.Timeout.HTTP_REQUEST, TimeUnit.MILLISECONDS)
-            .writeTimeout(Constants.Timeout.HTTP_REQUEST, TimeUnit.MILLISECONDS)
-            .addInterceptor(loggingInterceptor)
-            .build()
-    }
+    @Provides @Singleton
+    fun provideAttachmentsApi(retrofit: Retrofit): AttachmentsApi = retrofit.create(AttachmentsApi::class.java)
 }

@@ -1,144 +1,98 @@
 package com.whisper2.app.crypto
 
 import com.goterl.lazysodium.LazySodiumAndroid
-import com.goterl.lazysodium.SodiumAndroid
+import com.goterl.lazysodium.interfaces.Box
+import com.goterl.lazysodium.interfaces.Sign
 import com.whisper2.app.core.Constants
-import com.whisper2.app.core.CryptoException
-import javax.crypto.Mac
-import javax.crypto.spec.SecretKeySpec
-import kotlin.math.ceil
 
 /**
- * Key derivation using BIP39 mnemonic and HKDF
- * Matches server implementation in crypto.ts
+ * Key derivation from BIP39 seed.
  *
- * CRITICAL: Uses full 64-byte BIP39 seed + "whisper" salt for cross-platform recovery
+ * Chain:
+ * Mnemonic → PBKDF2-HMAC-SHA512 → 64-byte BIP39 Seed
+ *         → HKDF-SHA256 (salt="whisper")
+ *         ├── info="whisper/enc"      → 32-byte encSeed    → X25519 keypair
+ *         ├── info="whisper/sign"     → 32-byte signSeed   → Ed25519 keypair
+ *         └── info="whisper/contacts" → 32-byte contactsKey
  */
-object KeyDerivation {
+class KeyDerivation(private val lazySodium: LazySodiumAndroid) {
 
-    // MARK: - HKDF-SHA256 Implementation
-
-    /**
-     * HKDF-SHA256 Extract step
-     */
-    private fun hkdfExtract(salt: ByteArray, ikm: ByteArray): ByteArray {
-        val mac = Mac.getInstance("HmacSHA256")
-        mac.init(SecretKeySpec(salt, "HmacSHA256"))
-        return mac.doFinal(ikm)
-    }
-
-    /**
-     * HKDF-SHA256 Expand step
-     */
-    private fun hkdfExpand(prk: ByteArray, info: ByteArray, length: Int): ByteArray {
-        val mac = Mac.getInstance("HmacSHA256")
-        val hashLen = 32 // SHA256 output length
-        val n = ceil(length.toDouble() / hashLen).toInt()
-
-        val result = ByteArray(n * hashLen)
-        var t = ByteArray(0)
-
-        for (i in 1..n) {
-            mac.init(SecretKeySpec(prk, "HmacSHA256"))
-            mac.update(t)
-            mac.update(info)
-            mac.update(i.toByte())
-            t = mac.doFinal()
-            System.arraycopy(t, 0, result, (i - 1) * hashLen, hashLen)
-        }
-
-        return result.copyOf(length)
-    }
-
-    /**
-     * HKDF-SHA256 full derivation
-     */
-    private fun hkdf(ikm: ByteArray, salt: ByteArray, info: ByteArray, length: Int): ByteArray {
-        val prk = hkdfExtract(salt, ikm)
-        return hkdfExpand(prk, info, length)
-    }
-
-    // MARK: - Derive Key
-
-    /**
-     * Derive domain-specific key using HKDF-SHA256
-     * CRITICAL: Uses full 64-byte BIP39 seed + "whisper" salt for cross-platform recovery
-     *
-     * @param seed Full 64-byte BIP39 seed (NOT truncated)
-     * @param info Domain string ("whisper/enc", "whisper/sign", "whisper/contacts")
-     * @param length Output key length (default 32 bytes)
-     */
-    fun deriveKey(seed: ByteArray, info: String, length: Int = 32): ByteArray {
-        require(seed.size == Constants.Crypto.BIP39_SEED_LENGTH) {
-            "BIP39 seed must be ${Constants.Crypto.BIP39_SEED_LENGTH} bytes, got ${seed.size}"
-        }
-
-        val salt = Constants.Crypto.HKDF_SALT.toByteArray(Charsets.UTF_8)
-        val infoBytes = info.toByteArray(Charsets.UTF_8)
-
-        return hkdf(seed, salt, infoBytes, length)
-    }
-
-    // MARK: - Derived Keys
-
-    /**
-     * All derived keys from mnemonic
-     * Property names match test expectations
-     */
     data class DerivedKeys(
-        val encSeed: ByteArray,      // For X25519 (32 bytes)
-        val signSeed: ByteArray,     // For Ed25519 (32 bytes)
-        val contactsKey: ByteArray   // For contacts backup (32 bytes)
-    ) {
-        override fun equals(other: Any?): Boolean {
-            if (this === other) return true
-            if (other !is DerivedKeys) return false
-            return encSeed.contentEquals(other.encSeed) &&
-                    signSeed.contentEquals(other.signSeed) &&
-                    contactsKey.contentEquals(other.contactsKey)
-        }
-
-        override fun hashCode(): Int {
-            var result = encSeed.contentHashCode()
-            result = 31 * result + signSeed.contentHashCode()
-            result = 31 * result + contactsKey.contentHashCode()
-            return result
-        }
-    }
+        val encPublicKey: ByteArray,
+        val encPrivateKey: ByteArray,
+        val signPublicKey: ByteArray,
+        val signPrivateKey: ByteArray,
+        val contactsKey: ByteArray
+    )
 
     /**
-     * Derive all keys from mnemonic with optional passphrase
-     * This is the main entry point for key derivation
+     * Derive all keys from mnemonic.
      */
-    fun deriveAll(mnemonic: String, passphrase: String = ""): DerivedKeys {
-        BIP39.requireValidMnemonic(mnemonic)
+    fun deriveAllKeys(mnemonic: String): DerivedKeys {
+        // Step 1: Mnemonic → BIP39 Seed (PBKDF2)
+        val seed = BIP39.seedFromMnemonic(mnemonic)
 
-        val seed = BIP39.seedFromMnemonic(mnemonic, passphrase)
+        // Step 2: HKDF to derive domain-specific seeds
+        val salt = Constants.HKDF_SALT.toByteArray(Charsets.UTF_8)
+
+        val encSeed = HKDF.deriveKey(
+            ikm = seed,
+            salt = salt,
+            info = Constants.ENCRYPTION_DOMAIN.toByteArray(Charsets.UTF_8),
+            length = 32
+        )
+
+        val signSeed = HKDF.deriveKey(
+            ikm = seed,
+            salt = salt,
+            info = Constants.SIGNING_DOMAIN.toByteArray(Charsets.UTF_8),
+            length = 32
+        )
+
+        val contactsKey = HKDF.deriveKey(
+            ikm = seed,
+            salt = salt,
+            info = Constants.CONTACTS_DOMAIN.toByteArray(Charsets.UTF_8),
+            length = 32
+        )
+
+        // Step 3: Generate keypairs from seeds
+        val encKeyPair = generateEncryptionKeyPair(encSeed)
+        val signKeyPair = generateSigningKeyPair(signSeed)
 
         return DerivedKeys(
-            encSeed = deriveKey(seed, Constants.Crypto.ENCRYPTION_DOMAIN),
-            signSeed = deriveKey(seed, Constants.Crypto.SIGNING_DOMAIN),
-            contactsKey = deriveKey(seed, Constants.Crypto.CONTACTS_DOMAIN)
+            encPublicKey = encKeyPair.first,
+            encPrivateKey = encKeyPair.second,
+            signPublicKey = signKeyPair.first,
+            signPrivateKey = signKeyPair.second,
+            contactsKey = contactsKey
         )
     }
 
     /**
-     * Derive all keys from mnemonic (no passphrase)
-     * Convenience wrapper
+     * Generate X25519 keypair from 32-byte seed.
      */
-    fun deriveAllKeys(mnemonic: String): DerivedKeys = deriveAll(mnemonic, "")
+    private fun generateEncryptionKeyPair(seed: ByteArray): Pair<ByteArray, ByteArray> {
+        val publicKey = ByteArray(Box.PUBLICKEYBYTES)
+        val privateKey = ByteArray(Box.SECRETKEYBYTES)
 
-    /**
-     * Generate new mnemonic
-     */
-    fun generateMnemonic(): String {
-        return BIP39.generateMnemonic()
+        // Use seed as private key directly for deterministic generation
+        System.arraycopy(seed, 0, privateKey, 0, 32)
+        // Derive public key from private key using X25519 scalar multiplication
+        lazySodium.sodium.crypto_scalarmult_base(publicKey, privateKey)
+
+        return Pair(publicKey, privateKey)
     }
 
     /**
-     * Validate mnemonic
+     * Generate Ed25519 keypair from 32-byte seed.
      */
-    fun isValidMnemonic(mnemonic: String): Boolean {
-        return BIP39.isValidMnemonic(mnemonic)
+    private fun generateSigningKeyPair(seed: ByteArray): Pair<ByteArray, ByteArray> {
+        val publicKey = ByteArray(Sign.PUBLICKEYBYTES)
+        val privateKey = ByteArray(Sign.SECRETKEYBYTES)
+
+        lazySodium.cryptoSignSeedKeypair(publicKey, privateKey, seed)
+
+        return Pair(publicKey, privateKey)
     }
 }

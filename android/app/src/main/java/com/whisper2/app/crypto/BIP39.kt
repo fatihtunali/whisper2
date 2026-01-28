@@ -1,138 +1,89 @@
 package com.whisper2.app.crypto
 
 import com.whisper2.app.core.Constants
-import com.whisper2.app.core.CryptoException
+import com.whisper2.app.core.InvalidMnemonicException
+import com.whisper2.app.core.normalizeMnemonic
 import java.security.MessageDigest
 import java.security.SecureRandom
-import java.text.Normalizer
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.PBEKeySpec
 
 /**
- * BIP39 Mnemonic implementation
- * Generates and validates mnemonic phrases, converts to seed
- * MUST match server/iOS implementation exactly for cross-platform recovery
+ * BIP39 Mnemonic generation and seed derivation.
+ * MUST match iOS/server implementation exactly.
  */
 object BIP39 {
 
-    // MARK: - Constants
-
-    private const val PBKDF2_ITERATIONS = 2048
-    private const val SEED_LENGTH = 64
-    private const val ENTROPY_BITS_24_WORDS = 256
-
-    // MARK: - Generate Mnemonic
-
     /**
-     * Generate a new 24-word mnemonic phrase
+     * Generate a new 12-word mnemonic using SecureRandom.
      */
-    fun generateMnemonic(): String {
-        val entropy = ByteArray(32) // 256 bits for 24 words
-        SecureRandom().nextBytes(entropy)
-        return mnemonicFromEntropy(entropy)
+    fun generateMnemonic(secureRandom: SecureRandom): String {
+        // 128 bits of entropy for 12 words
+        val entropy = ByteArray(16)
+        secureRandom.nextBytes(entropy)
+        return entropyToMnemonic(entropy)
     }
 
     /**
-     * Convert entropy to mnemonic words
+     * Generate a 24-word mnemonic.
      */
-    private fun mnemonicFromEntropy(entropy: ByteArray): String {
-        // SHA256 checksum
-        val hash = MessageDigest.getInstance("SHA-256").digest(entropy)
-        val hashByte = hash[0]
+    fun generateMnemonic24(secureRandom: SecureRandom): String {
+        // 256 bits of entropy for 24 words
+        val entropy = ByteArray(32)
+        secureRandom.nextBytes(entropy)
+        return entropyToMnemonic(entropy)
+    }
 
-        // Convert entropy to bit string
+    /**
+     * Convert entropy bytes to mnemonic words.
+     */
+    private fun entropyToMnemonic(entropy: ByteArray): String {
+        val hash = MessageDigest.getInstance("SHA-256").digest(entropy)
+        val checksumBits = entropy.size / 4 // 4 bits for 128-bit entropy, 8 for 256-bit
+
+        // Combine entropy + checksum bits
         val bits = StringBuilder()
-        for (byte in entropy) {
-            bits.append(String.format("%8s", Integer.toBinaryString(byte.toInt() and 0xFF)).replace(' ', '0'))
+        for (b in entropy) {
+            bits.append(String.format("%8s", Integer.toBinaryString(b.toInt() and 0xFF)).replace(' ', '0'))
+        }
+        for (i in 0 until checksumBits) {
+            bits.append(if ((hash[0].toInt() and (1 shl (7 - i))) != 0) '1' else '0')
         }
 
-        // Add checksum bits (first entropy.size/4 bits = 8 bits for 32 bytes)
-        val checksumBits = String.format("%8s", Integer.toBinaryString(hashByte.toInt() and 0xFF)).replace(' ', '0')
-        bits.append(checksumBits.substring(0, entropy.size / 4))
-
-        // Split into 11-bit groups for word indices
+        // Split into 11-bit chunks and map to words
         val words = mutableListOf<String>()
-        val bitString = bits.toString()
-        for (i in bitString.indices step 11) {
-            val end = minOf(i + 11, bitString.length)
-            val indexBits = bitString.substring(i, end)
-            val index = Integer.parseInt(indexBits, 2)
-            if (index < BIP39WordList.english.size) {
-                words.add(BIP39WordList.english[index])
-            }
+        for (i in 0 until bits.length / 11) {
+            val index = bits.substring(i * 11, (i + 1) * 11).toInt(2)
+            words.add(BIP39WordList.getWord(index))
         }
 
         return words.joinToString(" ")
     }
 
-    // MARK: - Mnemonic Normalization
-
     /**
-     * Normalize mnemonic for BIP39 compatibility
-     * - Trim leading/trailing whitespace
-     * - Collapse multiple spaces to single space
-     * - Apply NFKD Unicode normalization
-     * This prevents "same words, different bytes" issues (e.g., Turkish keyboard)
+     * Validate mnemonic phrase.
      */
-    private fun normalizeMnemonic(mnemonic: String): String {
-        val trimmed = mnemonic.trim()
-        val collapsed = trimmed.split(Regex("\\s+")).joinToString(" ")
-        return Normalizer.normalize(collapsed, Normalizer.Form.NFKD)
+    fun validateMnemonic(mnemonic: String): Boolean {
+        val words = mnemonic.normalizeMnemonic().split(" ")
+        if (words.size != 12 && words.size != 24) return false
+        return words.all { BIP39WordList.isValidWord(it) }
     }
 
     /**
-     * Normalize passphrase for BIP39 compatibility
+     * Derive 64-byte seed from mnemonic using PBKDF2-HMAC-SHA512.
+     * Salt = "mnemonic", iterations = 2048
      */
-    private fun normalizePassphrase(passphrase: String): String {
-        return Normalizer.normalize(passphrase, Normalizer.Form.NFKD)
-    }
+    fun seedFromMnemonic(mnemonic: String): ByteArray {
+        if (!validateMnemonic(mnemonic)) {
+            throw InvalidMnemonicException()
+        }
 
-    // MARK: - Mnemonic to Seed
+        val normalized = mnemonic.normalizeMnemonic()
+        val password = normalized.toCharArray()
+        val salt = Constants.BIP39_SALT.toByteArray(Charsets.UTF_8)
 
-    /**
-     * Convert mnemonic to 64-byte seed using PBKDF2
-     * BIP39: PBKDF2-HMAC-SHA512, salt = "mnemonic" + passphrase, 2048 iterations
-     */
-    fun seedFromMnemonic(mnemonic: String, passphrase: String = ""): ByteArray {
-        val normalizedMnemonic = normalizeMnemonic(mnemonic)
-        val normalizedPassphrase = normalizePassphrase(passphrase)
-
-        val salt = "mnemonic$normalizedPassphrase"
-
-        val spec = PBEKeySpec(
-            normalizedMnemonic.toCharArray(),
-            salt.toByteArray(Charsets.UTF_8),
-            PBKDF2_ITERATIONS,
-            SEED_LENGTH * 8 // bits
-        )
-
+        val spec = PBEKeySpec(password, salt, Constants.BIP39_ITERATIONS, Constants.BIP39_SEED_LENGTH * 8)
         val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA512")
         return factory.generateSecret(spec).encoded
-    }
-
-    // MARK: - Validation
-
-    /**
-     * Validate mnemonic phrase
-     * Uses normalized input to match seedFromMnemonic behavior
-     */
-    fun isValidMnemonic(mnemonic: String): Boolean {
-        val normalized = normalizeMnemonic(mnemonic)
-        val words = normalized.lowercase().split(" ")
-
-        if (words.size != 12 && words.size != 24) {
-            return false
-        }
-
-        return words.all { word -> BIP39WordList.english.contains(word) }
-    }
-
-    /**
-     * Validate mnemonic and throw if invalid
-     */
-    fun requireValidMnemonic(mnemonic: String) {
-        if (!isValidMnemonic(mnemonic)) {
-            throw CryptoException.InvalidMnemonic()
-        }
     }
 }

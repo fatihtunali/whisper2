@@ -1,255 +1,352 @@
 package com.whisper2.app.services.auth
 
-import android.util.Log
-import com.whisper2.app.core.AuthException
+import android.util.Base64
+import com.google.firebase.messaging.FirebaseMessaging
+import com.google.gson.Gson
+import com.google.gson.JsonElement
 import com.whisper2.app.core.Constants
-import com.whisper2.app.core.utils.Base64Strict
-import com.whisper2.app.crypto.Signatures
-import com.whisper2.app.network.ws.*
-import java.security.MessageDigest
-import java.util.*
+import com.whisper2.app.core.Logger
+import com.whisper2.app.crypto.CryptoService
+import com.whisper2.app.data.local.prefs.SecureStorage
+import com.whisper2.app.data.network.ws.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.tasks.await
+import java.util.UUID
+import javax.inject.Inject
+import javax.inject.Singleton
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
-/**
- * Authentication Service
- * Handles register flow: register_begin → register_challenge → register_proof → register_ack
- *
- * Challenge signature: Ed25519(SHA256(challengeBytes))
- */
-/**
- * Signer interface for dependency injection and testing
- */
-fun interface ChallengeSigner {
-    fun sign(hash: ByteArray): ByteArray
+sealed class AuthState {
+    object Unauthenticated : AuthState()
+    object Authenticating : AuthState()
+    data class Authenticated(val whisperId: String) : AuthState()
+    data class Error(val message: String) : AuthState()
 }
 
-class AuthService(
-    private val sessionManager: ISessionManager,
-    private val signPrivateKey: ByteArray,
-    private val signPublicKey: ByteArray,
-    private val encPublicKey: ByteArray,
-    private val deviceIdProvider: () -> String,
-    private val pushTokenProvider: () -> String? = { null },
-    private val signer: ChallengeSigner? = null // Optional: for testing without native libs
+@Singleton
+class AuthService @Inject constructor(
+    private val wsClient: WsClientImpl,
+    private val secureStorage: SecureStorage,
+    private val cryptoService: CryptoService,
+    private val gson: Gson
 ) {
-    companion object {
-        private const val TAG = "AuthService"
-        private const val CHALLENGE_BYTES_LENGTH = 32
-        private const val REPLAY_CACHE_SIZE = 64
+    private val _authState = MutableStateFlow<AuthState>(
+        if (secureStorage.isLoggedIn()) AuthState.Authenticated(secureStorage.whisperId!!)
+        else AuthState.Unauthenticated
+    )
+    val authState: StateFlow<AuthState> = _authState
 
-        // WebSocket close codes
-        const val WS_CLOSE_KICKED = 4001
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    // Pending continuations for auth flow
+    private var challengeContinuation: CancellableContinuation<RegisterChallengePayload>? = null
+    private var ackContinuation: CancellableContinuation<RegisterAckPayload>? = null
+
+    init {
+        // Listen for auth-related messages
+        scope.launch {
+            wsClient.messages.collect { frame ->
+                handleMessage(frame)
+            }
+        }
     }
 
-    // Replay guard: track used challenge IDs
-    private val usedChallengeIds = LinkedHashSet<String>()
+    /**
+     * Register a new account with the server.
+     * Server assigns the WhisperID after verifying the public keys.
+     */
+    suspend fun registerNewAccount(mnemonic: String): Result<Unit> {
+        return try {
+            _authState.value = AuthState.Authenticating
 
-    // Current registration state
-    private var pendingChallengeId: String? = null
+            // 1. Derive keys from mnemonic
+            val keys = cryptoService.deriveKeys(mnemonic)
 
-    // MARK: - Register Flow
+            // Store keys securely (needed for signing the challenge)
+            secureStorage.mnemonic = mnemonic
+            secureStorage.encPublicKey = keys.encPublicKey
+            secureStorage.encPrivateKey = keys.encPrivateKey
+            secureStorage.signPublicKey = keys.signPublicKey
+            secureStorage.signPrivateKey = keys.signPrivateKey
+            secureStorage.contactsKey = keys.contactsKey
+
+            // 2. Connect to WebSocket
+            wsClient.connect()
+            waitForConnection()
+
+            // 3. Perform authentication flow
+            val ack = performAuth(
+                whisperId = null,  // New registration - server assigns ID
+                encPublicKey = keys.encPublicKey,
+                signPublicKey = keys.signPublicKey,
+                signPrivateKey = keys.signPrivateKey
+            )
+
+            // 4. Store server-assigned WhisperID and session
+            secureStorage.whisperId = ack.whisperId
+            secureStorage.sessionToken = ack.sessionToken
+            secureStorage.sessionExpiresAt = ack.sessionExpiresAt
+
+            Logger.auth("Registration successful. WhisperID: ${ack.whisperId}")
+
+            // 5. Update auth state
+            _authState.value = AuthState.Authenticated(ack.whisperId)
+
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Logger.e("Registration failed", e)
+            _authState.value = AuthState.Error(e.message ?: "Registration failed")
+            Result.failure(e)
+        }
+    }
 
     /**
-     * Step 1: Create register_begin message
+     * Recover an existing account using mnemonic.
+     * Server will recognize the public keys and return the existing WhisperID.
      */
-    fun createRegisterBegin(
-        whisperId: String? = null // for recovery
-    ): Pair<String, String> { // returns (json, requestId)
-        val requestId = UUID.randomUUID().toString()
-        val deviceId = deviceIdProvider()
+    suspend fun recoverAccount(mnemonic: String): Result<Unit> {
+        return try {
+            _authState.value = AuthState.Authenticating
 
-        val payload = RegisterBeginPayload(
-            protocolVersion = Constants.PROTOCOL_VERSION,
-            cryptoVersion = Constants.CRYPTO_VERSION,
+            // Derive keys from mnemonic
+            val keys = cryptoService.deriveKeys(mnemonic)
+
+            // Store keys securely
+            secureStorage.mnemonic = mnemonic
+            secureStorage.encPublicKey = keys.encPublicKey
+            secureStorage.encPrivateKey = keys.encPrivateKey
+            secureStorage.signPublicKey = keys.signPublicKey
+            secureStorage.signPrivateKey = keys.signPrivateKey
+            secureStorage.contactsKey = keys.contactsKey
+
+            // Connect and authenticate
+            wsClient.connect()
+            waitForConnection()
+
+            // Perform auth - server will return existing WhisperID for these keys
+            val ack = performAuth(
+                whisperId = null,  // Let server find by public keys
+                encPublicKey = keys.encPublicKey,
+                signPublicKey = keys.signPublicKey,
+                signPrivateKey = keys.signPrivateKey
+            )
+
+            // Store session
+            secureStorage.whisperId = ack.whisperId
+            secureStorage.sessionToken = ack.sessionToken
+            secureStorage.sessionExpiresAt = ack.sessionExpiresAt
+
+            Logger.auth("Recovery successful. WhisperID: ${ack.whisperId}")
+
+            _authState.value = AuthState.Authenticated(ack.whisperId)
+
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Logger.e("Recovery failed", e)
+            _authState.value = AuthState.Error(e.message ?: "Recovery failed")
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Reconnect with existing session.
+     */
+    suspend fun reconnect(): Result<Unit> {
+        val encPub = secureStorage.encPublicKey
+        val signPub = secureStorage.signPublicKey
+        val signPriv = secureStorage.signPrivateKey
+        val savedWhisperId = secureStorage.whisperId
+
+        if (encPub == null || signPub == null || signPriv == null || savedWhisperId == null) {
+            return Result.failure(AuthException("Not authenticated - missing keys"))
+        }
+
+        return try {
+            _authState.value = AuthState.Authenticating
+
+            wsClient.connect()
+            waitForConnection()
+
+            val ack = performAuth(
+                whisperId = savedWhisperId,  // Existing session
+                encPublicKey = encPub,
+                signPublicKey = signPub,
+                signPrivateKey = signPriv
+            )
+
+            secureStorage.sessionToken = ack.sessionToken
+            secureStorage.sessionExpiresAt = ack.sessionExpiresAt
+
+            Logger.auth("Reconnect successful")
+
+            _authState.value = AuthState.Authenticated(ack.whisperId)
+
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Logger.e("Reconnect failed", e)
+            _authState.value = AuthState.Error(e.message ?: "Reconnect failed")
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Perform the authentication flow:
+     * 1. Send register_begin
+     * 2. Receive register_challenge
+     * 3. Sign challenge
+     * 4. Send register_proof
+     * 5. Receive register_ack with WhisperID
+     */
+    private suspend fun performAuth(
+        whisperId: String?,
+        encPublicKey: ByteArray,
+        signPublicKey: ByteArray,
+        signPrivateKey: ByteArray
+    ): RegisterAckPayload {
+        val deviceId = secureStorage.getOrCreateDeviceId()
+
+        // Get FCM token for push notifications
+        val fcmToken = getFcmToken()
+
+        // Step 1: Send register_begin
+        val beginPayload = RegisterBeginPayload(
             deviceId = deviceId,
-            platform = "android",
             whisperId = whisperId
         )
+        wsClient.send(WsFrame(Constants.MsgType.REGISTER_BEGIN, payload = beginPayload))
 
-        val json = WsParser.createEnvelope(
-            type = WsMessageTypes.REGISTER_BEGIN,
-            payload = payload,
-            requestId = requestId
-        )
-
-        Log.d(TAG, "Created register_begin: requestId=$requestId, deviceId=$deviceId")
-        return Pair(json, requestId)
-    }
-
-    /**
-     * Step 2: Handle register_challenge from server
-     * Returns register_proof message to send
-     */
-    fun handleChallenge(challengePayload: RegisterChallengePayload): Pair<String, String> {
-        val challengeId = challengePayload.challengeId
-        val challengeB64 = challengePayload.challenge
-        val expiresAt = challengePayload.expiresAt
-
-        Log.d(TAG, "Received challenge: id=$challengeId, expiresAt=$expiresAt")
-
-        // Check expiry
-        if (System.currentTimeMillis() > expiresAt) {
-            throw AuthException.ChallengeExpired()
+        // Step 2: Wait for challenge
+        val challenge = withTimeout(30_000) {
+            suspendCancellableCoroutine { cont ->
+                challengeContinuation = cont
+            }
         }
 
-        // Replay guard: check if challenge already used
-        if (usedChallengeIds.contains(challengeId)) {
-            throw AuthException.ReplayAttempt(challengeId)
-        }
+        // Step 3: Sign challenge - server expects SHA256(challengeBytes) then sign
+        val challengeBytes = Base64.decode(challenge.challenge, Base64.NO_WRAP)
+        val signature = cryptoService.signChallenge(challengeBytes, signPrivateKey)
 
-        // Decode challenge bytes (must be 32 bytes)
-        val challengeBytes = try {
-            Base64Strict.decode(challengeB64)
-        } catch (e: Exception) {
-            throw AuthException.InvalidChallenge("Invalid base64: ${e.message}")
-        }
-
-        if (challengeBytes.size != CHALLENGE_BYTES_LENGTH) {
-            throw AuthException.InvalidChallenge(
-                "Challenge must be $CHALLENGE_BYTES_LENGTH bytes, got ${challengeBytes.size}"
-            )
-        }
-
-        // Add to replay guard BEFORE signing (prevent double-send)
-        addToReplayCache(challengeId)
-        pendingChallengeId = challengeId
-
-        // Sign challenge: Ed25519(SHA256(challengeBytes))
-        val signature = signChallenge(challengeBytes)
-        val signatureB64 = Base64Strict.encode(signature)
-
-        Log.d(TAG, "Signed challenge: signatureLength=${signature.size}")
-
-        // Create register_proof
-        val requestId = UUID.randomUUID().toString()
-        val payload = RegisterProofPayload(
-            protocolVersion = Constants.PROTOCOL_VERSION,
-            cryptoVersion = Constants.CRYPTO_VERSION,
-            challengeId = challengeId,
-            deviceId = deviceIdProvider(),
-            platform = "android",
-            encPublicKey = Base64Strict.encode(encPublicKey),
-            signPublicKey = Base64Strict.encode(signPublicKey),
-            signature = signatureB64,
-            pushToken = pushTokenProvider()
-        )
-
-        val json = WsParser.createEnvelope(
-            type = WsMessageTypes.REGISTER_PROOF,
-            payload = payload,
-            requestId = requestId
-        )
-
-        return Pair(json, requestId)
-    }
-
-    /**
-     * Step 3: Handle register_ack from server
-     * Saves session to SessionManager
-     */
-    fun handleAck(ackPayload: RegisterAckPayload): Boolean {
-        if (!ackPayload.success) {
-            Log.w(TAG, "Register ack success=false")
-            pendingChallengeId = null
-            return false
-        }
-
-        val whisperId = ackPayload.whisperId
-            ?: throw AuthException.InvalidResponse("Missing whisperId in ack")
-        val sessionToken = ackPayload.sessionToken
-            ?: throw AuthException.InvalidResponse("Missing sessionToken in ack")
-        val sessionExpiresAt = ackPayload.sessionExpiresAt
-            ?: throw AuthException.InvalidResponse("Missing sessionExpiresAt in ack")
-        val serverTime = ackPayload.serverTime
-            ?: throw AuthException.InvalidResponse("Missing serverTime in ack")
-
-        Log.i(TAG, "Register successful: whisperId=$whisperId")
-
-        // Save session
-        sessionManager.saveFullSession(
+        // Step 4: Send register_proof with FCM token
+        val proofPayload = RegisterProofPayload(
+            challengeId = challenge.challengeId,
+            deviceId = deviceId,
             whisperId = whisperId,
-            sessionToken = sessionToken,
-            sessionExpiresAt = sessionExpiresAt,
-            serverTime = serverTime
+            encPublicKey = Base64.encodeToString(encPublicKey, Base64.NO_WRAP),
+            signPublicKey = Base64.encodeToString(signPublicKey, Base64.NO_WRAP),
+            signature = Base64.encodeToString(signature, Base64.NO_WRAP),
+            pushToken = fcmToken
         )
+        wsClient.send(WsFrame(Constants.MsgType.REGISTER_PROOF, payload = proofPayload))
 
-        pendingChallengeId = null
-        return true
+        // Step 5: Wait for ack
+        return withTimeout(30_000) {
+            suspendCancellableCoroutine { cont ->
+                ackContinuation = cont
+            }
+        }
     }
 
     /**
-     * Handle error from server
+     * Get FCM token for push notifications.
+     * Returns cached token or fetches fresh one from Firebase.
      */
-    fun handleError(errorPayload: ErrorPayload): AuthException {
-        Log.w(TAG, "Auth error: code=${errorPayload.code}, message=${errorPayload.message}")
+    private suspend fun getFcmToken(): String? {
+        return try {
+            // Try cached token first
+            secureStorage.fcmToken?.let { return it }
 
-        pendingChallengeId = null
+            // Fetch from Firebase
+            val token = FirebaseMessaging.getInstance().token.await()
+            secureStorage.fcmToken = token
+            Logger.auth("FCM token obtained: ${token.take(20)}...")
+            token
+        } catch (e: Exception) {
+            Logger.e("Failed to get FCM token", e)
+            null
+        }
+    }
 
-        return when (errorPayload.code) {
-            WsErrorCodes.AUTH_FAILED -> {
-                // Check if it's a kick message
-                if (errorPayload.message.contains("new_session") ||
-                    errorPayload.message.contains("terminated")) {
-                    AuthException.Kicked(errorPayload.message)
-                } else {
-                    AuthException.AuthFailed(errorPayload.message)
+    private suspend fun waitForConnection() {
+        var attempts = 0
+        while (wsClient.connectionState.value != WsConnectionState.CONNECTED && attempts < 100) {
+            delay(100)
+            attempts++
+        }
+        if (wsClient.connectionState.value != WsConnectionState.CONNECTED) {
+            throw AuthException("Failed to connect to server")
+        }
+    }
+
+    private fun handleMessage(frame: WsFrame<JsonElement>) {
+        when (frame.type) {
+            Constants.MsgType.REGISTER_CHALLENGE -> {
+                try {
+                    val payload = gson.fromJson(frame.payload, RegisterChallengePayload::class.java)
+                    Logger.auth("Received challenge: ${payload.challengeId}")
+                    challengeContinuation?.resume(payload)
+                    challengeContinuation = null
+                } catch (e: Exception) {
+                    Logger.e("Failed to parse challenge", e)
+                    challengeContinuation?.resumeWithException(e)
+                    challengeContinuation = null
                 }
             }
-            WsErrorCodes.INVALID_PAYLOAD -> AuthException.InvalidPayload(errorPayload.message)
-            WsErrorCodes.RATE_LIMITED -> AuthException.RateLimited(errorPayload.message)
-            else -> AuthException.AuthFailed(errorPayload.message)
-        }
-    }
 
-    /**
-     * Handle WebSocket close with kick code
-     */
-    fun handleClose(code: Int, reason: String?) {
-        Log.d(TAG, "WS closed: code=$code, reason=$reason")
-
-        if (code == WS_CLOSE_KICKED) {
-            val kickReason = reason ?: "unknown"
-            Log.w(TAG, "Kicked from server: $kickReason")
-            sessionManager.forceLogout("kicked: $kickReason")
-        }
-    }
-
-    // MARK: - Challenge Signing
-
-    /**
-     * Sign challenge bytes: Ed25519(SHA256(challengeBytes))
-     */
-    private fun signChallenge(challengeBytes: ByteArray): ByteArray {
-        // SHA256 hash of challenge
-        val hash = MessageDigest.getInstance("SHA-256").digest(challengeBytes)
-
-        // Use injected signer if available (for testing), otherwise use Signatures
-        return signer?.sign(hash) ?: Signatures.sign(hash, signPrivateKey)
-    }
-
-    // MARK: - Replay Guard
-
-    private fun addToReplayCache(challengeId: String) {
-        synchronized(usedChallengeIds) {
-            // LRU: if full, remove oldest
-            if (usedChallengeIds.size >= REPLAY_CACHE_SIZE) {
-                val oldest = usedChallengeIds.first()
-                usedChallengeIds.remove(oldest)
+            Constants.MsgType.REGISTER_ACK -> {
+                try {
+                    val payload = gson.fromJson(frame.payload, RegisterAckPayload::class.java)
+                    Logger.auth("Received ack: ${payload.whisperId}, success=${payload.success}")
+                    if (payload.success) {
+                        ackContinuation?.resume(payload)
+                    } else {
+                        ackContinuation?.resumeWithException(AuthException("Registration rejected"))
+                    }
+                    ackContinuation = null
+                } catch (e: Exception) {
+                    Logger.e("Failed to parse ack", e)
+                    ackContinuation?.resumeWithException(e)
+                    ackContinuation = null
+                }
             }
-            usedChallengeIds.add(challengeId)
+
+            Constants.MsgType.ERROR -> {
+                try {
+                    val payload = gson.fromJson(frame.payload, ErrorPayload::class.java)
+                    Logger.e("Auth error: ${payload.code} - ${payload.message}")
+                    val exception = AuthException("${payload.code}: ${payload.message}")
+                    challengeContinuation?.resumeWithException(exception)
+                    ackContinuation?.resumeWithException(exception)
+                    challengeContinuation = null
+                    ackContinuation = null
+                } catch (e: Exception) {
+                    Logger.e("Failed to parse error", e)
+                }
+            }
         }
     }
 
-    /**
-     * Check if challenge was already used (for testing)
-     */
-    fun isChallengeUsed(challengeId: String): Boolean {
-        return usedChallengeIds.contains(challengeId)
-    }
+    fun logout() {
+        scope.launch {
+            try {
+                val token = secureStorage.sessionToken
+                if (token != null) {
+                    // Send logout to server
+                    wsClient.send(WsFrame(
+                        type = "logout",
+                        payload = mapOf("sessionToken" to token)
+                    ))
+                }
+            } catch (e: Exception) {
+                Logger.e("Logout send failed", e)
+            }
+        }
 
-    /**
-     * Clear replay cache (for testing)
-     */
-    fun clearReplayCache() {
-        usedChallengeIds.clear()
+        wsClient.disconnect()
+        secureStorage.clearAll()
+        _authState.value = AuthState.Unauthenticated
     }
 }
+
+class AuthException(message: String) : Exception(message)

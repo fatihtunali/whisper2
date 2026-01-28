@@ -1,673 +1,906 @@
 package com.whisper2.app.services.calls
 
+import android.content.Context
+import android.media.AudioManager
+import android.util.Base64
+import com.google.gson.Gson
+import com.google.gson.JsonElement
 import com.whisper2.app.core.Constants
-import com.whisper2.app.network.ws.*
+import com.whisper2.app.core.Logger
+import com.whisper2.app.crypto.CryptoService
+import com.whisper2.app.data.local.db.dao.CallRecordDao
+import com.whisper2.app.data.local.db.dao.ContactDao
+import com.whisper2.app.data.local.db.entities.CallRecordEntity
+import com.whisper2.app.data.local.prefs.SecureStorage
+import com.whisper2.app.data.network.ws.*
+import com.whisper2.app.di.ApplicationScope
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+import org.json.JSONObject
+import org.webrtc.*
 import java.util.UUID
-import java.util.concurrent.ConcurrentLinkedQueue
+import javax.inject.Inject
+import javax.inject.Singleton
 
-/**
- * Step 12: Call Service
- *
- * Manages call state machine, signaling, and WebRTC coordination.
- *
- * States:
- * - IDLE: No active call
- * - OUTGOING_INITIATING: Caller sent call_initiate, waiting for response
- * - RINGING: Caller received call_ringing from callee
- * - INCOMING_RINGING: Callee received call_incoming, showing UI
- * - CONNECTING: WebRTC connection being established
- * - IN_CALL: Call connected
- * - ENDED: Call terminated (terminal state)
- */
-class CallService(
-    private val wsSender: WsSender,
-    private val uiService: CallUiService,
-    private val webRtcService: WebRtcService,
-    private val turnService: TurnService,
-    private val keyStore: KeyStore,
-    private val myKeysProvider: MyKeysProvider,
-    private val sessionProvider: () -> String?,
-    private val cryptoProvider: CallCryptoProvider = DefaultCallCryptoProvider(),
-    private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+sealed class CallState {
+    object Idle : CallState()
+    object Initiating : CallState()
+    object Ringing : CallState()
+    object Connecting : CallState()
+    object Connected : CallState()
+    object Reconnecting : CallState()
+    data class Ended(val reason: CallEndReason) : CallState()
+}
+
+enum class CallEndReason {
+    ENDED,
+    DECLINED,
+    BUSY,
+    TIMEOUT,
+    FAILED,
+    CANCELLED
+}
+
+data class ActiveCall(
+    val callId: String,
+    val peerId: String,
+    val peerName: String?,
+    val isVideo: Boolean,
+    val isOutgoing: Boolean,
+    var startTime: Long? = null,
+    var isMuted: Boolean = false,
+    var isSpeakerOn: Boolean = false,
+    var isLocalVideoEnabled: Boolean = true,
+    var isRemoteVideoEnabled: Boolean = true
+)
+
+@Singleton
+class CallService @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val wsClient: WsClientImpl,
+    private val secureStorage: SecureStorage,
+    private val cryptoService: CryptoService,
+    private val contactDao: ContactDao,
+    private val callRecordDao: CallRecordDao,
+    private val gson: Gson,
+    @ApplicationScope private val scope: CoroutineScope
 ) {
+    private val _callState = MutableStateFlow<CallState>(CallState.Idle)
+    val callState: StateFlow<CallState> = _callState.asStateFlow()
 
-    /**
-     * Interface for sending WebSocket messages
-     */
-    interface WsSender {
-        fun send(message: String): Boolean
+    private val _activeCall = MutableStateFlow<ActiveCall?>(null)
+    val activeCall: StateFlow<ActiveCall?> = _activeCall.asStateFlow()
+
+    private val _turnCredentials = MutableStateFlow<TurnCredentialsPayload?>(null)
+
+    // WebRTC components
+    private var peerConnectionFactory: PeerConnectionFactory? = null
+    private var peerConnection: PeerConnection? = null
+    private var localAudioTrack: AudioTrack? = null
+    private var localVideoTrack: VideoTrack? = null
+    private var videoCapturer: CameraVideoCapturer? = null
+    private var surfaceTextureHelper: SurfaceTextureHelper? = null
+
+    // Video renderers (set by UI)
+    private var localVideoSink: VideoSink? = null
+    private var remoteVideoSink: VideoSink? = null
+
+    // Pending ICE candidates (received before remote description set)
+    private val pendingIceCandidates = mutableListOf<IceCandidate>()
+
+    // Incoming call payload (stored for answering)
+    private var pendingIncomingCall: CallIncomingPayload? = null
+
+    // Call duration timer
+    private var callDurationJob: Job? = null
+    private val _callDuration = MutableStateFlow(0L)
+    val callDuration: StateFlow<Long> = _callDuration.asStateFlow()
+
+    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+    init {
+        setupWebRTC()
+        setupMessageHandler()
     }
 
-    /**
-     * Interface for looking up peer public keys
-     */
-    interface KeyStore {
-        fun getSignPublicKey(whisperId: String): ByteArray?
-        fun getEncPublicKey(whisperId: String): ByteArray?
+    private fun setupWebRTC() {
+        val options = PeerConnectionFactory.InitializationOptions.builder(context)
+            .setEnableInternalTracer(true)
+            .createInitializationOptions()
+        PeerConnectionFactory.initialize(options)
+
+        val encoderFactory = DefaultVideoEncoderFactory(
+            EglBase.create().eglBaseContext,
+            true,
+            true
+        )
+        val decoderFactory = DefaultVideoDecoderFactory(EglBase.create().eglBaseContext)
+
+        peerConnectionFactory = PeerConnectionFactory.builder()
+            .setVideoEncoderFactory(encoderFactory)
+            .setVideoDecoderFactory(decoderFactory)
+            .createPeerConnectionFactory()
     }
 
-    /**
-     * Interface for getting own keys
-     */
-    interface MyKeysProvider {
-        fun getWhisperId(): String?
-        fun getSignPrivateKey(): ByteArray?
-        fun getEncPrivateKey(): ByteArray?
-        fun getEncPublicKey(): ByteArray?
-    }
-
-    // =========================================================================
-    // STATE
-    // =========================================================================
-
-    enum class CallState {
-        IDLE,
-        OUTGOING_INITIATING,
-        RINGING,
-        INCOMING_RINGING,
-        CONNECTING,
-        IN_CALL,
-        ENDED
-    }
-
-    @Volatile
-    var state: CallState = CallState.IDLE
-        private set
-
-    @Volatile
-    var currentCallId: String? = null
-        private set
-
-    @Volatile
-    var currentPeerId: String? = null
-        private set
-
-    @Volatile
-    var isVideoCall: Boolean = false
-        private set
-
-    // ICE candidate buffer (before remote description is set)
-    private val iceBuffer = ConcurrentLinkedQueue<String>()
-
-    // Track if we've ended this call (for idempotency)
-    private val endedCallIds = mutableSetOf<String>()
-
-    // =========================================================================
-    // PUBLIC API - OUTGOING CALL
-    // =========================================================================
-
-    /**
-     * Initiate an outgoing call
-     *
-     * @param to Callee's WhisperID
-     * @param isVideo Whether to start video call
-     */
-    suspend fun initiateCall(to: String, isVideo: Boolean): Result<String> {
-        if (state != CallState.IDLE) {
-            return Result.failure(CallException.InvalidState("Cannot initiate call in state: $state"))
-        }
-
-        val myWhisperId = myKeysProvider.getWhisperId()
-            ?: return Result.failure(CallException.NotAuthenticated())
-        val sessionToken = sessionProvider()
-            ?: return Result.failure(CallException.NotAuthenticated())
-        val signPrivateKey = myKeysProvider.getSignPrivateKey()
-            ?: return Result.failure(CallException.NotAuthenticated())
-
-        // Get TURN credentials first
-        val turnCreds = try {
-            turnService.requestTurnCreds()
-        } catch (e: Exception) {
-            return Result.failure(CallException.TurnFailed(e.message ?: "Failed to get TURN credentials"))
-        }
-
-        // Create peer connection
-        try {
-            webRtcService.createPeerConnection(turnCreds, isVideo)
-        } catch (e: Exception) {
-            return Result.failure(CallException.WebRtcFailed(e.message ?: "Failed to create peer connection"))
-        }
-
-        val callId = UUID.randomUUID().toString()
-        val timestamp = System.currentTimeMillis()
-
-        // Create SDP offer - this will be delivered via WebRTC callback
-        // For now, create a placeholder and wait for real SDP
-        // In real impl, this would use a callback pattern
-
-        currentCallId = callId
-        currentPeerId = to
-        isVideoCall = isVideo
-        state = CallState.OUTGOING_INITIATING
-
-        uiService.showOutgoingCall(callId, to, isVideo)
-
-        // Create and send offer
+    private fun setupMessageHandler() {
         scope.launch {
-            try {
-                webRtcService.createOffer()
-                // The actual sending happens in WebRTC listener callback
-            } catch (e: Exception) {
-                handleCallError(callId, e.message ?: "Failed to create offer")
+            wsClient.messages.collect { frame ->
+                handleMessage(frame)
             }
         }
-
-        return Result.success(callId)
     }
 
-    /**
-     * Send call_initiate with SDP offer
-     * Called from WebRTC listener when local description is ready
-     */
-    fun sendCallInitiate(sdpOffer: String) {
-        val callId = currentCallId ?: return
-        val to = currentPeerId ?: return
-        val myWhisperId = myKeysProvider.getWhisperId() ?: return
-        val sessionToken = sessionProvider() ?: return
-        val signPrivateKey = myKeysProvider.getSignPrivateKey() ?: return
-        val peerEncPubKey = keyStore.getEncPublicKey(to) ?: return
-        val myEncPrivKey = myKeysProvider.getEncPrivateKey() ?: return
+    // MARK: - TURN Credentials
 
-        val timestamp = System.currentTimeMillis()
-        val nonce = cryptoProvider.generateNonce()
-        val plaintext = sdpOffer.toByteArray(Charsets.UTF_8)
+    suspend fun fetchTurnCredentials() {
+        val sessionToken = secureStorage.sessionToken ?: return
 
-        // Encrypt SDP with peer's enc key
-        val ciphertext = cryptoProvider.seal(plaintext, nonce, peerEncPubKey, myEncPrivKey)
-
-        val nonceB64 = cryptoProvider.encodeBase64(nonce)
-        val ciphertextB64 = cryptoProvider.encodeBase64(ciphertext)
-
-        // Sign
-        val sig = cryptoProvider.signCanonical(
-            messageType = MESSAGE_TYPE_CALL_INITIATE,
-            messageId = callId,
-            from = myWhisperId,
-            to = to,
-            timestamp = timestamp,
-            nonce = nonce,
-            ciphertext = ciphertext,
-            privateKey = signPrivateKey
-        )
-
-        val payload = CallPayload(
-            protocolVersion = Constants.PROTOCOL_VERSION,
-            cryptoVersion = Constants.CRYPTO_VERSION,
-            sessionToken = sessionToken,
-            callId = callId,
-            from = myWhisperId,
-            to = to,
-            isVideo = isVideoCall,
-            timestamp = timestamp,
-            nonce = nonceB64,
-            ciphertext = ciphertextB64,
-            sig = sig
-        )
-
-        val message = WsParser.createEnvelope(WsMessageTypes.CALL_INITIATE, payload)
-        wsSender.send(message)
+        val payload = GetTurnCredentialsPayload(sessionToken = sessionToken)
+        wsClient.send(WsFrame(Constants.MsgType.GET_TURN_CREDENTIALS, payload = payload))
     }
 
-    // =========================================================================
-    // PUBLIC API - INCOMING CALL
-    // =========================================================================
+    // MARK: - Initiate Call
 
-    /**
-     * Accept incoming call
-     *
-     * @param callId Call ID to accept
-     */
-    suspend fun accept(callId: String): Result<Unit> {
-        if (state != CallState.INCOMING_RINGING || currentCallId != callId) {
-            return Result.failure(CallException.InvalidState("Cannot accept call in state: $state"))
-        }
+    suspend fun initiateCall(peerId: String, isVideo: Boolean): Result<Unit> {
+        val whisperId = secureStorage.whisperId ?: return Result.failure(Exception("Not authenticated"))
+        val sessionToken = secureStorage.sessionToken ?: return Result.failure(Exception("No session"))
+        val encPrivateKey = secureStorage.encPrivateKey ?: return Result.failure(Exception("No encryption key"))
+        val signPrivateKey = secureStorage.signPrivateKey ?: return Result.failure(Exception("No signing key"))
 
-        val peerId = currentPeerId
-            ?: return Result.failure(CallException.InvalidState("No peer ID"))
+        // Get recipient's public key
+        val contact = contactDao.getContactById(peerId)
+        val recipientPublicKey = contact?.encPublicKey?.let {
+            Base64.decode(it, Base64.NO_WRAP)
+        } ?: return Result.failure(Exception("Contact public key not found"))
 
-        // Get TURN credentials
-        val turnCreds = try {
-            turnService.requestTurnCreds()
-        } catch (e: Exception) {
-            return Result.failure(CallException.TurnFailed(e.message ?: "Failed to get TURN credentials"))
-        }
+        return try {
+            // Fetch TURN credentials
+            fetchTurnCredentials()
+            delay(500) // Wait for credentials
 
-        state = CallState.CONNECTING
-        uiService.showConnecting(callId)
+            val callId = UUID.randomUUID().toString().lowercase()
 
-        // Create peer connection
-        try {
-            webRtcService.createPeerConnection(turnCreds, isVideoCall)
-        } catch (e: Exception) {
-            handleCallError(callId, e.message ?: "Failed to create peer connection")
-            return Result.failure(CallException.WebRtcFailed(e.message ?: ""))
-        }
+            // Create peer connection and generate offer
+            createPeerConnection(isVideo)
+            val sdpOffer = createOffer()
 
-        // Set remote description (the offer we received)
-        // Then create answer - handled in onWsMessage flow
-
-        return Result.success(Unit)
-    }
-
-    /**
-     * Decline/reject incoming call
-     *
-     * @param callId Call ID to decline
-     * @param reason Reason (e.g., "declined", "busy")
-     */
-    fun decline(callId: String, reason: String = CallEndReason.DECLINED) {
-        if (currentCallId != callId) return
-        sendCallEnd(callId, reason)
-    }
-
-    // =========================================================================
-    // PUBLIC API - END CALL
-    // =========================================================================
-
-    /**
-     * End the current call
-     *
-     * @param reason End reason
-     */
-    fun endCall(reason: String = CallEndReason.ENDED) {
-        val callId = currentCallId ?: return
-        if (state == CallState.IDLE || state == CallState.ENDED) return
-
-        sendCallEnd(callId, reason)
-    }
-
-    private fun sendCallEnd(callId: String, reason: String) {
-        // Check idempotency
-        if (endedCallIds.contains(callId)) return
-        endedCallIds.add(callId)
-
-        val peerId = currentPeerId
-        val myWhisperId = myKeysProvider.getWhisperId()
-        val sessionToken = sessionProvider()
-        val signPrivateKey = myKeysProvider.getSignPrivateKey()
-
-        if (peerId != null && myWhisperId != null && sessionToken != null && signPrivateKey != null) {
-            val timestamp = System.currentTimeMillis()
-            val nonce = cryptoProvider.generateNonce()
-            val ciphertext = reason.toByteArray(Charsets.UTF_8) // Minimal ciphertext for end
-
-            val nonceB64 = cryptoProvider.encodeBase64(nonce)
-            val ciphertextB64 = cryptoProvider.encodeBase64(ciphertext)
-
-            val sig = cryptoProvider.signCanonical(
-                messageType = MESSAGE_TYPE_CALL_END,
-                messageId = callId,
-                from = myWhisperId,
-                to = peerId,
-                timestamp = timestamp,
-                nonce = nonce,
-                ciphertext = ciphertext,
-                privateKey = signPrivateKey
+            // Encrypt SDP
+            val nonce = cryptoService.generateNonce()
+            val ciphertext = cryptoService.boxSeal(
+                sdpOffer.toByteArray(Charsets.UTF_8),
+                nonce,
+                recipientPublicKey,
+                encPrivateKey
             )
 
-            val payload = CallPayload(
-                protocolVersion = Constants.PROTOCOL_VERSION,
-                cryptoVersion = Constants.CRYPTO_VERSION,
+            val timestamp = System.currentTimeMillis()
+
+            // Sign
+            val signature = cryptoService.signMessage(
+                Constants.MsgType.CALL_INITIATE,
+                callId,
+                whisperId,
+                peerId,
+                timestamp,
+                nonce,
+                ciphertext,
+                signPrivateKey
+            )
+
+            // Send initiate
+            val payload = CallInitiatePayload(
                 sessionToken = sessionToken,
                 callId = callId,
-                from = myWhisperId,
+                from = whisperId,
                 to = peerId,
+                isVideo = isVideo,
                 timestamp = timestamp,
-                nonce = nonceB64,
-                ciphertext = ciphertextB64,
-                sig = sig,
-                reason = reason
+                nonce = Base64.encodeToString(nonce, Base64.NO_WRAP),
+                ciphertext = Base64.encodeToString(ciphertext, Base64.NO_WRAP),
+                sig = Base64.encodeToString(signature, Base64.NO_WRAP)
             )
 
-            val message = WsParser.createEnvelope(WsMessageTypes.CALL_END, payload)
-            wsSender.send(message)
-        }
+            wsClient.send(WsFrame(Constants.MsgType.CALL_INITIATE, payload = payload))
 
-        cleanup(callId, reason)
+            // Update state
+            _activeCall.value = ActiveCall(
+                callId = callId,
+                peerId = peerId,
+                peerName = contact?.displayName,
+                isVideo = isVideo,
+                isOutgoing = true
+            )
+            _callState.value = CallState.Initiating
+
+            // Configure audio
+            configureAudioSession()
+
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Logger.e("Failed to initiate call", e)
+            cleanup()
+            Result.failure(e)
+        }
     }
 
-    // =========================================================================
-    // WS MESSAGE HANDLING
-    // =========================================================================
+    // MARK: - Answer Call
 
-    /**
-     * Handle incoming WebSocket message
-     */
-    fun onWsMessage(envelope: WsRawEnvelope) {
-        when (envelope.type) {
-            WsMessageTypes.CALL_INCOMING -> handleCallIncoming(envelope)
-            WsMessageTypes.CALL_RINGING -> handleCallRinging(envelope)
-            WsMessageTypes.CALL_ANSWER -> handleCallAnswer(envelope)
-            WsMessageTypes.CALL_ICE_CANDIDATE -> handleIceCandidate(envelope)
-            WsMessageTypes.CALL_END -> handleCallEnd(envelope)
+    suspend fun answerCall(): Result<Unit> {
+        val incomingPayload = pendingIncomingCall ?: return Result.failure(Exception("No incoming call"))
+        val whisperId = secureStorage.whisperId ?: return Result.failure(Exception("Not authenticated"))
+        val sessionToken = secureStorage.sessionToken ?: return Result.failure(Exception("No session"))
+        val encPrivateKey = secureStorage.encPrivateKey ?: return Result.failure(Exception("No encryption key"))
+        val signPrivateKey = secureStorage.signPrivateKey ?: return Result.failure(Exception("No signing key"))
+
+        // Get sender's public key
+        val contact = contactDao.getContactById(incomingPayload.from)
+        val senderPublicKey = contact?.encPublicKey?.let {
+            Base64.decode(it, Base64.NO_WRAP)
+        } ?: return Result.failure(Exception("Sender public key not found"))
+
+        return try {
+            // Fetch TURN if needed
+            if (_turnCredentials.value == null) {
+                fetchTurnCredentials()
+                delay(500)
+            }
+
+            // Decrypt SDP offer
+            val ciphertextData = Base64.decode(incomingPayload.ciphertext, Base64.NO_WRAP)
+            val nonceData = Base64.decode(incomingPayload.nonce, Base64.NO_WRAP)
+
+            val sdpOffer = String(
+                cryptoService.boxOpen(ciphertextData, nonceData, senderPublicKey, encPrivateKey),
+                Charsets.UTF_8
+            )
+
+            // Create peer connection and set remote description
+            createPeerConnection(incomingPayload.isVideo)
+
+            val remoteDesc = SessionDescription(SessionDescription.Type.OFFER, sdpOffer)
+            peerConnection?.setRemoteDescription(SdpObserverAdapter(), remoteDesc)
+
+            // Process pending ICE candidates
+            pendingIceCandidates.forEach { candidate ->
+                peerConnection?.addIceCandidate(candidate)
+            }
+            pendingIceCandidates.clear()
+
+            // Create answer
+            val sdpAnswer = createAnswer()
+
+            // Encrypt answer
+            val nonce = cryptoService.generateNonce()
+            val ciphertext = cryptoService.boxSeal(
+                sdpAnswer.toByteArray(Charsets.UTF_8),
+                nonce,
+                senderPublicKey,
+                encPrivateKey
+            )
+
+            val timestamp = System.currentTimeMillis()
+
+            // Sign
+            val signature = cryptoService.signMessage(
+                Constants.MsgType.CALL_ANSWER,
+                incomingPayload.callId,
+                whisperId,
+                incomingPayload.from,
+                timestamp,
+                nonce,
+                ciphertext,
+                signPrivateKey
+            )
+
+            // Send answer
+            val payload = CallAnswerPayload(
+                sessionToken = sessionToken,
+                callId = incomingPayload.callId,
+                from = whisperId,
+                to = incomingPayload.from,
+                timestamp = timestamp,
+                nonce = Base64.encodeToString(nonce, Base64.NO_WRAP),
+                ciphertext = Base64.encodeToString(ciphertext, Base64.NO_WRAP),
+                sig = Base64.encodeToString(signature, Base64.NO_WRAP)
+            )
+
+            wsClient.send(WsFrame(Constants.MsgType.CALL_ANSWER, payload = payload))
+
+            // Update state
+            _activeCall.value = ActiveCall(
+                callId = incomingPayload.callId,
+                peerId = incomingPayload.from,
+                peerName = contact?.displayName,
+                isVideo = incomingPayload.isVideo,
+                isOutgoing = false
+            )
+            _callState.value = CallState.Connecting
+
+            // Configure audio
+            configureAudioSession()
+
+            pendingIncomingCall = null
+
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Logger.e("Failed to answer call", e)
+            cleanup()
+            Result.failure(e)
         }
     }
 
-    private fun handleCallIncoming(envelope: WsRawEnvelope) {
-        val payload = WsParser.parsePayload<CallPayload>(envelope.payload) ?: return
+    // MARK: - Decline Call
 
-        // Validate nonce (24 bytes)
-        val nonceBytes = try {
-            cryptoProvider.decodeBase64WithLength(payload.nonce, 24)
-        } catch (e: Exception) {
-            return // Invalid nonce
-        }
-
-        // Validate signature (64 bytes)
-        val sigBytes = try {
-            cryptoProvider.decodeBase64WithLength(payload.sig, 64)
-        } catch (e: Exception) {
-            return // Invalid signature
-        }
-
-        // Get sender's sign public key
-        val senderSignPubKey = keyStore.getSignPublicKey(payload.from) ?: return
-
-        // Verify signature
-        val myWhisperId = myKeysProvider.getWhisperId() ?: return
-        val valid = cryptoProvider.verifyCanonical(
-            signatureB64 = payload.sig,
-            messageType = MESSAGE_TYPE_CALL_INITIATE,
-            messageId = payload.callId,
-            from = payload.from,
-            to = myWhisperId,
-            timestamp = payload.timestamp,
-            nonceB64 = payload.nonce,
-            ciphertextB64 = payload.ciphertext,
-            publicKey = senderSignPubKey
-        )
-
-        if (!valid) return // Signature verification failed
-
-        // Decrypt SDP offer
-        val senderEncPubKey = keyStore.getEncPublicKey(payload.from) ?: return
-        val myEncPrivKey = myKeysProvider.getEncPrivateKey() ?: return
-        val ciphertextBytes = cryptoProvider.decodeBase64(payload.ciphertext)
-
-        val sdpOfferBytes = try {
-            cryptoProvider.open(ciphertextBytes, nonceBytes, senderEncPubKey, myEncPrivKey)
-        } catch (e: Exception) {
-            return // Decryption failed
-        }
-
-        val sdpOffer = String(sdpOfferBytes, Charsets.UTF_8)
-
-        // Update state
-        currentCallId = payload.callId
-        currentPeerId = payload.from
-        isVideoCall = payload.isVideo ?: false
-        state = CallState.INCOMING_RINGING
-
-        // Store SDP offer for later use when user accepts
-        // (In real impl, store this somewhere)
-
-        // Show incoming call UI
-        uiService.showIncomingCall(payload.callId, payload.from, isVideoCall)
-
-        // Send ringing
-        sendCallRinging(payload.callId)
+    suspend fun declineCall() {
+        val incomingPayload = pendingIncomingCall ?: return
+        endCall(CallEndReason.DECLINED)
+        pendingIncomingCall = null
     }
 
-    private fun sendCallRinging(callId: String) {
-        val peerId = currentPeerId ?: return
-        val myWhisperId = myKeysProvider.getWhisperId() ?: return
-        val sessionToken = sessionProvider() ?: return
-        val signPrivateKey = myKeysProvider.getSignPrivateKey() ?: return
+    // MARK: - End Call
 
-        val timestamp = System.currentTimeMillis()
-        val nonce = cryptoProvider.generateNonce()
-        val ciphertext = "ringing".toByteArray(Charsets.UTF_8)
+    suspend fun endCall(reason: CallEndReason = CallEndReason.ENDED) {
+        val call = _activeCall.value ?: pendingIncomingCall?.let {
+            ActiveCall(it.callId, it.from, null, it.isVideo, false)
+        } ?: return
 
-        val nonceB64 = cryptoProvider.encodeBase64(nonce)
-        val ciphertextB64 = cryptoProvider.encodeBase64(ciphertext)
+        val whisperId = secureStorage.whisperId ?: return
+        val sessionToken = secureStorage.sessionToken ?: return
+        val encPrivateKey = secureStorage.encPrivateKey ?: return
+        val signPrivateKey = secureStorage.signPrivateKey ?: return
 
-        val sig = cryptoProvider.signCanonical(
-            messageType = MESSAGE_TYPE_CALL_RINGING,
-            messageId = callId,
-            from = myWhisperId,
-            to = peerId,
-            timestamp = timestamp,
-            nonce = nonce,
-            ciphertext = ciphertext,
-            privateKey = signPrivateKey
-        )
-
-        val payload = CallPayload(
-            protocolVersion = Constants.PROTOCOL_VERSION,
-            cryptoVersion = Constants.CRYPTO_VERSION,
-            sessionToken = sessionToken,
-            callId = callId,
-            from = myWhisperId,
-            to = peerId,
-            timestamp = timestamp,
-            nonce = nonceB64,
-            ciphertext = ciphertextB64,
-            sig = sig
-        )
-
-        val message = WsParser.createEnvelope(WsMessageTypes.CALL_RINGING, payload)
-        wsSender.send(message)
-    }
-
-    private fun handleCallRinging(envelope: WsRawEnvelope) {
-        val payload = WsParser.parsePayload<CallPayload>(envelope.payload) ?: return
-
-        if (payload.callId != currentCallId) return
-        if (state != CallState.OUTGOING_INITIATING) return
-
-        state = CallState.RINGING
-        uiService.showRinging(payload.callId)
-    }
-
-    private fun handleCallAnswer(envelope: WsRawEnvelope) {
-        val payload = WsParser.parsePayload<CallPayload>(envelope.payload) ?: return
-
-        if (payload.callId != currentCallId) return
-        if (state != CallState.OUTGOING_INITIATING && state != CallState.RINGING) return
-
-        // Validate and verify signature
-        val nonceBytes = try {
-            cryptoProvider.decodeBase64WithLength(payload.nonce, 24)
-        } catch (e: Exception) {
-            return
+        val contact = contactDao.getContactById(call.peerId)
+        val recipientPublicKey = contact?.encPublicKey?.let {
+            Base64.decode(it, Base64.NO_WRAP)
         }
 
-        val senderSignPubKey = keyStore.getSignPublicKey(payload.from) ?: return
-        val myWhisperId = myKeysProvider.getWhisperId() ?: return
-
-        val valid = cryptoProvider.verifyCanonical(
-            signatureB64 = payload.sig,
-            messageType = MESSAGE_TYPE_CALL_ANSWER,
-            messageId = payload.callId,
-            from = payload.from,
-            to = myWhisperId,
-            timestamp = payload.timestamp,
-            nonceB64 = payload.nonce,
-            ciphertextB64 = payload.ciphertext,
-            publicKey = senderSignPubKey
-        )
-
-        if (!valid) return
-
-        // Decrypt SDP answer
-        val senderEncPubKey = keyStore.getEncPublicKey(payload.from) ?: return
-        val myEncPrivKey = myKeysProvider.getEncPrivateKey() ?: return
-        val ciphertextBytes = cryptoProvider.decodeBase64(payload.ciphertext)
-
-        val sdpAnswerBytes = try {
-            cryptoProvider.open(ciphertextBytes, nonceBytes, senderEncPubKey, myEncPrivKey)
-        } catch (e: Exception) {
-            return
-        }
-
-        val sdpAnswer = String(sdpAnswerBytes, Charsets.UTF_8)
-
-        state = CallState.CONNECTING
-
-        // Set remote description
-        scope.launch {
+        if (recipientPublicKey != null) {
             try {
-                webRtcService.setRemoteDescription(sdpAnswer, WebRtcService.SdpType.ANSWER)
-                flushIceBuffer()
+                val message = "end"
+                val nonce = cryptoService.generateNonce()
+                val ciphertext = cryptoService.boxSeal(
+                    message.toByteArray(Charsets.UTF_8),
+                    nonce,
+                    recipientPublicKey,
+                    encPrivateKey
+                )
+
+                val timestamp = System.currentTimeMillis()
+
+                val signature = cryptoService.signMessage(
+                    Constants.MsgType.CALL_END,
+                    call.callId,
+                    whisperId,
+                    call.peerId,
+                    timestamp,
+                    nonce,
+                    ciphertext,
+                    signPrivateKey
+                )
+
+                val payload = CallEndPayload(
+                    sessionToken = sessionToken,
+                    callId = call.callId,
+                    from = whisperId,
+                    to = call.peerId,
+                    timestamp = timestamp,
+                    nonce = Base64.encodeToString(nonce, Base64.NO_WRAP),
+                    ciphertext = Base64.encodeToString(ciphertext, Base64.NO_WRAP),
+                    sig = Base64.encodeToString(signature, Base64.NO_WRAP),
+                    reason = reason.name.lowercase()
+                )
+
+                wsClient.send(WsFrame(Constants.MsgType.CALL_END, payload = payload))
             } catch (e: Exception) {
-                handleCallError(payload.callId, e.message ?: "Failed to set remote description")
+                Logger.e("Failed to send call end", e)
             }
         }
+
+        _callState.value = CallState.Ended(reason)
+        recordCallToHistory(call, reason)
+        cleanup()
     }
 
-    private fun handleIceCandidate(envelope: WsRawEnvelope) {
-        val payload = WsParser.parsePayload<CallPayload>(envelope.payload) ?: return
+    // MARK: - Call Controls
 
-        if (payload.callId != currentCallId) return
+    fun toggleMute() {
+        localAudioTrack?.setEnabled(!(localAudioTrack?.enabled() ?: false))
+        _activeCall.value = _activeCall.value?.copy(isMuted = !(localAudioTrack?.enabled() ?: true))
+    }
 
-        // Validate signature
-        val nonceBytes = try {
-            cryptoProvider.decodeBase64WithLength(payload.nonce, 24)
-        } catch (e: Exception) {
-            return
-        }
+    fun toggleSpeaker() {
+        val currentCall = _activeCall.value ?: return
+        val newSpeakerState = !currentCall.isSpeakerOn
+        audioManager.isSpeakerphoneOn = newSpeakerState
+        _activeCall.value = currentCall.copy(isSpeakerOn = newSpeakerState)
+    }
 
-        val senderSignPubKey = keyStore.getSignPublicKey(payload.from) ?: return
-        val myWhisperId = myKeysProvider.getWhisperId() ?: return
+    fun toggleLocalVideo() {
+        localVideoTrack?.setEnabled(!(localVideoTrack?.enabled() ?: false))
+        _activeCall.value = _activeCall.value?.copy(isLocalVideoEnabled = localVideoTrack?.enabled() ?: false)
+    }
 
-        val valid = cryptoProvider.verifyCanonical(
-            signatureB64 = payload.sig,
-            messageType = MESSAGE_TYPE_CALL_ICE_CANDIDATE,
-            messageId = payload.callId,
-            from = payload.from,
-            to = myWhisperId,
-            timestamp = payload.timestamp,
-            nonceB64 = payload.nonce,
-            ciphertextB64 = payload.ciphertext,
-            publicKey = senderSignPubKey
-        )
+    fun switchCamera() {
+        videoCapturer?.switchCamera(null)
+    }
 
-        if (!valid) return
+    fun setLocalVideoSink(sink: VideoSink?) {
+        localVideoSink = sink
+        localVideoTrack?.addSink(sink)
+    }
 
-        // Decrypt ICE candidate
-        val senderEncPubKey = keyStore.getEncPublicKey(payload.from) ?: return
-        val myEncPrivKey = myKeysProvider.getEncPrivateKey() ?: return
-        val ciphertextBytes = cryptoProvider.decodeBase64(payload.ciphertext)
+    fun setRemoteVideoSink(sink: VideoSink?) {
+        remoteVideoSink = sink
+    }
 
-        val candidateBytes = try {
-            cryptoProvider.open(ciphertextBytes, nonceBytes, senderEncPubKey, myEncPrivKey)
-        } catch (e: Exception) {
-            return
-        }
+    // MARK: - WebRTC Setup
 
-        val candidate = String(candidateBytes, Charsets.UTF_8)
+    private fun createPeerConnection(isVideo: Boolean) {
+        val factory = peerConnectionFactory ?: return
 
-        // Buffer if remote description not set yet
-        if (!webRtcService.hasRemoteDescription()) {
-            iceBuffer.add(candidate)
-            return
-        }
+        val iceServers = mutableListOf<PeerConnection.IceServer>()
 
-        // Add ICE candidate
-        scope.launch {
-            try {
-                webRtcService.addIceCandidate(candidate)
-            } catch (e: Exception) {
-                // Log error but don't fail the call
+        // Add TURN servers if available
+        _turnCredentials.value?.let { turn ->
+            turn.urls.forEach { url ->
+                iceServers.add(
+                    PeerConnection.IceServer.builder(url)
+                        .setUsername(turn.username)
+                        .setPassword(turn.credential)
+                        .createIceServer()
+                )
             }
         }
-    }
 
-    private fun flushIceBuffer() {
-        scope.launch {
-            while (iceBuffer.isNotEmpty()) {
-                val candidate = iceBuffer.poll() ?: break
-                try {
-                    webRtcService.addIceCandidate(candidate)
-                } catch (e: Exception) {
-                    // Log but continue
+        val config = PeerConnection.RTCConfiguration(iceServers).apply {
+            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
+        }
+
+        peerConnection = factory.createPeerConnection(config, object : PeerConnection.Observer {
+            override fun onSignalingChange(state: PeerConnection.SignalingState?) {
+                Logger.d("Signaling state: $state")
+            }
+
+            override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) {
+                Logger.d("ICE connection state: $state")
+                scope.launch {
+                    when (state) {
+                        PeerConnection.IceConnectionState.CONNECTED,
+                        PeerConnection.IceConnectionState.COMPLETED -> {
+                            _callState.value = CallState.Connected
+                            _activeCall.value?.let { call ->
+                                _activeCall.value = call.copy(startTime = System.currentTimeMillis())
+                            }
+                            startCallDurationTimer()
+                        }
+                        PeerConnection.IceConnectionState.DISCONNECTED -> {
+                            _callState.value = CallState.Reconnecting
+                        }
+                        PeerConnection.IceConnectionState.FAILED -> {
+                            endCall(CallEndReason.FAILED)
+                        }
+                        else -> {}
+                    }
+                }
+            }
+
+            override fun onIceConnectionReceivingChange(receiving: Boolean) {}
+
+            override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {
+                Logger.d("ICE gathering state: $state")
+            }
+
+            override fun onIceCandidate(candidate: IceCandidate?) {
+                candidate?.let {
+                    scope.launch {
+                        sendIceCandidate(it)
+                    }
+                }
+            }
+
+            override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) {}
+
+            override fun onAddStream(stream: MediaStream?) {
+                stream?.videoTracks?.firstOrNull()?.let { remoteVideoTrack ->
+                    remoteVideoSink?.let { sink ->
+                        remoteVideoTrack.addSink(sink)
+                    }
+                }
+            }
+
+            override fun onRemoveStream(stream: MediaStream?) {}
+
+            override fun onDataChannel(channel: DataChannel?) {}
+
+            override fun onRenegotiationNeeded() {}
+
+            override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out MediaStream>?) {
+                receiver?.track()?.let { track ->
+                    if (track is VideoTrack) {
+                        remoteVideoSink?.let { sink ->
+                            track.addSink(sink)
+                        }
+                    }
+                }
+            }
+        })
+
+        // Add audio track
+        val audioConstraints = MediaConstraints()
+        val audioSource = factory.createAudioSource(audioConstraints)
+        localAudioTrack = factory.createAudioTrack("audio0", audioSource)
+        localAudioTrack?.let { track ->
+            peerConnection?.addTrack(track, listOf("stream0"))
+        }
+
+        // Add video track if video call
+        if (isVideo) {
+            val eglBase = EglBase.create()
+            surfaceTextureHelper = SurfaceTextureHelper.create("CaptureThread", eglBase.eglBaseContext)
+
+            val videoSource = factory.createVideoSource(false)
+            videoCapturer = createCameraCapturer()
+            videoCapturer?.initialize(surfaceTextureHelper, context, videoSource.capturerObserver)
+            videoCapturer?.startCapture(1280, 720, 30)
+
+            localVideoTrack = factory.createVideoTrack("video0", videoSource)
+            localVideoTrack?.let { track ->
+                peerConnection?.addTrack(track, listOf("stream0"))
+                localVideoSink?.let { sink ->
+                    track.addSink(sink)
                 }
             }
         }
     }
 
-    private fun handleCallEnd(envelope: WsRawEnvelope) {
-        val payload = WsParser.parsePayload<CallPayload>(envelope.payload) ?: return
+    private fun createCameraCapturer(): CameraVideoCapturer? {
+        val camera2Enumerator = Camera2Enumerator(context)
+        val deviceNames = camera2Enumerator.deviceNames
 
-        if (payload.callId != currentCallId) return
+        // Try front camera first
+        for (deviceName in deviceNames) {
+            if (camera2Enumerator.isFrontFacing(deviceName)) {
+                return camera2Enumerator.createCapturer(deviceName, null)
+            }
+        }
 
-        // Idempotency check
-        if (endedCallIds.contains(payload.callId)) return
+        // Fall back to any camera
+        for (deviceName in deviceNames) {
+            return camera2Enumerator.createCapturer(deviceName, null)
+        }
 
-        cleanup(payload.callId, payload.reason ?: CallEndReason.ENDED)
+        return null
     }
 
-    // =========================================================================
-    // INTERNAL HELPERS
-    // =========================================================================
+    private suspend fun createOffer(): String = suspendCancellableCoroutine { cont ->
+        val constraints = MediaConstraints().apply {
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo",
+                if (_activeCall.value?.isVideo == true) "true" else "false"))
+        }
 
-    private fun cleanup(callId: String, reason: String) {
-        if (currentCallId != callId) return
+        peerConnection?.createOffer(object : SdpObserver {
+            override fun onCreateSuccess(desc: SessionDescription?) {
+                peerConnection?.setLocalDescription(SdpObserverAdapter(), desc)
+                cont.resume(desc?.description ?: "") {}
+            }
+            override fun onSetSuccess() {}
+            override fun onCreateFailure(error: String?) {
+                cont.resumeWith(Result.failure(Exception(error)))
+            }
+            override fun onSetFailure(error: String?) {}
+        }, constraints)
+    }
 
-        endedCallIds.add(callId)
-        state = CallState.ENDED
+    private suspend fun createAnswer(): String = suspendCancellableCoroutine { cont ->
+        val constraints = MediaConstraints().apply {
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo",
+                if (_activeCall.value?.isVideo == true) "true" else "false"))
+        }
 
-        webRtcService.close()
-        uiService.dismissCallUi(callId, reason)
+        peerConnection?.createAnswer(object : SdpObserver {
+            override fun onCreateSuccess(desc: SessionDescription?) {
+                peerConnection?.setLocalDescription(SdpObserverAdapter(), desc)
+                cont.resume(desc?.description ?: "") {}
+            }
+            override fun onSetSuccess() {}
+            override fun onCreateFailure(error: String?) {
+                cont.resumeWith(Result.failure(Exception(error)))
+            }
+            override fun onSetFailure(error: String?) {}
+        }, constraints)
+    }
 
-        iceBuffer.clear()
-        currentCallId = null
-        currentPeerId = null
-        isVideoCall = false
+    private fun configureAudioSession() {
+        audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+        audioManager.isSpeakerphoneOn = _activeCall.value?.isVideo == true
+    }
 
-        // Transition back to IDLE after a short delay
-        scope.launch {
-            delay(100)
-            if (state == CallState.ENDED) {
-                state = CallState.IDLE
+    // MARK: - ICE Candidate
+
+    private suspend fun sendIceCandidate(candidate: IceCandidate) {
+        val call = _activeCall.value ?: return
+        val whisperId = secureStorage.whisperId ?: return
+        val sessionToken = secureStorage.sessionToken ?: return
+        val encPrivateKey = secureStorage.encPrivateKey ?: return
+        val signPrivateKey = secureStorage.signPrivateKey ?: return
+
+        val contact = contactDao.getContactById(call.peerId)
+        val recipientPublicKey = contact?.encPublicKey?.let {
+            Base64.decode(it, Base64.NO_WRAP)
+        } ?: return
+
+        try {
+            val candidateJson = JSONObject().apply {
+                put("sdpMLineIndex", candidate.sdpMLineIndex)
+                put("sdpMid", candidate.sdpMid)
+                put("candidate", candidate.sdp)
+            }.toString()
+
+            val nonce = cryptoService.generateNonce()
+            val ciphertext = cryptoService.boxSeal(
+                candidateJson.toByteArray(Charsets.UTF_8),
+                nonce,
+                recipientPublicKey,
+                encPrivateKey
+            )
+
+            val timestamp = System.currentTimeMillis()
+
+            val signature = cryptoService.signMessage(
+                Constants.MsgType.CALL_ICE_CANDIDATE,
+                call.callId,
+                whisperId,
+                call.peerId,
+                timestamp,
+                nonce,
+                ciphertext,
+                signPrivateKey
+            )
+
+            val payload = CallIceCandidatePayload(
+                sessionToken = sessionToken,
+                callId = call.callId,
+                from = whisperId,
+                to = call.peerId,
+                timestamp = timestamp,
+                nonce = Base64.encodeToString(nonce, Base64.NO_WRAP),
+                ciphertext = Base64.encodeToString(ciphertext, Base64.NO_WRAP),
+                sig = Base64.encodeToString(signature, Base64.NO_WRAP)
+            )
+
+            wsClient.send(WsFrame(Constants.MsgType.CALL_ICE_CANDIDATE, payload = payload))
+        } catch (e: Exception) {
+            Logger.e("Failed to send ICE candidate", e)
+        }
+    }
+
+    // MARK: - Message Handling
+
+    private fun handleMessage(frame: WsFrame<JsonElement>) {
+        when (frame.type) {
+            Constants.MsgType.TURN_CREDENTIALS -> handleTurnCredentials(frame)
+            Constants.MsgType.CALL_INCOMING -> handleCallIncoming(frame)
+            Constants.MsgType.CALL_ANSWER -> handleCallAnswer(frame)
+            Constants.MsgType.CALL_ICE_CANDIDATE -> handleIceCandidate(frame)
+            Constants.MsgType.CALL_END -> handleCallEnd(frame)
+            Constants.MsgType.CALL_RINGING -> handleCallRinging()
+        }
+    }
+
+    private fun handleTurnCredentials(frame: WsFrame<JsonElement>) {
+        try {
+            val payload = gson.fromJson(frame.payload, TurnCredentialsPayload::class.java)
+            _turnCredentials.value = payload
+        } catch (e: Exception) {
+            Logger.e("Failed to parse TURN credentials", e)
+        }
+    }
+
+    private fun handleCallIncoming(frame: WsFrame<JsonElement>) {
+        try {
+            val payload = gson.fromJson(frame.payload, CallIncomingPayload::class.java)
+            pendingIncomingCall = payload
+
+            scope.launch {
+                val contact = contactDao.getContactById(payload.from)
+                _activeCall.value = ActiveCall(
+                    callId = payload.callId,
+                    peerId = payload.from,
+                    peerName = contact?.displayName,
+                    isVideo = payload.isVideo,
+                    isOutgoing = false
+                )
+                _callState.value = CallState.Ringing
+            }
+        } catch (e: Exception) {
+            Logger.e("Failed to handle incoming call", e)
+        }
+    }
+
+    private fun handleCallAnswer(frame: WsFrame<JsonElement>) {
+        try {
+            val payload = gson.fromJson(frame.payload, CallAnswerPayload::class.java)
+            val encPrivateKey = secureStorage.encPrivateKey ?: return
+
+            scope.launch {
+                val contact = contactDao.getContactById(payload.from)
+                val senderPublicKey = contact?.encPublicKey?.let {
+                    Base64.decode(it, Base64.NO_WRAP)
+                } ?: return@launch
+
+                // Decrypt SDP answer
+                val ciphertextData = Base64.decode(payload.ciphertext, Base64.NO_WRAP)
+                val nonceData = Base64.decode(payload.nonce, Base64.NO_WRAP)
+
+                val sdpAnswer = String(
+                    cryptoService.boxOpen(ciphertextData, nonceData, senderPublicKey, encPrivateKey),
+                    Charsets.UTF_8
+                )
+
+                val remoteDesc = SessionDescription(SessionDescription.Type.ANSWER, sdpAnswer)
+                peerConnection?.setRemoteDescription(SdpObserverAdapter(), remoteDesc)
+
+                // Process pending ICE candidates
+                pendingIceCandidates.forEach { candidate ->
+                    peerConnection?.addIceCandidate(candidate)
+                }
+                pendingIceCandidates.clear()
+
+                _callState.value = CallState.Connecting
+            }
+        } catch (e: Exception) {
+            Logger.e("Failed to handle call answer", e)
+        }
+    }
+
+    private fun handleIceCandidate(frame: WsFrame<JsonElement>) {
+        try {
+            val payload = gson.fromJson(frame.payload, CallIceCandidatePayload::class.java)
+            val encPrivateKey = secureStorage.encPrivateKey ?: return
+
+            scope.launch {
+                val contact = contactDao.getContactById(payload.from)
+                val senderPublicKey = contact?.encPublicKey?.let {
+                    Base64.decode(it, Base64.NO_WRAP)
+                } ?: return@launch
+
+                val ciphertextData = Base64.decode(payload.ciphertext, Base64.NO_WRAP)
+                val nonceData = Base64.decode(payload.nonce, Base64.NO_WRAP)
+
+                val candidateString = String(
+                    cryptoService.boxOpen(ciphertextData, nonceData, senderPublicKey, encPrivateKey),
+                    Charsets.UTF_8
+                )
+
+                val json = JSONObject(candidateString)
+                val sdp = json.getString("candidate")
+                val sdpMLineIndex = json.getInt("sdpMLineIndex")
+                val sdpMid = json.optString("sdpMid")
+
+                val candidate = IceCandidate(sdpMid, sdpMLineIndex, sdp)
+
+                // If remote description not set yet, queue the candidate
+                if (peerConnection?.remoteDescription == null) {
+                    pendingIceCandidates.add(candidate)
+                } else {
+                    peerConnection?.addIceCandidate(candidate)
+                }
+            }
+        } catch (e: Exception) {
+            Logger.e("Failed to handle ICE candidate", e)
+        }
+    }
+
+    private fun handleCallEnd(frame: WsFrame<JsonElement>) {
+        try {
+            val payload = gson.fromJson(frame.payload, CallEndPayload::class.java)
+            val reason = try {
+                CallEndReason.valueOf(payload.reason.uppercase())
+            } catch (e: Exception) {
+                CallEndReason.ENDED
+            }
+
+            scope.launch {
+                _activeCall.value?.let { call ->
+                    recordCallToHistory(call, reason)
+                }
+                _callState.value = CallState.Ended(reason)
+                cleanup()
+            }
+        } catch (e: Exception) {
+            Logger.e("Failed to handle call end", e)
+        }
+    }
+
+    private fun handleCallRinging() {
+        _callState.value = CallState.Ringing
+    }
+
+    // MARK: - Call Duration Timer
+
+    private fun startCallDurationTimer() {
+        callDurationJob?.cancel()
+        callDurationJob = scope.launch {
+            while (isActive && _callState.value == CallState.Connected) {
+                delay(1000)
+                _callDuration.value += 1
             }
         }
     }
 
-    private fun handleCallError(callId: String, error: String) {
-        uiService.showError(callId, error)
-        sendCallEnd(callId, CallEndReason.FAILED)
-    }
+    // MARK: - Call History
 
-    /**
-     * Called when WebRTC connection is established
-     */
-    fun onWebRtcConnected() {
-        val callId = currentCallId ?: return
-        if (state == CallState.CONNECTING) {
-            state = CallState.IN_CALL
-            uiService.showOngoingCall(callId, currentPeerId ?: "", isVideoCall)
+    private suspend fun recordCallToHistory(call: ActiveCall, reason: CallEndReason) {
+        val status = when (reason) {
+            CallEndReason.ENDED -> if (call.startTime != null) "completed" else "cancelled"
+            CallEndReason.DECLINED -> if (call.isOutgoing) "no_answer" else "declined"
+            CallEndReason.BUSY -> "busy"
+            CallEndReason.TIMEOUT -> if (call.isOutgoing) "no_answer" else "missed"
+            CallEndReason.FAILED -> "failed"
+            CallEndReason.CANCELLED -> "cancelled"
         }
+
+        val duration = call.startTime?.let {
+            ((System.currentTimeMillis() - it) / 1000).toInt()
+        }
+
+        val record = CallRecordEntity(
+            callId = call.callId,
+            peerId = call.peerId,
+            peerName = call.peerName,
+            isVideo = call.isVideo,
+            direction = if (call.isOutgoing) "outgoing" else "incoming",
+            status = status,
+            duration = duration,
+            startedAt = call.startTime ?: System.currentTimeMillis(),
+            endedAt = System.currentTimeMillis()
+        )
+
+        callRecordDao.insert(record)
     }
 
-    /**
-     * Called when WebRTC connection fails
-     */
-    fun onWebRtcFailed(error: String) {
-        val callId = currentCallId ?: return
-        handleCallError(callId, error)
-    }
+    // MARK: - Cleanup
 
-    // =========================================================================
-    // EXCEPTIONS
-    // =========================================================================
+    private fun cleanup() {
+        callDurationJob?.cancel()
+        callDurationJob = null
+        _callDuration.value = 0
 
-    sealed class CallException(message: String) : Exception(message) {
-        class InvalidState(message: String) : CallException(message)
-        class NotAuthenticated : CallException("Not authenticated")
-        class TurnFailed(message: String) : CallException(message)
-        class WebRtcFailed(message: String) : CallException(message)
-        class SignatureInvalid : CallException("Signature verification failed")
-        class DecryptionFailed : CallException("Decryption failed")
-    }
+        videoCapturer?.stopCapture()
+        videoCapturer?.dispose()
+        videoCapturer = null
 
-    companion object {
-        // Message type constants for canonical signing
-        const val MESSAGE_TYPE_CALL_INITIATE = "call_initiate"
-        const val MESSAGE_TYPE_CALL_ANSWER = "call_answer"
-        const val MESSAGE_TYPE_CALL_RINGING = "call_ringing"
-        const val MESSAGE_TYPE_CALL_ICE_CANDIDATE = "call_ice_candidate"
-        const val MESSAGE_TYPE_CALL_END = "call_end"
+        surfaceTextureHelper?.dispose()
+        surfaceTextureHelper = null
+
+        localVideoTrack?.dispose()
+        localVideoTrack = null
+        localAudioTrack?.dispose()
+        localAudioTrack = null
+
+        peerConnection?.close()
+        peerConnection = null
+
+        pendingIceCandidates.clear()
+        pendingIncomingCall = null
+
+        _activeCall.value = null
+        _callState.value = CallState.Idle
+
+        // Reset audio
+        audioManager.mode = AudioManager.MODE_NORMAL
+        audioManager.isSpeakerphoneOn = false
     }
+}
+
+// SDP Observer adapter
+private class SdpObserverAdapter : SdpObserver {
+    override fun onCreateSuccess(desc: SessionDescription?) {}
+    override fun onSetSuccess() {}
+    override fun onCreateFailure(error: String?) {}
+    override fun onSetFailure(error: String?) {}
 }

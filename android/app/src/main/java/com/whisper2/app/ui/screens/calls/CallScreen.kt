@@ -1,0 +1,345 @@
+package com.whisper2.app.ui.screens.calls
+
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.whisper2.app.services.calls.CallEndReason
+import com.whisper2.app.services.calls.CallState
+import kotlinx.coroutines.delay
+
+@Composable
+fun CallScreen(
+    peerId: String? = null,
+    isVideo: Boolean = false,
+    isOutgoing: Boolean = true,
+    onCallEnded: () -> Unit,
+    viewModel: CallViewModel = hiltViewModel()
+) {
+    val context = LocalContext.current
+    val callState by viewModel.callState.collectAsState()
+    val activeCall by viewModel.activeCall.collectAsState()
+    val callDuration by viewModel.callDuration.collectAsState()
+
+    var permissionsGranted by remember { mutableStateOf(false) }
+    var permissionsDenied by remember { mutableStateOf(false) }
+
+    // Permissions needed for calls
+    val requiredPermissions = remember(isVideo) {
+        if (isVideo) {
+            arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
+        } else {
+            arrayOf(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    // Permission launcher
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val allGranted = permissions.values.all { it }
+        if (allGranted) {
+            permissionsGranted = true
+        } else {
+            permissionsDenied = true
+        }
+    }
+
+    // Check and request permissions on launch
+    LaunchedEffect(Unit) {
+        val allGranted = requiredPermissions.all { permission ->
+            ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+        }
+        if (allGranted) {
+            permissionsGranted = true
+        } else {
+            permissionLauncher.launch(requiredPermissions)
+        }
+    }
+
+    // Initiate outgoing call when permissions granted
+    LaunchedEffect(permissionsGranted, peerId, isVideo, isOutgoing) {
+        if (permissionsGranted && isOutgoing && peerId != null && callState == CallState.Idle) {
+            viewModel.initiateCall(peerId, isVideo)
+        }
+    }
+
+    // Handle call ended
+    LaunchedEffect(callState) {
+        if (callState is CallState.Ended) {
+            delay(1500) // Show end reason briefly
+            onCallEnded()
+        }
+    }
+
+    // Handle permissions denied
+    LaunchedEffect(permissionsDenied) {
+        if (permissionsDenied) {
+            delay(2000)
+            onCallEnded()
+        }
+    }
+
+    // Show permission denied message
+    if (permissionsDenied) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Icon(
+                    Icons.Default.MicOff,
+                    contentDescription = null,
+                    tint = Color.Red,
+                    modifier = Modifier.size(64.dp)
+                )
+                Text(
+                    text = if (isVideo) "Camera and microphone permission required"
+                           else "Microphone permission required",
+                    color = Color.White,
+                    fontSize = 16.sp
+                )
+                Text(
+                    text = "Please enable in Settings",
+                    color = Color.Gray,
+                    fontSize = 14.sp
+                )
+            }
+        }
+        return
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+    ) {
+        // Video views would go here for video calls
+        // For now, we show audio call UI
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Spacer(modifier = Modifier.height(60.dp))
+
+            // Avatar (for audio calls)
+            if (activeCall?.isVideo != true) {
+                Box(
+                    modifier = Modifier
+                        .size(100.dp)
+                        .clip(CircleShape)
+                        .background(Color.Gray.copy(alpha = 0.3f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = (activeCall?.peerName ?: activeCall?.peerId ?: "?").take(1).uppercase(),
+                        fontSize = 40.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Name
+            Text(
+                text = activeCall?.peerName ?: activeCall?.peerId ?: "Unknown",
+                fontSize = 24.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Status/Duration
+            Text(
+                text = getStatusText(callState, callDuration),
+                fontSize = 14.sp,
+                color = Color.Gray
+            )
+
+            Spacer(modifier = Modifier.weight(1f))
+
+            // Call controls
+            CallControlsView(
+                isMuted = activeCall?.isMuted ?: false,
+                isSpeakerOn = activeCall?.isSpeakerOn ?: false,
+                isVideoEnabled = activeCall?.isLocalVideoEnabled ?: true,
+                isVideo = activeCall?.isVideo ?: false,
+                onMuteToggle = { viewModel.toggleMute() },
+                onSpeakerToggle = { viewModel.toggleSpeaker() },
+                onVideoToggle = { viewModel.toggleLocalVideo() },
+                onCameraSwitch = { viewModel.switchCamera() },
+                onEndCall = { viewModel.endCall() }
+            )
+
+            Spacer(modifier = Modifier.height(50.dp))
+        }
+    }
+}
+
+@Composable
+private fun CallControlsView(
+    isMuted: Boolean,
+    isSpeakerOn: Boolean,
+    isVideoEnabled: Boolean,
+    isVideo: Boolean,
+    onMuteToggle: () -> Unit,
+    onSpeakerToggle: () -> Unit,
+    onVideoToggle: () -> Unit,
+    onCameraSwitch: () -> Unit,
+    onEndCall: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(24.dp)
+    ) {
+        // Top row of controls
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(40.dp)
+        ) {
+            // Mute
+            CallControlButton(
+                icon = if (isMuted) Icons.Default.MicOff else Icons.Default.Mic,
+                label = if (isMuted) "Unmute" else "Mute",
+                isActive = isMuted,
+                onClick = onMuteToggle
+            )
+
+            // Video toggle (video calls only)
+            if (isVideo) {
+                CallControlButton(
+                    icon = if (isVideoEnabled) Icons.Default.Videocam else Icons.Default.VideocamOff,
+                    label = if (isVideoEnabled) "Stop Video" else "Start Video",
+                    isActive = !isVideoEnabled,
+                    onClick = onVideoToggle
+                )
+            }
+
+            // Speaker
+            CallControlButton(
+                icon = if (isSpeakerOn) Icons.Default.VolumeUp else Icons.Default.VolumeDown,
+                label = if (isSpeakerOn) "Speaker On" else "Speaker",
+                isActive = isSpeakerOn,
+                onClick = onSpeakerToggle
+            )
+
+            // Switch camera (video calls only)
+            if (isVideo) {
+                CallControlButton(
+                    icon = Icons.Default.Cameraswitch,
+                    label = "Flip",
+                    isActive = false,
+                    onClick = onCameraSwitch
+                )
+            }
+        }
+
+        // End call button
+        IconButton(
+            onClick = onEndCall,
+            modifier = Modifier
+                .size(70.dp)
+                .clip(CircleShape)
+                .background(Color.Red)
+        ) {
+            Icon(
+                Icons.Default.CallEnd,
+                contentDescription = "End Call",
+                tint = Color.White,
+                modifier = Modifier.size(32.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun CallControlButton(
+    icon: ImageVector,
+    label: String,
+    isActive: Boolean,
+    onClick: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        IconButton(
+            onClick = onClick,
+            modifier = Modifier
+                .size(56.dp)
+                .clip(CircleShape)
+                .background(if (isActive) Color.White else Color.Gray.copy(alpha = 0.3f))
+        ) {
+            Icon(
+                icon,
+                contentDescription = label,
+                tint = if (isActive) Color.Black else Color.White,
+                modifier = Modifier.size(24.dp)
+            )
+        }
+
+        Text(
+            text = label,
+            fontSize = 10.sp,
+            color = Color.Gray
+        )
+    }
+}
+
+private fun getStatusText(callState: CallState, durationSeconds: Long): String {
+    return when (callState) {
+        CallState.Idle -> ""
+        CallState.Initiating -> "Calling..."
+        CallState.Ringing -> "Ringing..."
+        CallState.Connecting -> "Connecting..."
+        CallState.Connected -> formatDuration(durationSeconds)
+        CallState.Reconnecting -> "Reconnecting..."
+        is CallState.Ended -> getEndReasonText(callState.reason)
+    }
+}
+
+private fun formatDuration(seconds: Long): String {
+    val minutes = seconds / 60
+    val secs = seconds % 60
+    return String.format("%02d:%02d", minutes, secs)
+}
+
+private fun getEndReasonText(reason: CallEndReason): String {
+    return when (reason) {
+        CallEndReason.ENDED -> "Call ended"
+        CallEndReason.DECLINED -> "Call declined"
+        CallEndReason.BUSY -> "User busy"
+        CallEndReason.TIMEOUT -> "No answer"
+        CallEndReason.FAILED -> "Call failed"
+        CallEndReason.CANCELLED -> "Call cancelled"
+    }
+}

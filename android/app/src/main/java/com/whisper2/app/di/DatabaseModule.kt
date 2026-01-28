@@ -2,10 +2,8 @@ package com.whisper2.app.di
 
 import android.content.Context
 import androidx.room.Room
-import com.whisper2.app.storage.db.WhisperDatabase
-import com.whisper2.app.storage.db.dao.ContactDao
-import com.whisper2.app.storage.db.dao.ConversationDao
-import com.whisper2.app.storage.db.dao.MessageDao
+import com.whisper2.app.core.Constants
+import com.whisper2.app.data.local.db.WhisperDatabase
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -13,42 +11,19 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import javax.inject.Singleton
 
-/**
- * Database DI Module
- *
- * Provides Room database and DAOs.
- */
 @Module
 @InstallIn(SingletonComponent::class)
 object DatabaseModule {
-
-    @Provides
-    @Singleton
-    fun provideDatabase(@ApplicationContext context: Context): WhisperDatabase {
-        return Room.databaseBuilder(
-            context,
-            WhisperDatabase::class.java,
-            WhisperDatabase.DATABASE_NAME
-        )
-            .fallbackToDestructiveMigration() // For development - handle migrations properly in production
+    @Provides @Singleton
+    fun provideDatabase(@ApplicationContext ctx: Context): WhisperDatabase =
+        Room.databaseBuilder(ctx, WhisperDatabase::class.java, Constants.DATABASE_NAME)
+            .addMigrations(WhisperDatabase.MIGRATION_1_2)
             .build()
-    }
 
-    @Provides
-    @Singleton
-    fun provideMessageDao(database: WhisperDatabase): MessageDao {
-        return database.messageDao()
-    }
-
-    @Provides
-    @Singleton
-    fun provideConversationDao(database: WhisperDatabase): ConversationDao {
-        return database.conversationDao()
-    }
-
-    @Provides
-    @Singleton
-    fun provideContactDao(database: WhisperDatabase): ContactDao {
-        return database.contactDao()
-    }
+    @Provides fun messageDao(db: WhisperDatabase) = db.messageDao()
+    @Provides fun conversationDao(db: WhisperDatabase) = db.conversationDao()
+    @Provides fun contactDao(db: WhisperDatabase) = db.contactDao()
+    @Provides fun groupDao(db: WhisperDatabase) = db.groupDao()
+    @Provides fun outboxDao(db: WhisperDatabase) = db.outboxDao()
+    @Provides fun callRecordDao(db: WhisperDatabase) = db.callRecordDao()
 }

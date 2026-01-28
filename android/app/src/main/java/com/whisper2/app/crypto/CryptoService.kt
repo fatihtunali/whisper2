@@ -1,298 +1,197 @@
 package com.whisper2.app.crypto
 
 import android.util.Base64
-import com.whisper2.app.core.AuthException
-import com.whisper2.app.core.Constants
-import com.whisper2.app.core.CryptoException
-import com.whisper2.app.domain.model.WhisperID
-import com.whisper2.app.storage.SecureStorage
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import com.goterl.lazysodium.LazySodiumAndroid
+import java.security.MessageDigest
+import java.security.SecureRandom
+import javax.inject.Inject
+import javax.inject.Singleton
 
 /**
- * Main crypto service - single authority for all cryptographic operations
- * Thread-safe singleton (provided via CryptoModule)
- * Uses LazySodium for Box/SecretBox/Sign operations (server-compatible)
+ * Main crypto orchestrator.
+ * Provides unified interface to all crypto operations.
  */
-class CryptoService(
-    private val secureStorage: SecureStorage
+@Singleton
+class CryptoService @Inject constructor(
+    private val lazySodium: LazySodiumAndroid,
+    private val nonceGenerator: NonceGenerator,
+    private val naclBox: NaClBox,
+    private val naclSecretBox: NaClSecretBox,
+    private val signatures: Signatures,
+    private val canonicalSigning: CanonicalSigning
 ) {
-    // MARK: - State
+    private val keyDerivation = KeyDerivation(lazySodium)
+    private val secureRandom = SecureRandom()
 
-    private val _isInitialized = MutableStateFlow(false)
-    val isInitialized: StateFlow<Boolean> = _isInitialized.asStateFlow()
+    companion object {
+        // Base32 alphabet (matches server exactly)
+        private const val BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+    }
 
-    private val _whisperId = MutableStateFlow<String?>(null)
-    val whisperId: StateFlow<String?> = _whisperId.asStateFlow()
-
-    // MARK: - Keys (in-memory only, persisted to secure storage)
-
-    private var encryptionKeyPair: NaClBox.KeyPair? = null
-    private var signingKeyPair: Signatures.SigningKeyPair? = null
-    private var contactsKey: ByteArray? = null
-
-    // MARK: - Initialization
+    fun generateMnemonic(): String = BIP39.generateMnemonic(secureRandom)
+    fun generateMnemonic24(): String = BIP39.generateMnemonic24(secureRandom)
+    fun validateMnemonic(mnemonic: String): Boolean = BIP39.validateMnemonic(mnemonic)
+    fun deriveAllKeys(mnemonic: String) = keyDerivation.deriveAllKeys(mnemonic)
+    fun deriveKeys(mnemonic: String) = keyDerivation.deriveAllKeys(mnemonic)
+    fun generateNonce() = nonceGenerator.generateNonce()
+    fun generateKey() = nonceGenerator.generateKey()
 
     /**
-     * Initialize from existing secure storage data
+     * Generate a random Whisper ID in format WSP-XXXX-XXXX-XXXX
+     * Matches server implementation exactly:
+     * - Uses Base32 alphabet (A-Z, 2-7)
+     * - Last 2 characters of 3rd block are checksums
      */
-    suspend fun initializeFromStorage() {
-        val encPrivate = secureStorage.getBytes(Constants.StorageKey.ENC_PRIVATE_KEY)
-        val encPublic = secureStorage.getBytes(Constants.StorageKey.ENC_PUBLIC_KEY)
-        val signPrivate = secureStorage.getBytes(Constants.StorageKey.SIGN_PRIVATE_KEY)
-        val signPublic = secureStorage.getBytes(Constants.StorageKey.SIGN_PUBLIC_KEY)
-        val contactsKeyData = secureStorage.getBytes(Constants.StorageKey.CONTACTS_KEY)
-        val whisperIdString = secureStorage.getString(Constants.StorageKey.WHISPER_ID)
+    fun generateWhisperId(): String {
+        val randomBytes = ByteArray(10)
+        secureRandom.nextBytes(randomBytes)
 
-        if (encPrivate == null || encPublic == null ||
-            signPrivate == null || signPublic == null ||
-            contactsKeyData == null || whisperIdString == null
-        ) {
-            throw AuthException.NotAuthenticated()
+        // Generate 10 data characters
+        val dataChars = CharArray(10)
+        for (i in 0 until 10) {
+            val index = (randomBytes[i].toInt() and 0xFF) % 32
+            dataChars[i] = BASE32_ALPHABET[index]
         }
 
-        this.encryptionKeyPair = NaClBox.KeyPair(encPublic, encPrivate)
-        this.signingKeyPair = Signatures.SigningKeyPair(signPublic, signPrivate)
-        this.contactsKey = contactsKeyData
-        this._whisperId.value = whisperIdString
-        this._isInitialized.value = true
-    }
+        // Compute checksum1: XOR of all indices % 32
+        var checksum1 = 0
+        for (i in 0 until 10) {
+            checksum1 = checksum1 xor ((randomBytes[i].toInt() and 0xFF) % 32)
+        }
+        checksum1 = checksum1 % 32
 
-    /**
-     * Initialize from mnemonic (new account or recovery)
-     * NOTE: WhisperID is NOT generated here - it comes from server during registration
-     * After successful registration, call setWhisperId() with the server-provided value
-     */
-    suspend fun initializeFromMnemonic(mnemonic: String) {
-        // Validate mnemonic
-        if (!KeyDerivation.isValidMnemonic(mnemonic)) {
-            throw CryptoException.InvalidMnemonic()
+        // Compute checksum2: sum of all bytes % 32
+        var checksum2 = 0
+        for (i in 0 until 10) {
+            checksum2 = (checksum2 + (randomBytes[i].toInt() and 0xFF)) % 32
         }
 
-        // Derive all keys
-        val derivedKeys = KeyDerivation.deriveAllKeys(mnemonic)
+        // Format: WSP-XXXX-XXXX-XXXX
+        // Block1 = chars[0-3], Block2 = chars[4-7], Block3 = chars[8-9] + checksums
+        val block1 = String(dataChars, 0, 4)
+        val block2 = String(dataChars, 4, 4)
+        val block3 = String(dataChars, 8, 2) + BASE32_ALPHABET[checksum1] + BASE32_ALPHABET[checksum2]
 
-        // Generate key pairs
-        val encKP = NaClBox.keyPairFromSeed(derivedKeys.encSeed)
-        val signKP = Signatures.keyPairFromSeed(derivedKeys.signSeed)
-
-        // Store keys in secure storage (but NOT whisperId - that comes from server)
-        secureStorage.setBytes(Constants.StorageKey.ENC_PRIVATE_KEY, encKP.privateKey)
-        secureStorage.setBytes(Constants.StorageKey.ENC_PUBLIC_KEY, encKP.publicKey)
-        secureStorage.setBytes(Constants.StorageKey.SIGN_PRIVATE_KEY, signKP.privateKey)
-        secureStorage.setBytes(Constants.StorageKey.SIGN_PUBLIC_KEY, signKP.publicKey)
-        secureStorage.setBytes(Constants.StorageKey.CONTACTS_KEY, derivedKeys.contactsKey)
-
-        // Set in-memory
-        this.encryptionKeyPair = encKP
-        this.signingKeyPair = signKP
-        this.contactsKey = derivedKeys.contactsKey
-        // whisperId will be set later via setWhisperId() after server registration
-        this._isInitialized.value = true
+        return "WSP-$block1-$block2-$block3"
     }
 
     /**
-     * Set WhisperID after receiving from server
-     * Called after successful registration or recovery
+     * Derive Whisper ID from public key deterministically.
+     * Uses rejection sampling to avoid modulo bias.
+     * Format: WSP-XXXX-XXXX-XXXX with Base32 alphabet and checksums.
      */
-    suspend fun setWhisperId(whisperId: String) {
-        if (!WhisperID.isValid(whisperId)) {
-            throw CryptoException.InvalidWhisperId()
-        }
-        this._whisperId.value = whisperId
-        secureStorage.setString(Constants.StorageKey.WHISPER_ID, whisperId)
-    }
+    fun deriveWhisperIdFromPublicKey(publicKey: ByteArray): String {
+        val charCount = 32 // Base32 has 32 characters
+        val dataBytes = mutableListOf<Int>()
 
-    /**
-     * Generate new mnemonic
-     */
-    fun generateMnemonic(): String {
-        return KeyDerivation.generateMnemonic()
-    }
+        var byteIndex = 0
+        var currentBytes = publicKey.copyOf()
 
-    // MARK: - Public Key Access
+        // Generate 10 data bytes (with rejection sampling)
+        while (dataBytes.size < 10) {
+            // If we've exhausted all bytes, extend with hash
+            if (byteIndex >= currentBytes.size) {
+                val counter = byteIndex / publicKey.size
+                val hashInput = ByteArray(publicKey.size + 4)
+                System.arraycopy(publicKey, 0, hashInput, 0, publicKey.size)
+                hashInput[publicKey.size] = ((counter shr 24) and 0xff).toByte()
+                hashInput[publicKey.size + 1] = ((counter shr 16) and 0xff).toByte()
+                hashInput[publicKey.size + 2] = ((counter shr 8) and 0xff).toByte()
+                hashInput[publicKey.size + 3] = (counter and 0xff).toByte()
 
-    val encryptionPublicKey: ByteArray?
-        get() = encryptionKeyPair?.publicKey
+                currentBytes = MessageDigest.getInstance("SHA-256").digest(hashInput)
+                byteIndex = byteIndex % publicKey.size
+            }
 
-    val encryptionPublicKeyBase64: String?
-        get() = encryptionKeyPair?.publicKey?.let {
-            Base64.encodeToString(it, Base64.NO_WRAP)
-        }
+            val byte = currentBytes[byteIndex % currentBytes.size].toInt() and 0xFF
+            byteIndex++
 
-    val signingPublicKey: ByteArray?
-        get() = signingKeyPair?.publicKey
+            // Rejection sampling to avoid modulo bias
+            // 256 % 32 = 0, so no bias for Base32, but keep the pattern for consistency
+            val limit = 256 - (256 % charCount)
+            if (byte >= limit) {
+                continue // Reject this byte and try next
+            }
 
-    val signingPublicKeyBase64: String?
-        get() = signingKeyPair?.publicKey?.let {
-            Base64.encodeToString(it, Base64.NO_WRAP)
+            dataBytes.add(byte)
         }
 
-    // MARK: - Box Encryption (for messages)
+        // Generate 10 data characters
+        val dataChars = CharArray(10)
+        for (i in 0 until 10) {
+            val index = dataBytes[i] % 32
+            dataChars[i] = BASE32_ALPHABET[index]
+        }
 
-    /**
-     * Encrypt message for recipient
-     */
-    fun boxSeal(message: ByteArray, recipientPublicKey: ByteArray): Pair<ByteArray, ByteArray> {
-        val keyPair = encryptionKeyPair ?: throw CryptoException.InvalidPrivateKey()
-        return NaClBox.seal(message, recipientPublicKey, keyPair.privateKey)
+        // Compute checksum1: XOR of all indices % 32
+        var checksum1 = 0
+        for (i in 0 until 10) {
+            checksum1 = checksum1 xor (dataBytes[i] % 32)
+        }
+        checksum1 = checksum1 % 32
+
+        // Compute checksum2: sum of all bytes % 32
+        var checksum2 = 0
+        for (i in 0 until 10) {
+            checksum2 = (checksum2 + dataBytes[i]) % 32
+        }
+
+        // Format: WSP-XXXX-XXXX-XXXX
+        // Block1 = chars[0-3], Block2 = chars[4-7], Block3 = chars[8-9] + checksums
+        val block1 = String(dataChars, 0, 4)
+        val block2 = String(dataChars, 4, 4)
+        val block3 = String(dataChars, 8, 2) + BASE32_ALPHABET[checksum1] + BASE32_ALPHABET[checksum2]
+
+        return "WSP-$block1-$block2-$block3"
     }
 
     /**
-     * Decrypt message from sender
+     * Derive Whisper ID from base64-encoded public key
      */
-    fun boxOpen(ciphertext: ByteArray, nonce: ByteArray, senderPublicKey: ByteArray): ByteArray {
-        val keyPair = encryptionKeyPair ?: throw CryptoException.InvalidPrivateKey()
-        return NaClBox.open(ciphertext, nonce, senderPublicKey, keyPair.privateKey)
+    fun deriveWhisperIdFromPublicKeyBase64(publicKeyBase64: String): String {
+        return try {
+            val publicKeyData = Base64.decode(publicKeyBase64, Base64.NO_WRAP)
+            deriveWhisperIdFromPublicKey(publicKeyData)
+        } catch (e: Exception) {
+            generateWhisperId()
+        }
     }
 
-    // MARK: - SecretBox Encryption (for attachments/backups)
+    fun boxSeal(message: ByteArray, nonce: ByteArray, recipientPubKey: ByteArray, senderPrivKey: ByteArray) =
+        naclBox.seal(message, nonce, recipientPubKey, senderPrivKey)
 
-    /**
-     * Encrypt with contacts key (for backup)
-     */
-    fun secretBoxSealWithContactsKey(message: ByteArray): Pair<ByteArray, ByteArray> {
-        val key = contactsKey ?: throw CryptoException.InvalidPrivateKey()
-        return NaClSecretBox.seal(message, key)
-    }
+    fun boxOpen(ciphertext: ByteArray, nonce: ByteArray, senderPubKey: ByteArray, recipientPrivKey: ByteArray) =
+        naclBox.open(ciphertext, nonce, senderPubKey, recipientPrivKey)
 
-    /**
-     * Decrypt with contacts key (for backup)
-     */
-    fun secretBoxOpenWithContactsKey(ciphertext: ByteArray, nonce: ByteArray): ByteArray {
-        val key = contactsKey ?: throw CryptoException.InvalidPrivateKey()
-        return NaClSecretBox.open(ciphertext, nonce, key)
-    }
+    fun secretBoxSeal(message: ByteArray, nonce: ByteArray, key: ByteArray) =
+        naclSecretBox.seal(message, nonce, key)
 
-    /**
-     * Encrypt with random key (for attachments)
-     */
-    fun secretBoxSeal(message: ByteArray, key: ByteArray): Pair<ByteArray, ByteArray> {
-        return NaClSecretBox.seal(message, key)
-    }
+    fun secretBoxOpen(ciphertext: ByteArray, nonce: ByteArray, key: ByteArray) =
+        naclSecretBox.open(ciphertext, nonce, key)
 
-    /**
-     * Decrypt with provided key
-     */
-    fun secretBoxOpen(ciphertext: ByteArray, nonce: ByteArray, key: ByteArray): ByteArray {
-        return NaClSecretBox.open(ciphertext, nonce, key)
-    }
+    fun signChallenge(challenge: ByteArray, privateKey: ByteArray) =
+        signatures.signChallenge(challenge, privateKey)
 
-    /**
-     * Generate random file key
-     */
-    fun generateFileKey(): ByteArray {
-        return NaClSecretBox.generateKey()
-    }
-
-    // MARK: - Signing
-
-    /**
-     * Sign data
-     */
-    fun sign(message: ByteArray): ByteArray {
-        val keyPair = signingKeyPair ?: throw CryptoException.InvalidPrivateKey()
-        return Signatures.sign(message, keyPair.privateKey)
-    }
-
-    /**
-     * Sign and return base64
-     */
-    fun signBase64(message: ByteArray): String {
-        return Base64.encodeToString(sign(message), Base64.NO_WRAP)
-    }
-
-    /**
-     * Verify signature
-     */
-    fun verify(signature: ByteArray, message: ByteArray, publicKey: ByteArray): Boolean {
-        return Signatures.verify(signature, message, publicKey)
-    }
-
-    // MARK: - Canonical Signing
-
-    /**
-     * Sign message canonically
-     */
-    fun signCanonical(
-        messageType: String,
-        messageId: String,
-        to: String,
-        timestamp: Long,
-        nonce: ByteArray,
-        ciphertext: ByteArray
-    ): String {
-        val keyPair = signingKeyPair ?: throw CryptoException.InvalidPrivateKey()
-        val wid = _whisperId.value ?: throw CryptoException.InvalidPrivateKey()
-
-        return CanonicalSigning.signCanonicalBase64(
-            messageType = messageType,
-            messageId = messageId,
-            from = wid,
-            to = to,
-            timestamp = timestamp,
-            nonce = nonce,
-            ciphertext = ciphertext,
-            privateKey = keyPair.privateKey
-        )
-    }
-
-    /**
-     * Verify canonical signature
-     */
-    fun verifyCanonical(
-        signatureB64: String,
+    fun signMessage(
         messageType: String,
         messageId: String,
         from: String,
-        to: String,
+        toOrGroupId: String,
         timestamp: Long,
-        nonceB64: String,
-        ciphertextB64: String,
-        senderPublicKey: ByteArray
-    ): Boolean {
-        return CanonicalSigning.verifyCanonicalBase64(
-            signatureB64 = signatureB64,
-            messageType = messageType,
-            messageId = messageId,
-            from = from,
-            to = to,
-            timestamp = timestamp,
-            nonceB64 = nonceB64,
-            ciphertextB64 = ciphertextB64,
-            publicKey = senderPublicKey
-        )
-    }
+        nonce: ByteArray,
+        ciphertext: ByteArray,
+        privateKey: ByteArray
+    ) = canonicalSigning.signMessage(messageType, messageId, from, toOrGroupId, timestamp, nonce, ciphertext, privateKey)
 
-    // MARK: - Challenge Signing (auth)
-
-    /**
-     * Sign registration challenge
-     */
-    fun signChallenge(challengeB64: String): String {
-        val keyPair = signingKeyPair ?: throw CryptoException.InvalidPrivateKey()
-        return CanonicalSigning.signChallengeBase64(challengeB64, keyPair.privateKey)
-    }
-
-    // MARK: - Cleanup
-
-    /**
-     * Clear all keys from memory and secure storage
-     */
-    suspend fun clear() {
-        encryptionKeyPair = null
-        signingKeyPair = null
-        contactsKey = null
-        _whisperId.value = null
-        _isInitialized.value = false
-
-        // Clear from secure storage
-        secureStorage.remove(Constants.StorageKey.ENC_PRIVATE_KEY)
-        secureStorage.remove(Constants.StorageKey.ENC_PUBLIC_KEY)
-        secureStorage.remove(Constants.StorageKey.SIGN_PRIVATE_KEY)
-        secureStorage.remove(Constants.StorageKey.SIGN_PUBLIC_KEY)
-        secureStorage.remove(Constants.StorageKey.CONTACTS_KEY)
-        secureStorage.remove(Constants.StorageKey.WHISPER_ID)
-    }
+    fun verifyMessage(
+        messageType: String,
+        messageId: String,
+        from: String,
+        toOrGroupId: String,
+        timestamp: Long,
+        nonce: ByteArray,
+        ciphertext: ByteArray,
+        signature: ByteArray,
+        publicKey: ByteArray
+    ) = canonicalSigning.verifyMessage(messageType, messageId, from, toOrGroupId, timestamp, nonce, ciphertext, signature, publicKey)
 }

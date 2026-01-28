@@ -1,233 +1,235 @@
 package com.whisper2.app.services.attachments
 
+import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
 import android.util.Base64
-import com.whisper2.app.crypto.NaClSecretBox
-import com.whisper2.app.network.api.*
+import android.webkit.MimeTypeMap
+import com.whisper2.app.core.Constants
+import com.whisper2.app.core.Logger
+import com.whisper2.app.crypto.CryptoService
+import com.whisper2.app.data.local.prefs.SecureStorage
+import com.whisper2.app.data.network.api.AttachmentsApi
+import com.whisper2.app.data.network.api.PresignUploadRequest
+import com.whisper2.app.data.network.ws.AttachmentPointer
+import com.whisper2.app.data.network.ws.FileKeyBox
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.File
+import javax.inject.Inject
+import javax.inject.Singleton
 
 /**
- * Step 10: Attachment Service
+ * Service for uploading encrypted attachments.
  *
- * Handles upload and download of encrypted attachments.
- *
- * Upload flow:
- * 1. Generate random fileKey (32 bytes) and fileNonce (24 bytes)
- * 2. Encrypt file with secretbox(plaintext, fileNonce, fileKey)
- * 3. Get presigned upload URL
- * 4. PUT ciphertext to uploadUrl with required headers
- * 5. Encrypt fileKey with conversation key -> fileKeyBox
- * 6. Return AttachmentPointer
- *
- * Download flow:
- * 1. Check cache - if present, return cached data
- * 2. Decrypt fileKey from fileKeyBox using conversation key
- * 3. Get presigned download URL
- * 4. GET ciphertext from downloadUrl
- * 5. Decrypt with secretbox_open(ciphertext, fileNonce, fileKey)
- * 6. Cache and return plaintext
+ * Encryption flow:
+ * 1. Generate random 32-byte file key
+ * 2. Generate random 24-byte nonce
+ * 3. Encrypt file content with secretbox(content, nonce, fileKey)
+ * 4. Upload encrypted content to S3 via presigned URL
+ * 5. Encrypt fileKey to recipient: box(fileKey, fileKeyNonce, recipientPubKey, senderPrivKey)
+ * 6. Return AttachmentPointer with all encryption info
  */
-class AttachmentService(
-    private val api: AttachmentsApi,
-    private val blobClient: BlobHttpClient,
-    private val cache: AttachmentCache,
-    // Injectable crypto functions for testing
-    private val keyGenerator: () -> ByteArray = { NaClSecretBox.generateKey() },
-    private val nonceGenerator: () -> ByteArray = { NaClSecretBox.generateNonce() },
-    private val encryptor: (plaintext: ByteArray, nonce: ByteArray, key: ByteArray) -> ByteArray = { p, n, k ->
-        NaClSecretBox.seal(p, n, k)
-    },
-    private val decryptor: (ciphertext: ByteArray, nonce: ByteArray, key: ByteArray) -> ByteArray = { c, n, k ->
-        NaClSecretBox.open(c, n, k)
-    },
-    // Injectable Base64 functions for testing (android.util.Base64 doesn't work in JVM tests)
-    private val base64Encoder: (ByteArray) -> String = { data ->
-        Base64.encodeToString(data, Base64.NO_WRAP)
-    },
-    private val base64Decoder: (String) -> ByteArray = { data ->
-        Base64.decode(data, Base64.NO_WRAP)
-    }
+@Singleton
+class AttachmentService @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val attachmentsApi: AttachmentsApi,
+    private val cryptoService: CryptoService,
+    private val secureStorage: SecureStorage,
+    private val httpClient: OkHttpClient
 ) {
-
     /**
-     * Exception thrown when attachment operations fail
+     * Upload an encrypted attachment for a specific recipient.
+     *
+     * @param uri Content URI of the file to upload
+     * @param recipientPublicKey Recipient's X25519 public key (for encrypting the file key)
+     * @return AttachmentPointer containing all info needed to decrypt the file
      */
-    sealed class AttachmentException(message: String) : Exception(message) {
-        class PresignFailed(val code: String, val msg: String) : AttachmentException("Presign failed: $code - $msg")
-        class UploadFailed(val httpCode: Int) : AttachmentException("Upload failed with HTTP $httpCode")
-        class DownloadFailed(val httpCode: Int) : AttachmentException("Download failed with HTTP $httpCode")
-        class DecryptionFailed : AttachmentException("Decryption failed - wrong key or tampered data")
+    suspend fun uploadAttachment(
+        uri: Uri,
+        recipientPublicKey: ByteArray
+    ): AttachmentPointer = withContext(Dispatchers.IO) {
+        val myPrivKey = secureStorage.encPrivateKey
+            ?: throw IllegalStateException("Not logged in - missing encryption key")
+        val sessionToken = secureStorage.sessionToken
+            ?: throw IllegalStateException("Not logged in - missing session token")
+
+        // Read file content
+        val (content, contentType, fileName) = readFile(uri)
+        Logger.d("[AttachmentService] Uploading file: $fileName, size: ${content.size}, type: $contentType")
+
+        // Generate file encryption key and nonce
+        val fileKey = cryptoService.generateKey()  // 32 bytes
+        val fileNonce = cryptoService.generateNonce()  // 24 bytes
+
+        // Encrypt file content
+        val encryptedContent = cryptoService.secretBoxSeal(content, fileNonce, fileKey)
+        Logger.d("[AttachmentService] Encrypted size: ${encryptedContent.size}")
+
+        // Get presigned upload URL
+        val presignResponse = attachmentsApi.presignUpload(
+            token = "Bearer $sessionToken",
+            request = PresignUploadRequest(
+                contentType = "application/octet-stream",  // Always octet-stream for encrypted data
+                size = encryptedContent.size.toLong()
+            )
+        )
+        Logger.d("[AttachmentService] Got presigned URL for blobId: ${presignResponse.blobId}")
+
+        // Upload encrypted content to S3
+        uploadToS3(presignResponse.uploadUrl, encryptedContent)
+        Logger.d("[AttachmentService] Upload complete")
+
+        // Encrypt file key to recipient
+        val fileKeyNonce = cryptoService.generateNonce()
+        val encryptedFileKey = cryptoService.boxSeal(
+            fileKey,
+            fileKeyNonce,
+            recipientPublicKey,
+            myPrivKey
+        )
+
+        // Return attachment pointer
+        AttachmentPointer(
+            objectKey = presignResponse.blobId,
+            contentType = contentType,
+            ciphertextSize = encryptedContent.size,
+            fileNonce = Base64.encodeToString(fileNonce, Base64.NO_WRAP),
+            fileKeyBox = FileKeyBox(
+                nonce = Base64.encodeToString(fileKeyNonce, Base64.NO_WRAP),
+                ciphertext = Base64.encodeToString(encryptedFileKey, Base64.NO_WRAP)
+            )
+        )
     }
 
     /**
-     * Prepare and upload an attachment
-     *
-     * @param plaintext Raw file bytes
-     * @param contentType MIME type (e.g., "image/jpeg")
-     * @param conversationKey 32-byte shared key for encrypting fileKey
-     * @return AttachmentPointer to include in message
+     * Upload an encrypted attachment from a file path.
      */
-    suspend fun prepareAndUploadAttachment(
-        plaintext: ByteArray,
-        contentType: String,
-        conversationKey: ByteArray
+    suspend fun uploadAttachment(
+        filePath: String,
+        recipientPublicKey: ByteArray
     ): AttachmentPointer {
-        // 1. Generate random keys
-        val fileKey = keyGenerator()
-        val fileNonce = nonceGenerator()
+        val file = File(filePath)
+        if (!file.exists()) {
+            throw IllegalArgumentException("File not found: $filePath")
+        }
+        return uploadAttachment(Uri.fromFile(file), recipientPublicKey)
+    }
 
-        // 2. Encrypt file content
-        val ciphertext = encryptor(plaintext, fileNonce, fileKey)
+    /**
+     * Download and decrypt an attachment.
+     *
+     * @param pointer AttachmentPointer from the message
+     * @param senderPublicKey Sender's X25519 public key (for decrypting the file key)
+     * @return Decrypted file content
+     */
+    suspend fun downloadAttachment(
+        pointer: AttachmentPointer,
+        senderPublicKey: ByteArray
+    ): ByteArray = withContext(Dispatchers.IO) {
+        val myPrivKey = secureStorage.encPrivateKey
+            ?: throw IllegalStateException("Not logged in - missing encryption key")
+        val sessionToken = secureStorage.sessionToken
+            ?: throw IllegalStateException("Not logged in - missing session token")
 
-        // 3. Get presigned upload URL
-        val presignResult = api.presignUpload(
-            PresignUploadRequest(
-                contentType = contentType,
-                sizeBytes = ciphertext.size.toLong()
+        // Get presigned download URL
+        val presignResponse = attachmentsApi.presignDownload(
+            token = "Bearer $sessionToken",
+            request = com.whisper2.app.data.network.api.PresignDownloadRequest(
+                blobId = pointer.objectKey
             )
         )
 
-        val presignResponse = when (presignResult) {
-            is ApiResult.Success -> presignResult.data
-            is ApiResult.Error -> throw AttachmentException.PresignFailed(presignResult.code, presignResult.message)
-        }
+        // Download encrypted content
+        val encryptedContent = downloadFromS3(presignResponse.downloadUrl)
+        Logger.d("[AttachmentService] Downloaded ${encryptedContent.size} bytes")
 
-        // 4. Upload ciphertext with headers
-        val uploadResult = blobClient.put(
-            url = presignResponse.uploadUrl,
-            body = ciphertext,
-            headers = presignResponse.headers
-        )
+        // Decrypt file key
+        val fileKeyNonce = Base64.decode(pointer.fileKeyBox.nonce, Base64.NO_WRAP)
+        val encryptedFileKey = Base64.decode(pointer.fileKeyBox.ciphertext, Base64.NO_WRAP)
+        val fileKey = cryptoService.boxOpen(encryptedFileKey, fileKeyNonce, senderPublicKey, myPrivKey)
 
-        if (!uploadResult.isSuccess) {
-            throw AttachmentException.UploadFailed(uploadResult.httpCode)
-        }
-
-        // 5. Encrypt fileKey with conversation key
-        val fkNonce = nonceGenerator()
-        val fkCiphertext = encryptor(fileKey, fkNonce, conversationKey)
-
-        val fileKeyBox = FileKeyBox(
-            nonce = base64Encoder(fkNonce),
-            ciphertext = base64Encoder(fkCiphertext)
-        )
-
-        // 6. Return pointer
-        return AttachmentPointer(
-            objectKey = presignResponse.objectKey,
-            contentType = contentType,
-            ciphertextSize = ciphertext.size.toLong(),
-            fileNonce = base64Encoder(fileNonce),
-            fileKeyBox = fileKeyBox
-        )
+        // Decrypt file content
+        val fileNonce = Base64.decode(pointer.fileNonce, Base64.NO_WRAP)
+        cryptoService.secretBoxOpen(encryptedContent, fileNonce, fileKey)
     }
 
     /**
-     * Download and decrypt an attachment
-     *
-     * @param pointer Attachment pointer from message
-     * @param conversationKey 32-byte shared key for decrypting fileKey
-     * @return Decrypted file bytes
+     * Save downloaded content to a file.
      */
-    suspend fun downloadAndDecrypt(
-        pointer: AttachmentPointer,
-        conversationKey: ByteArray
-    ): ByteArray {
-        // 1. Check cache
-        cache.getIfPresent(pointer.objectKey)?.let { cached ->
-            return cached
+    suspend fun saveToFile(content: ByteArray, fileName: String): File = withContext(Dispatchers.IO) {
+        val attachmentsDir = File(context.filesDir, "attachments")
+        if (!attachmentsDir.exists()) {
+            attachmentsDir.mkdirs()
         }
 
-        // 2. Decrypt fileKey from fileKeyBox
-        val fkNonce = base64Decoder(pointer.fileKeyBox.nonce)
-        val fkCiphertext = base64Decoder(pointer.fileKeyBox.ciphertext)
-        val fileKey = try {
-            decryptor(fkCiphertext, fkNonce, conversationKey)
-        } catch (e: Exception) {
-            throw AttachmentException.DecryptionFailed()
-        }
-
-        // 3. Get presigned download URL
-        val presignResult = api.presignDownload(
-            PresignDownloadRequest(objectKey = pointer.objectKey)
-        )
-
-        val presignResponse = when (presignResult) {
-            is ApiResult.Success -> presignResult.data
-            is ApiResult.Error -> throw AttachmentException.PresignFailed(presignResult.code, presignResult.message)
-        }
-
-        // 4. Download ciphertext
-        val downloadResult = blobClient.get(presignResponse.downloadUrl)
-
-        if (!downloadResult.isSuccess) {
-            throw AttachmentException.DownloadFailed(downloadResult.httpCode)
-        }
-
-        val ciphertext = downloadResult.body
-            ?: throw AttachmentException.DownloadFailed(0)
-
-        // 5. Decrypt file content
-        val fileNonce = base64Decoder(pointer.fileNonce)
-        val plaintext = try {
-            decryptor(ciphertext, fileNonce, fileKey)
-        } catch (e: Exception) {
-            throw AttachmentException.DecryptionFailed()
-        }
-
-        // 6. Cache and return
-        cache.put(pointer.objectKey, plaintext)
-        return plaintext
+        val file = File(attachmentsDir, fileName)
+        file.writeBytes(content)
+        file
     }
 
-    /**
-     * Clear attachment cache
-     */
-    fun clearCache() {
-        cache.clear()
+    private fun readFile(uri: Uri): Triple<ByteArray, String, String> {
+        val contentResolver = context.contentResolver
+
+        // Get file name
+        var fileName = "attachment"
+        contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (nameIndex >= 0) {
+                    fileName = cursor.getString(nameIndex) ?: fileName
+                }
+            }
+        }
+
+        // Get content type
+        val contentType = contentResolver.getType(uri)
+            ?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(
+                fileName.substringAfterLast('.', "")
+            )
+            ?: "application/octet-stream"
+
+        // Read content
+        val content = contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            ?: throw IllegalArgumentException("Cannot read file: $uri")
+
+        // Check size
+        if (content.size > Constants.MAX_ATTACHMENT_SIZE) {
+            throw IllegalArgumentException("File too large: ${content.size} bytes (max: ${Constants.MAX_ATTACHMENT_SIZE})")
+        }
+
+        return Triple(content, contentType, fileName)
     }
 
-    /**
-     * Invalidate specific cache entry
-     */
-    fun invalidateCache(objectKey: String) {
-        cache.invalidate(objectKey)
+    private suspend fun uploadToS3(uploadUrl: String, content: ByteArray) = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url(uploadUrl)
+            .put(content.toRequestBody("application/octet-stream".toMediaType()))
+            .build()
+
+        httpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw RuntimeException("Upload failed: ${response.code} ${response.message}")
+            }
+        }
     }
-}
 
-/**
- * HTTP client for blob operations (upload/download)
- * Separate from API client to handle different base URLs
- */
-interface BlobHttpClient {
+    private suspend fun downloadFromS3(downloadUrl: String): ByteArray = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url(downloadUrl)
+            .get()
+            .build()
 
-    /**
-     * PUT request for upload
-     *
-     * @param url Full presigned URL
-     * @param body Bytes to upload
-     * @param headers Headers to include (e.g., Content-Type)
-     * @return Result with success status and HTTP code
-     */
-    suspend fun put(url: String, body: ByteArray, headers: Map<String, String>): BlobResult
-
-    /**
-     * GET request for download
-     *
-     * @param url Full presigned URL
-     * @return Result with body bytes
-     */
-    suspend fun get(url: String): BlobResult
-}
-
-/**
- * Result of blob HTTP operation
- */
-data class BlobResult(
-    val isSuccess: Boolean,
-    val httpCode: Int,
-    val body: ByteArray? = null
-) {
-    companion object {
-        fun success(body: ByteArray? = null, httpCode: Int = 200) = BlobResult(true, httpCode, body)
-        fun failure(httpCode: Int) = BlobResult(false, httpCode)
+        httpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw RuntimeException("Download failed: ${response.code} ${response.message}")
+            }
+            response.body?.bytes() ?: throw RuntimeException("Empty response body")
+        }
     }
 }
