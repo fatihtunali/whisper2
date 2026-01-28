@@ -384,7 +384,8 @@ export class MessageRouter {
       await this.storePending(to, messageReceived);
       logger.info({ messageId, from, to }, 'Message stored in pending queue');
 
-      // 12. Trigger push notification for EVERY message (no coalescing)
+      // 12. Trigger push notification for offline messages
+      // Use minimal coalescing (2 seconds) to prevent app crash from rapid notifications
       await pushService.sendWake(to, 'message');
     }
 

@@ -34,19 +34,36 @@ final class KeychainService {
         }
         try? setDataThrowing(data, forKey: key)
     }
-    
+
+    /// Thread-safe keychain write using atomic update-or-insert pattern
+    /// Prevents race conditions when multiple threads try to write the same key
     func setDataThrowing(_ data: Data, forKey key: String) throws {
-        delete(forKey: key)
-        
-        let query: [String: Any] = [
+        // First, try to update existing item (atomic operation)
+        let updateQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+            kSecAttrAccount as String: key
         ]
-        
-        let status = SecItemAdd(query as CFDictionary, nil)
+
+        let updateAttributes: [String: Any] = [
+            kSecValueData as String: data
+        ]
+
+        var status = SecItemUpdate(updateQuery as CFDictionary, updateAttributes as CFDictionary)
+
+        // If item doesn't exist, add it
+        if status == errSecItemNotFound {
+            let addQuery: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: key,
+                kSecValueData as String: data,
+                kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+            ]
+
+            status = SecItemAdd(addQuery as CFDictionary, nil)
+        }
+
         guard status == errSecSuccess else {
             throw StorageError.keychainError(status)
         }

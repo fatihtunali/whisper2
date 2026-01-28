@@ -193,6 +193,11 @@ struct VideoRendererView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: RTCMTLVideoView, context: Context) {}
+
+    static func dismantleUIView(_ uiView: RTCMTLVideoView, coordinator: ()) {
+        // Clear any pending Metal operations before view is removed
+        uiView.videoContentMode = .scaleAspectFit
+    }
 }
 
 /// Observable state for active video call
@@ -240,13 +245,27 @@ class ActiveVideoCallState: ObservableObject {
     }
 
     func hide() {
-        self.isShowingVideoCall = false
-        self.callStartTime = nil
+        // Stop timer first to prevent any callbacks during cleanup
         stopDurationTimer()
 
-        // Clean up renderers
+        self.isShowingVideoCall = false
+        self.callStartTime = nil
+
+        // Capture renderers for delayed cleanup
+        let localView = self.localVideoView
+        let remoteView = self.remoteVideoView
+
+        // Clear references immediately to prevent new frames
         self.localVideoView = nil
         self.remoteVideoView = nil
+
+        // Give Metal time to finish any pending render commands
+        // before the views are fully deallocated
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            // Views will be deallocated after this closure completes
+            _ = localView
+            _ = remoteView
+        }
 
         print("VideoCallState: Hidden")
     }

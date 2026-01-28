@@ -1056,7 +1056,8 @@ final class CallService: NSObject, ObservableObject {
         let payload = frame.payload
         print("Processing answer from: \(payload.from) for call: \(payload.callId)")
 
-        Task {
+        Task { [weak self] in
+            guard let self = self else { return }
             do {
                 // Decrypt SDP answer
                 guard let ciphertextData = Data(base64Encoded: payload.ciphertext),
@@ -1066,7 +1067,7 @@ final class CallService: NSObject, ObservableObject {
                 }
 
                 print("Decrypting SDP answer...")
-                let sdpAnswer = try crypto.decryptMessage(
+                let sdpAnswer = try self.crypto.decryptMessage(
                     ciphertext: ciphertextData,
                     nonce: nonceData,
                     senderPublicKey: senderPublicKey,
@@ -1076,15 +1077,15 @@ final class CallService: NSObject, ObservableObject {
 
                 let remoteDesc = RTCSessionDescription(type: .answer, sdp: sdpAnswer)
                 print("Setting remote description...")
-                try await peerConnection?.setRemoteDescription(remoteDesc)
+                try await self.peerConnection?.setRemoteDescription(remoteDesc)
                 print("Remote description SET successfully")
 
                 // Process pending ICE candidates
-                print("Processing \(pendingIceCandidates.count) pending ICE candidates...")
-                for candidate in pendingIceCandidates {
-                    try await peerConnection?.add(candidate)
+                print("Processing \(self.pendingIceCandidates.count) pending ICE candidates...")
+                for candidate in self.pendingIceCandidates {
+                    try await self.peerConnection?.add(candidate)
                 }
-                pendingIceCandidates.removeAll()
+                self.pendingIceCandidates.removeAll()
                 print("=== handleCallAnswer END (success) ===")
 
                 // NOTE: No UI state updates - CallKit handles all UI
@@ -1115,14 +1116,15 @@ final class CallService: NSObject, ObservableObject {
 
         let payload = frame.payload
 
-        Task {
+        Task { [weak self] in
+            guard let self = self else { return }
             do {
                 guard let ciphertextData = Data(base64Encoded: payload.ciphertext),
                       let nonceData = Data(base64Encoded: payload.nonce) else {
                     return
                 }
 
-                let candidateString = try crypto.decryptMessage(
+                let candidateString = try self.crypto.decryptMessage(
                     ciphertext: ciphertextData,
                     nonce: nonceData,
                     senderPublicKey: senderPublicKey,
@@ -1141,10 +1143,10 @@ final class CallService: NSObject, ObservableObject {
                 let candidate = RTCIceCandidate(sdp: sdp, sdpMLineIndex: sdpMLineIndex, sdpMid: sdpMid)
 
                 // If remote description not set yet, queue the candidate
-                if peerConnection?.remoteDescription == nil {
-                    pendingIceCandidates.append(candidate)
+                if self.peerConnection?.remoteDescription == nil {
+                    self.pendingIceCandidates.append(candidate)
                 } else {
-                    try await peerConnection?.add(candidate)
+                    try await self.peerConnection?.add(candidate)
                 }
             } catch {
                 print("Failed to handle ICE candidate: \(error)")
@@ -1200,19 +1202,13 @@ final class CallService: NSObject, ObservableObject {
         }
         videoCapturer = nil
 
-        // Remove video renderers
-        if let localTrack = localVideoTrack {
-            if let renderer = localVideoRenderer {
-                localTrack.remove(renderer)
-            }
-        }
+        // Capture tracks before cleanup
+        let localVideo = localVideoTrack
+        let remoteVideo = remoteVideoTrack
+        let localRenderer = localVideoRenderer
+        let remoteRenderer = remoteVideoRenderer
 
-        if let remoteTrack = remoteVideoTrack {
-            if let renderer = remoteVideoRenderer {
-                remoteTrack.remove(renderer)
-            }
-        }
-
+        // Clear track references
         localVideoTrack = nil
         localAudioTrack = nil
         remoteVideoTrack = nil
@@ -1221,6 +1217,30 @@ final class CallService: NSObject, ObservableObject {
         // Close peer connection
         peerConnection?.close()
         peerConnection = nil
+
+        // Remove video renderers on main thread
+        DispatchQueue.main.async {
+            // Remove legacy renderers
+            if let track = localVideo, let renderer = localRenderer {
+                track.remove(renderer)
+            }
+            if let track = remoteVideo, let renderer = remoteRenderer {
+                track.remove(renderer)
+            }
+
+            // Remove ActiveVideoCallState renderers
+            if let track = localVideo, let renderer = ActiveVideoCallState.shared.localVideoView {
+                track.remove(renderer)
+            }
+            if let track = remoteVideo, let renderer = ActiveVideoCallState.shared.remoteVideoView {
+                track.remove(renderer)
+            }
+
+            // Hide all call UIs
+            OutgoingCallState.shared.hide()
+            ActiveVideoCallState.shared.hide()
+            ActiveAudioCallState.shared.hide()
+        }
 
         pendingIceCandidates.removeAll()
         pendingIncomingCall = nil
@@ -1243,41 +1263,49 @@ final class CallService: NSObject, ObservableObject {
         // Record call to history before cleanup
         recordCallToHistory()
 
-        // Stop video capture
+        // Stop video capture first
         videoCapturer?.stopCapture()
         videoCapturer = nil
 
-        // Remove video renderers from tracks before cleaning up
-        if let localTrack = localVideoTrack {
-            if let renderer = localVideoRenderer {
-                localTrack.remove(renderer)
-            }
-            // Also remove from ActiveVideoCallState renderer
-            DispatchQueue.main.async {
-                if let renderer = ActiveVideoCallState.shared.localVideoView {
-                    localTrack.remove(renderer)
-                }
-            }
-        }
+        // Capture tracks before cleanup
+        let localVideo = localVideoTrack
+        let remoteVideo = remoteVideoTrack
+        let localRenderer = localVideoRenderer
+        let remoteRenderer = remoteVideoRenderer
 
-        if let remoteTrack = remoteVideoTrack {
-            if let renderer = remoteVideoRenderer {
-                remoteTrack.remove(renderer)
-            }
-            DispatchQueue.main.async {
-                if let renderer = ActiveVideoCallState.shared.remoteVideoView {
-                    remoteTrack.remove(renderer)
-                }
-            }
-        }
-
+        // Clear track references immediately to prevent further use
         localVideoTrack = nil
         localAudioTrack = nil
         remoteVideoTrack = nil
         remoteAudioTrack = nil
 
+        // Close peer connection before removing renderers
         peerConnection?.close()
         peerConnection = nil
+
+        // Remove video renderers and hide UI on main thread
+        DispatchQueue.main.async {
+            // Remove legacy renderers
+            if let track = localVideo, let renderer = localRenderer {
+                track.remove(renderer)
+            }
+            if let track = remoteVideo, let renderer = remoteRenderer {
+                track.remove(renderer)
+            }
+
+            // Remove ActiveVideoCallState renderers
+            if let track = localVideo, let renderer = ActiveVideoCallState.shared.localVideoView {
+                track.remove(renderer)
+            }
+            if let track = remoteVideo, let renderer = ActiveVideoCallState.shared.remoteVideoView {
+                track.remove(renderer)
+            }
+
+            // Hide all call UIs after renderers are removed
+            OutgoingCallState.shared.hide()
+            ActiveVideoCallState.shared.hide()
+            ActiveAudioCallState.shared.hide()
+        }
 
         pendingIceCandidates.removeAll()
         pendingIncomingCall = nil
@@ -1293,13 +1321,6 @@ final class CallService: NSObject, ObservableObject {
         isSpeakerOn = false
         lastCallEndReason = .ended
         isAudioSessionActivated = false
-
-        // Hide all call UIs
-        DispatchQueue.main.async {
-            OutgoingCallState.shared.hide()
-            ActiveVideoCallState.shared.hide()
-            ActiveAudioCallState.shared.hide()
-        }
 
         // NOTE: Audio session is managed by CallKit
     }
@@ -1388,6 +1409,25 @@ final class CallService: NSObject, ObservableObject {
         callHistory.removeAll { $0.id == recordId }
         saveCallHistory()
     }
+
+    // MARK: - Deinit
+
+    deinit {
+        // Clean up WebRTC resources
+        print("CallService deinit: Cleaning up resources")
+
+        // Stop video capture
+        videoCapturer?.stopCapture()
+
+        // Close peer connection
+        peerConnection?.close()
+
+        // Cancel all pending operations
+        cancellables.removeAll()
+
+        // Clean up SSL
+        RTCCleanupSSL()
+    }
 }
 
 // MARK: - RTCPeerConnectionDelegate
@@ -1469,8 +1509,8 @@ extension CallService: RTCPeerConnectionDelegate {
             }
         case .failed:
             lastCallEndReason = .failed
-            Task {
-                try? await self.endCall(reason: .failed)
+            Task { [weak self] in
+                try? await self?.endCall(reason: .failed)
             }
         default:
             break
@@ -1482,8 +1522,8 @@ extension CallService: RTCPeerConnectionDelegate {
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
-        Task {
-            await sendIceCandidate(candidate)
+        Task { [weak self] in
+            await self?.sendIceCandidate(candidate)
         }
     }
 
@@ -1503,13 +1543,14 @@ extension CallService: CallKitManagerDelegate {
             return
         }
 
-        Task {
+        Task { [weak self] in
+            guard let self = self else { return }
             do {
-                try await startOutgoingCallConnection()
+                try await self.startOutgoingCallConnection()
             } catch {
                 print("Failed to start outgoing call connection: \(error)")
-                callKitManager?.endCall(callId: callId)
-                cleanup()
+                self.callKitManager?.endCall(callId: callId)
+                self.cleanup()
             }
         }
     }
@@ -1525,23 +1566,24 @@ extension CallService: CallKitManagerDelegate {
 
         print("CallKit answer: Answering call \(callId) from \(payload.from)")
 
-        Task {
+        Task { [weak self] in
+            guard let self = self else { return }
             do {
                 // Ensure we're authenticated before answering
                 // App might have been woken by VoIP push and not yet authenticated
-                if auth.currentUser?.sessionToken == nil {
+                if self.auth.currentUser?.sessionToken == nil {
                     print("CallKit answer: Not authenticated, attempting reconnect...")
-                    try await auth.reconnect()
+                    try await self.auth.reconnect()
                     print("CallKit answer: Reconnect successful")
                 }
 
                 // Ensure WebSocket is connected
-                if ws.connectionState != .connected {
+                if self.ws.connectionState != .connected {
                     print("CallKit answer: WebSocket not connected, waiting...")
-                    ws.connect()
+                    self.ws.connect()
                     // Wait for connection
                     for _ in 0..<30 {
-                        if ws.connectionState == .connected {
+                        if self.ws.connectionState == .connected {
                             break
                         }
                         try await Task.sleep(nanoseconds: 100_000_000)
@@ -1549,20 +1591,20 @@ extension CallService: CallKitManagerDelegate {
                 }
 
                 print("CallKit answer: Auth and WS ready, answering call...")
-                try await answerCall(payload)
-                pendingIncomingCall = nil
+                try await self.answerCall(payload)
+                self.pendingIncomingCall = nil
                 print("CallKit answer: Call answered successfully")
             } catch {
                 print("Failed to answer call via CallKit: \(error)")
-                callKitManager?.endCall(callId: callId)
-                cleanup()
+                self.callKitManager?.endCall(callId: callId)
+                self.cleanup()
             }
         }
     }
 
     func callKitDidEndCall(callId: String) {
-        Task {
-            try? await endCall(reason: .ended)
+        Task { [weak self] in
+            try? await self?.endCall(reason: .ended)
         }
     }
 
@@ -1720,8 +1762,8 @@ extension CallService: CallKitManagerDelegate {
     }
 
     func handleVideoCallEnd() {
-        Task {
-            try? await endCall(reason: .ended)
+        Task { [weak self] in
+            try? await self?.endCall(reason: .ended)
         }
     }
 
@@ -1758,8 +1800,8 @@ extension CallService: CallKitManagerDelegate {
     }
 
     func handleAudioCallEnd() {
-        Task {
-            try? await endCall(reason: .ended)
+        Task { [weak self] in
+            try? await self?.endCall(reason: .ended)
         }
     }
 }

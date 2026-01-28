@@ -33,11 +33,8 @@ final class CallKitManager: NSObject {
         config.supportedHandleTypes = [.generic]
         config.includesCallsInRecents = true
 
-        // IMPORTANT: Disable handoff to prevent calls from being routed to other devices
-        // Each device has unique encryption keys, so calls cannot be decrypted on other devices
-        if #available(iOS 14.0, *) {
-            config.supportsCallHandoff = false
-        }
+        // Note: CallKit handoff is controlled at system level (Handoff setting in iOS Settings)
+        // Our app handles this by using unique per-device encryption keys
 
         // Set icon
         if let iconImage = UIImage(named: "CallKitIcon") {

@@ -157,8 +157,10 @@ class ActiveAudioCallState: ObservableObject {
 
     func hide() {
         print("AudioCallState: Hiding")
-        self.callStartTime = nil
+        // Stop timer first to prevent any callbacks during cleanup
         stopDurationTimer()
+
+        self.callStartTime = nil
 
         withAnimation(.easeOut(duration: 0.3)) {
             self.isShowingAudioCall = false

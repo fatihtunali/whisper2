@@ -31,6 +31,14 @@ final class MessagingService: ObservableObject {
     private let messagesStorageKey = "whisper2.messages.data"
     private let conversationsStorageKey = "whisper2.conversations.data"
 
+    // Serial queue for keychain operations to prevent race conditions
+    private let storageQueue = DispatchQueue(label: "com.whisper2.messaging.storage", qos: .userInitiated)
+
+    // Debounce timers for saves - prevents rapid saves from crashing
+    private var messagesSaveWorkItem: DispatchWorkItem?
+    private var conversationsSaveWorkItem: DispatchWorkItem?
+    private let saveDebounceInterval: TimeInterval = 0.3 // 300ms debounce
+
     private init() {
         loadFromStorage()
         setupMessageHandler()
@@ -54,15 +62,63 @@ final class MessagingService: ObservableObject {
         }
     }
 
+    /// Save messages with debouncing to prevent rapid saves from crashing
+    /// Multiple rapid calls will be coalesced into a single save after the debounce interval
     private func saveMessagesToStorage() {
-        if let data = try? JSONEncoder().encode(messages) {
-            keychain.setData(data, forKey: messagesStorageKey)
+        // Cancel any pending save
+        messagesSaveWorkItem?.cancel()
+
+        // Capture current messages (copy for thread safety)
+        let messagesToSave = messages
+
+        // Create new work item for debounced save
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            if let data = try? JSONEncoder().encode(messagesToSave) {
+                self.keychain.setData(data, forKey: self.messagesStorageKey)
+            }
         }
+
+        messagesSaveWorkItem = workItem
+
+        // Execute after debounce interval on the serial queue
+        storageQueue.asyncAfter(deadline: .now() + saveDebounceInterval, execute: workItem)
     }
 
+    /// Save conversations with debouncing to prevent rapid saves from crashing
     private func saveConversationsToStorage() {
-        if let data = try? JSONEncoder().encode(conversations) {
-            keychain.setData(data, forKey: conversationsStorageKey)
+        // Cancel any pending save
+        conversationsSaveWorkItem?.cancel()
+
+        // Capture current conversations (copy for thread safety)
+        let conversationsToSave = conversations
+
+        // Create new work item for debounced save
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            if let data = try? JSONEncoder().encode(conversationsToSave) {
+                self.keychain.setData(data, forKey: self.conversationsStorageKey)
+            }
+        }
+
+        conversationsSaveWorkItem = workItem
+
+        // Execute after debounce interval on the serial queue
+        storageQueue.asyncAfter(deadline: .now() + saveDebounceInterval, execute: workItem)
+    }
+
+    /// Force immediate save (for app termination or background)
+    func flushPendingSaves() {
+        messagesSaveWorkItem?.cancel()
+        conversationsSaveWorkItem?.cancel()
+
+        storageQueue.sync {
+            if let data = try? JSONEncoder().encode(messages) {
+                keychain.setData(data, forKey: messagesStorageKey)
+            }
+            if let data = try? JSONEncoder().encode(conversations) {
+                keychain.setData(data, forKey: conversationsStorageKey)
+            }
         }
     }
     
