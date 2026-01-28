@@ -1189,6 +1189,31 @@ final class CallService: NSObject, ObservableObject {
         }
     }
 
+    /// Handle remote call end received via push notification
+    /// Called when app receives call_end via VoIP push (when WebSocket not connected)
+    func handleRemoteCallEnd(callId: String) {
+        print("=== handleRemoteCallEnd (via push) === callId: \(callId)")
+
+        // Check if this matches our pending/active call
+        if pendingIncomingCall?.callId == callId {
+            print("Clearing pending incoming call")
+            pendingIncomingCall = nil
+        }
+
+        if activeCallId == callId {
+            print("Ending active call")
+            lastCallEndReason = .ended
+            cleanup()
+        } else if let activeId = activeCallId {
+            // Different call ID but we have an active call - might be a timing issue
+            print("Active call ID mismatch: active=\(activeId), ended=\(callId)")
+            // Still cleanup if we have a pending incoming that was ended
+            if pendingIncomingCall == nil {
+                cleanup()
+            }
+        }
+    }
+
     // MARK: - Cleanup
 
     /// Clean up previous call state before starting a new call (no history recording)

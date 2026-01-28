@@ -297,6 +297,20 @@ extension PushNotificationService: PKPushRegistryDelegate {
         let dictionaryPayload = payload.dictionaryPayload
         print("VoIP push payload: \(dictionaryPayload)")
 
+        // Check if this is a call_end push
+        if let pushType = dictionaryPayload["type"] as? String, pushType == "call_end" {
+            print("VoIP push: call_end received")
+            if let callId = dictionaryPayload["callId"] as? String {
+                print("Ending call via push: \(callId)")
+                // Report to CallKit that the call ended
+                CallService.shared.callKitManager?.reportCallEnded(callId: callId, reason: .remoteEnded)
+                // Clean up call state
+                CallService.shared.handleRemoteCallEnd(callId: callId)
+            }
+            completion()
+            return
+        }
+
         // Try to parse call data
         if let callData = dictionaryPayload["call"] as? [String: Any],
            let callId = callData["callId"] as? String,

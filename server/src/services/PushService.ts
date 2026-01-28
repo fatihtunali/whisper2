@@ -612,6 +612,99 @@ export class PushService {
   }
 
   /**
+   * Send VoIP push to cancel/end an incoming call.
+   * This is needed when the caller ends before the recipient answers.
+   */
+  async sendCallEndPush(whisperId: string, callId: string, reason: string): Promise<PushResult> {
+    const device = await this.getActiveDevice(whisperId);
+    if (!device) {
+      return { sent: false, skipped: true, reason: 'no_device' };
+    }
+
+    // iOS: send VoIP push with call_end
+    if (device.platform === 'ios' && device.voipToken) {
+      const provider = getVoipProvider();
+      if (!provider) {
+        logger.warn({ deviceId: device.deviceId }, 'VoIP provider not available for call end');
+        return { sent: false, skipped: true, reason: 'voip_not_configured' };
+      }
+
+      try {
+        const notification = new apn.Notification();
+        notification.topic = `${APNS_BUNDLE_ID}.voip`;
+        (notification as any).pushType = 'voip';
+        notification.priority = 10;
+        notification.expiry = Math.floor(Date.now() / 1000) + 30;
+
+        notification.payload = {
+          type: 'call_end',
+          callId,
+          reason,
+          aps: {
+            'content-available': 1,
+          },
+        };
+
+        const result = await provider.send(notification, device.voipToken);
+
+        if (result.failed.length > 0) {
+          const failure = result.failed[0];
+          logger.warn(
+            { deviceId: device.deviceId, callId, error: failure.response },
+            'VoIP call_end push failed'
+          );
+          return { sent: false, skipped: false, reason: failure.response?.reason || 'voip_error' };
+        }
+
+        logger.info(
+          { deviceId: device.deviceId, callId, reason },
+          'VoIP call_end push sent successfully'
+        );
+
+        return {
+          sent: true,
+          skipped: false,
+          provider: 'voip',
+          ticketId: `voip_end_${Date.now()}`,
+        };
+      } catch (error) {
+        logger.error({ error, deviceId: device.deviceId, callId }, 'VoIP call_end push error');
+        return { sent: false, skipped: false, reason: 'voip_exception' };
+      }
+    }
+
+    // Android: send high-priority FCM with call_end data
+    if (device.platform === 'android' && device.pushToken && isFirebaseReady()) {
+      const data: Record<string, string> = {
+        type: 'call_end',
+        callId,
+        reason,
+      };
+
+      const result = await sendFcmMessage(device.pushToken, data, {
+        priority: 'high',
+        channelId: 'whisper2_calls',
+        ttl: 30,
+      });
+
+      if (result.success) {
+        logger.info(
+          { deviceId: device.deviceId, callId, reason },
+          'FCM call_end push sent'
+        );
+        return {
+          sent: true,
+          skipped: false,
+          provider: 'fcm',
+          ticketId: result.messageId,
+        };
+      }
+    }
+
+    return { sent: false, skipped: true, reason: 'no_suitable_token' };
+  }
+
+  /**
    * Clear suppress key (for testing).
    */
   async clearSuppress(whisperId: string, reason: PushReason): Promise<void> {

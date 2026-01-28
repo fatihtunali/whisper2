@@ -508,10 +508,15 @@ export class CallService {
       // Call may have already been cleaned up - still try to forward to recipient
       logger.info({ callId, from, to, reason }, 'Call end for unknown call (may be already ended)');
       // Forward to the intended recipient anyway (best effort)
-      connectionManager.sendToUser(to, {
+      const delivered = connectionManager.sendToUser(to, {
         type: MessageTypes.CALL_END,
         payload: { callId, from, reason },
       });
+      // If not delivered via WebSocket, send push notification
+      if (!delivered) {
+        logger.info({ callId, to, reason }, 'Call end (unknown call): recipient offline, sending push');
+        await pushService.sendCallEndPush(to, callId, reason || 'ended');
+      }
       return { success: true };
     }
 
@@ -525,10 +530,16 @@ export class CallService {
 
     // 5. Forward to other party
     const otherParty = callData.caller === from ? callData.callee : callData.caller;
-    connectionManager.sendToUser(otherParty, {
+    const delivered = connectionManager.sendToUser(otherParty, {
       type: MessageTypes.CALL_END,
       payload: { callId, from, reason },
     });
+
+    // If not delivered via WebSocket, send push notification
+    if (!delivered) {
+      logger.info({ callId, otherParty, reason }, 'Call end: recipient offline, sending push');
+      await pushService.sendCallEndPush(otherParty, callId, reason || 'ended');
+    }
 
     // 6. Delete call state
     await this.deleteCall(callId);
