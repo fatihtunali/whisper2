@@ -1395,7 +1395,33 @@ final class CallService: NSObject, ObservableObject {
                 self.callHistory = Array(self.callHistory.prefix(100))
             }
             self.saveCallHistory()
+
+            // Add call message to chat
+            self.addCallMessageToChat(record: record)
         }
+    }
+
+    /// Add a call record message to the chat conversation
+    private func addCallMessageToChat(record: CallRecord) {
+        guard let user = auth.currentUser else { return }
+
+        // Content format: "type|outcome|duration"
+        let callType = record.isVideo ? "video" : "audio"
+        let durationSeconds = Int(record.duration ?? 0)
+        let content = "\(callType)|\(record.outcome.rawValue)|\(durationSeconds)"
+
+        let message = Message(
+            conversationId: record.peerId,
+            from: record.isOutgoing ? user.whisperId : record.peerId,
+            to: record.isOutgoing ? record.peerId : user.whisperId,
+            content: content,
+            contentType: "call",
+            timestamp: record.endTime ?? Date(),
+            status: .delivered,
+            direction: record.isOutgoing ? .outgoing : .incoming
+        )
+
+        MessagingService.shared.addLocalMessage(message)
     }
 
     /// Clear all call history

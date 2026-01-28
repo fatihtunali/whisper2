@@ -860,6 +860,47 @@ final class MessagingService: ObservableObject {
         messages[conversationId] ?? []
     }
 
+    /// Add a local-only message (e.g., call records, system messages)
+    /// This message is not sent over the network, only stored locally
+    func addLocalMessage(_ message: Message) {
+        DispatchQueue.main.async {
+            if self.messages[message.conversationId] == nil {
+                self.messages[message.conversationId] = []
+            }
+            self.messages[message.conversationId]?.append(message)
+
+            // Generate preview based on content type
+            var previewContent: String
+            switch message.contentType {
+            case "call":
+                // Parse call info: "type|outcome|duration"
+                let parts = message.content.split(separator: "|")
+                let isVideo = parts.first == "video"
+                let outcome = parts.count > 1 ? String(parts[1]) : "missed"
+                switch outcome {
+                case "completed":
+                    previewContent = isVideo ? "Video call" : "Voice call"
+                case "missed":
+                    previewContent = isVideo ? "Missed video call" : "Missed call"
+                case "declined":
+                    previewContent = isVideo ? "Declined video call" : "Declined call"
+                case "no_answer":
+                    previewContent = isVideo ? "Unanswered video call" : "Unanswered call"
+                case "failed":
+                    previewContent = "Call failed"
+                default:
+                    previewContent = isVideo ? "Video call" : "Voice call"
+                }
+            default:
+                previewContent = message.content
+            }
+
+            self.updateConversation(for: message.conversationId, lastMessage: previewContent)
+            self.saveMessagesToStorage()
+            self.saveConversationsToStorage()
+        }
+    }
+
     // MARK: - Badge Management
 
     /// Update app badge with total unread count

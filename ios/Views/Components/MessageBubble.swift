@@ -92,9 +92,16 @@ struct MessageBubble: View {
             videoContent
         case "file":
             fileContent
+        case "call":
+            callContent
         default:
             textContent
         }
+    }
+
+    // MARK: - Call Content
+    private var callContent: some View {
+        CallMessageBubble(message: message, isOutgoing: isOutgoing)
     }
 
     // MARK: - Text Content
@@ -197,6 +204,108 @@ struct MessageBubble: View {
                 .font(.caption2)
                 .foregroundColor(.red)
         }
+    }
+}
+
+// MARK: - Call Message Bubble
+struct CallMessageBubble: View {
+    let message: Message
+    let isOutgoing: Bool
+
+    // Parse call info from content: "type|outcome|duration"
+    // e.g., "video|completed|125" or "audio|missed|0"
+    private var callInfo: (isVideo: Bool, outcome: String, duration: Int) {
+        let parts = message.content.components(separatedBy: "|")
+        let isVideo = parts.first == "video"
+        let outcome = parts.count > 1 ? parts[1] : "completed"
+        let duration = parts.count > 2 ? Int(parts[2]) ?? 0 : 0
+        return (isVideo, outcome, duration)
+    }
+
+    private var icon: String {
+        let info = callInfo
+        if info.outcome == "missed" {
+            return "phone.arrow.down.left"
+        } else if info.outcome == "declined" {
+            return "phone.down"
+        } else if info.outcome == "noAnswer" || info.outcome == "cancelled" {
+            return "phone.arrow.up.right"
+        } else {
+            return info.isVideo ? "video.fill" : "phone.fill"
+        }
+    }
+
+    private var iconColor: Color {
+        let info = callInfo
+        if info.outcome == "missed" || info.outcome == "declined" {
+            return .red
+        } else if info.outcome == "noAnswer" || info.outcome == "cancelled" || info.outcome == "failed" {
+            return .orange
+        }
+        return .green
+    }
+
+    private var callText: String {
+        let info = callInfo
+        let callType = info.isVideo ? "Video call" : "Voice call"
+
+        switch info.outcome {
+        case "completed":
+            return "\(callType) • \(formatDuration(info.duration))"
+        case "missed":
+            return "Missed \(callType.lowercased())"
+        case "declined":
+            return "Declined \(callType.lowercased())"
+        case "noAnswer":
+            return "\(callType) • No answer"
+        case "cancelled":
+            return "\(callType) • Cancelled"
+        case "failed":
+            return "\(callType) • Failed"
+        default:
+            return callType
+        }
+    }
+
+    private func formatDuration(_ seconds: Int) -> String {
+        let minutes = seconds / 60
+        let secs = seconds % 60
+        return String(format: "%d:%02d", minutes, secs)
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // Call icon
+            ZStack {
+                Circle()
+                    .fill(iconColor.opacity(0.2))
+                    .frame(width: 40, height: 40)
+                Image(systemName: icon)
+                    .font(.system(size: 18))
+                    .foregroundColor(iconColor)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(callText)
+                    .font(.subheadline)
+                    .foregroundColor(isOutgoing ? .white : .primary)
+
+                if isOutgoing {
+                    Text("Outgoing")
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.7))
+                } else {
+                    Text("Incoming")
+                        .font(.caption2)
+                        .foregroundColor(.gray)
+                }
+            }
+
+            Spacer()
+        }
+        .padding(12)
+        .background(isOutgoing ? Color.blue.opacity(0.8) : Color(.systemGray5))
+        .cornerRadius(16)
     }
 }
 
