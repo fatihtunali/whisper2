@@ -505,8 +505,13 @@ export class CallService {
     // 3. Get and validate call state
     const callData = await this.getCall(callId);
     if (!callData) {
-      // Call may have already been cleaned up - just return success
+      // Call may have already been cleaned up - still try to forward to recipient
       logger.info({ callId, from, to, reason }, 'Call end for unknown call (may be already ended)');
+      // Forward to the intended recipient anyway (best effort)
+      connectionManager.sendToUser(to, {
+        type: MessageTypes.CALL_END,
+        payload: { callId, from, reason },
+      });
       return { success: true };
     }
 
