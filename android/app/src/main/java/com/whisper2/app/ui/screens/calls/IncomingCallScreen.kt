@@ -26,8 +26,7 @@ fun IncomingCallScreen(
     callerId: String,
     isVideo: Boolean,
     onAnswer: () -> Unit,
-    onDecline: () -> Unit,
-    viewModel: CallViewModel = hiltViewModel()
+    onDecline: () -> Unit
 ) {
     // Pulsing animation
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
@@ -171,16 +170,13 @@ fun IncomingCallScreen(
             Row(
                 horizontalArrangement = Arrangement.spacedBy(80.dp)
             ) {
-                // Decline
+                // Decline - only call the callback, it handles viewModel
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     IconButton(
-                        onClick = {
-                            viewModel.declineCall()
-                            onDecline()
-                        },
+                        onClick = onDecline,
                         modifier = Modifier
                             .size(70.dp)
                             .clip(CircleShape)
@@ -200,16 +196,13 @@ fun IncomingCallScreen(
                     )
                 }
 
-                // Answer
+                // Answer - only call the callback, it handles viewModel
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     IconButton(
-                        onClick = {
-                            viewModel.answerCall()
-                            onAnswer()
-                        },
+                        onClick = onAnswer,
                         modifier = Modifier
                             .size(70.dp)
                             .clip(CircleShape)

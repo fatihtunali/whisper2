@@ -20,9 +20,17 @@ android {
     compileSdk = 35
 
     signingConfigs {
+        // Debug signing config - uses project keystore for consistent signatures
+        getByName("debug") {
+            storeFile = rootProject.file("whisper2-debug.keystore")
+            storePassword = "whisper2debug"
+            keyAlias = "whisper2"
+            keyPassword = "whisper2debug"
+        }
+        // Release signing config - uses keystore.properties
         create("release") {
             if (keystorePropertiesFile.exists()) {
-                storeFile = file(keystoreProperties["storeFile"] as String)
+                storeFile = rootProject.file(keystoreProperties["storeFile"] as String)
                 storePassword = keystoreProperties["storePassword"] as String
                 keyAlias = keystoreProperties["keyAlias"] as String
                 keyPassword = keystoreProperties["keyPassword"] as String
@@ -42,6 +50,9 @@ android {
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
@@ -106,6 +117,9 @@ dependencies {
 
     // WebRTC
     implementation("io.getstream:stream-webrtc-android:1.3.0")
+
+    // Telecom (Android's CallKit equivalent)
+    implementation("androidx.core:core-telecom:1.0.0")
 
     // Firebase
     implementation(platform("com.google.firebase:firebase-bom:33.7.0"))

@@ -6,8 +6,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -22,12 +24,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.whisper2.app.services.calls.CallEndReason
 import com.whisper2.app.services.calls.CallState
 import com.whisper2.app.ui.theme.*
 import kotlinx.coroutines.delay
+import org.webrtc.EglBase
+import org.webrtc.RendererCommon
+import org.webrtc.SurfaceViewRenderer
 
 @Composable
 fun CallScreen(
@@ -91,6 +97,7 @@ fun CallScreen(
     LaunchedEffect(callState) {
         if (callState is CallState.Ended) {
             delay(1500) // Show end reason briefly
+            viewModel.resetCallState()  // Reset state before navigating
             onCallEnded()
         }
     }
@@ -141,6 +148,23 @@ fun CallScreen(
         return
     }
 
+    // Get EGL context for video rendering
+    val eglContext = viewModel.eglBaseContext
+
+    // Create and remember SurfaceViewRenderers
+    var localRenderer by remember { mutableStateOf<SurfaceViewRenderer?>(null) }
+    var remoteRenderer by remember { mutableStateOf<SurfaceViewRenderer?>(null) }
+
+    // Cleanup renderers on dispose
+    DisposableEffect(Unit) {
+        onDispose {
+            localRenderer?.release()
+            remoteRenderer?.release()
+            viewModel.setLocalVideoSink(null)
+            viewModel.setRemoteVideoSink(null)
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -150,19 +174,101 @@ fun CallScreen(
                 )
             )
     ) {
-        // Video views would go here for video calls
-        // For now, we show audio call UI
+        // Video call UI
+        if (activeCall?.isVideo == true && eglContext != null) {
+            // Remote video (full screen background)
+            AndroidView(
+                factory = { ctx ->
+                    SurfaceViewRenderer(ctx).apply {
+                        setMirror(false)
+                        setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
+                        init(eglContext, null)
+                        remoteRenderer = this
+                        viewModel.setRemoteVideoSink(this)
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
 
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Spacer(modifier = Modifier.height(60.dp))
+            // Local video (small picture-in-picture)
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp)
+                    .size(120.dp, 160.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .border(2.dp, MetalGlow, RoundedCornerShape(12.dp))
+            ) {
+                AndroidView(
+                    factory = { ctx ->
+                        SurfaceViewRenderer(ctx).apply {
+                            setMirror(true)  // Mirror front camera
+                            setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
+                            init(eglContext, null)
+                            localRenderer = this
+                            viewModel.setLocalVideoSink(this)
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
 
-            // Avatar (for audio calls) with pulsing animation
-            if (activeCall?.isVideo != true) {
+            // Video call overlay controls
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.SpaceBetween
+            ) {
+                // Top: Name and status
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(top = 40.dp)
+                ) {
+                    Text(
+                        text = activeCall?.peerName ?: activeCall?.peerId ?: "Unknown",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    val statusColor = when (callState) {
+                        CallState.Connected -> CallActive
+                        is CallState.Ended -> StatusError
+                        else -> Color.White.copy(alpha = 0.7f)
+                    }
+                    Text(
+                        text = getStatusText(callState, callDuration),
+                        fontSize = 14.sp,
+                        color = statusColor
+                    )
+                }
+
+                // Bottom: Controls
+                CallControlsView(
+                    isMuted = activeCall?.isMuted ?: false,
+                    isSpeakerOn = activeCall?.isSpeakerOn ?: false,
+                    isVideoEnabled = activeCall?.isLocalVideoEnabled ?: true,
+                    isVideo = true,
+                    onMuteToggle = { viewModel.toggleMute() },
+                    onSpeakerToggle = { viewModel.toggleSpeaker() },
+                    onVideoToggle = { viewModel.toggleLocalVideo() },
+                    onCameraSwitch = { viewModel.switchCamera() },
+                    onEndCall = { viewModel.endCall() }
+                )
+            }
+        } else {
+            // Audio call UI
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Spacer(modifier = Modifier.height(60.dp))
+
+                // Avatar with pulsing animation
                 val pulseScale by rememberInfiniteTransition(label = "pulse").animateFloat(
                     initialValue = 1f,
                     targetValue = 1.08f,
@@ -191,48 +297,48 @@ fun CallScreen(
                         color = TextPrimary
                     )
                 }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Name
+                Text(
+                    text = activeCall?.peerName ?: activeCall?.peerId ?: "Unknown",
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = TextPrimary
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Status/Duration with color based on state
+                val statusColor = when (callState) {
+                    CallState.Connected -> CallActive
+                    is CallState.Ended -> StatusError
+                    else -> TextSecondary
+                }
+                Text(
+                    text = getStatusText(callState, callDuration),
+                    fontSize = 14.sp,
+                    color = statusColor
+                )
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                // Call controls
+                CallControlsView(
+                    isMuted = activeCall?.isMuted ?: false,
+                    isSpeakerOn = activeCall?.isSpeakerOn ?: false,
+                    isVideoEnabled = activeCall?.isLocalVideoEnabled ?: true,
+                    isVideo = activeCall?.isVideo ?: false,
+                    onMuteToggle = { viewModel.toggleMute() },
+                    onSpeakerToggle = { viewModel.toggleSpeaker() },
+                    onVideoToggle = { viewModel.toggleLocalVideo() },
+                    onCameraSwitch = { viewModel.switchCamera() },
+                    onEndCall = { viewModel.endCall() }
+                )
+
+                Spacer(modifier = Modifier.height(50.dp))
             }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Name
-            Text(
-                text = activeCall?.peerName ?: activeCall?.peerId ?: "Unknown",
-                fontSize = 24.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = TextPrimary
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Status/Duration with color based on state
-            val statusColor = when (callState) {
-                CallState.Connected -> CallActive
-                is CallState.Ended -> StatusError
-                else -> TextSecondary
-            }
-            Text(
-                text = getStatusText(callState, callDuration),
-                fontSize = 14.sp,
-                color = statusColor
-            )
-
-            Spacer(modifier = Modifier.weight(1f))
-
-            // Call controls
-            CallControlsView(
-                isMuted = activeCall?.isMuted ?: false,
-                isSpeakerOn = activeCall?.isSpeakerOn ?: false,
-                isVideoEnabled = activeCall?.isLocalVideoEnabled ?: true,
-                isVideo = activeCall?.isVideo ?: false,
-                onMuteToggle = { viewModel.toggleMute() },
-                onSpeakerToggle = { viewModel.toggleSpeaker() },
-                onVideoToggle = { viewModel.toggleLocalVideo() },
-                onCameraSwitch = { viewModel.switchCamera() },
-                onEndCall = { viewModel.endCall() }
-            )
-
-            Spacer(modifier = Modifier.height(50.dp))
         }
     }
 }
