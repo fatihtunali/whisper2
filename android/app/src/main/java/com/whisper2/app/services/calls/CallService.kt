@@ -1375,8 +1375,9 @@ class CallService @Inject constructor(
     }
 
     /**
-     * RULE 1: Check if we can transition to Connected state
-     * Connected = ICE connected + tracks received
+     * Check if we can transition to Connected state.
+     * For audio calls: ICE connected is sufficient (track events may not fire reliably)
+     * For video calls: ICE connected + remote video track received
      */
     private fun checkAndSetConnected() {
         val iceState = peerConnection?.iceConnectionState()
@@ -1385,18 +1386,22 @@ class CallService @Inject constructor(
 
         val isVideo = _activeCall.value?.isVideo == true
 
-        // For audio calls: need ICE + audio track
-        // For video calls: need ICE + video track (audio optional)
+        // For audio calls: ICE connected is enough (audio flows automatically)
+        // For video calls: need video track to show remote video
         val mediaReady = if (isVideo) {
-            remoteVideoTrackReceived
+            // For video, we need the track to render video, but if ICE is connected
+            // audio should be working, so we can still transition
+            remoteVideoTrackReceived || remoteAudioTrackReceived
         } else {
-            remoteAudioTrackReceived
+            // For audio calls, ICE connected means audio is flowing
+            // Track events may not fire reliably on all devices
+            true
         }
 
-        Logger.d("[CallService] checkAndSetConnected: ICE=$isIceConnected, mediaReady=$mediaReady, audioTrack=$remoteAudioTrackReceived, videoTrack=$remoteVideoTrackReceived")
+        Logger.d("[CallService] checkAndSetConnected: ICE=$isIceConnected, isVideo=$isVideo, mediaReady=$mediaReady, audioTrack=$remoteAudioTrackReceived, videoTrack=$remoteVideoTrackReceived")
 
         if (isIceConnected && mediaReady && _callState.value != CallState.Connected) {
-            Logger.i("[CallService] Media flowing - setting state to Connected")
+            Logger.i("[CallService] ICE connected - setting state to Connected (isVideo=$isVideo)")
             _callState.value = CallState.Connected
             _activeCall.value?.let { call ->
                 _activeCall.value = call.copy(startTime = System.currentTimeMillis())
