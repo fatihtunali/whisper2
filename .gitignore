@@ -18,3 +18,8 @@ DerivedData/
 
 # CocoaPods - keep Podfile.lock for reproducibility
 # ios/Podfile.lock
+android/upload_certificate.pem
+android/upload_key.pem
+android/export_key.bat
+android/encrypted_private_key.zip
+android/version.properties

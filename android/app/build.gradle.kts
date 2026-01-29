@@ -15,14 +15,48 @@ if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(keystorePropertiesFile.inputStream())
 }
 
+// Auto-increment version
+val versionPropsFile = rootProject.file("version.properties")
+val versionProps = Properties()
+if (versionPropsFile.exists()) {
+    versionProps.load(versionPropsFile.inputStream())
+}
+val appVersionCode = (versionProps["versionCode"] as String?)?.toIntOrNull() ?: 1
+val appVersionName = (versionProps["versionName"] as String?) ?: "1.0.0"
+
+// Increment version on release build
+gradle.taskGraph.whenReady {
+    if (hasTask(":app:bundleRelease") || hasTask(":app:assembleRelease")) {
+        val newVersionCode = appVersionCode + 1
+        val versionParts = appVersionName.split(".")
+        val major = versionParts.getOrNull(0)?.toIntOrNull() ?: 1
+        val minor = versionParts.getOrNull(1)?.toIntOrNull() ?: 0
+        val patch = (versionParts.getOrNull(2)?.toIntOrNull() ?: 0) + 1
+        val newVersionName = "$major.$minor.$patch"
+
+        versionProps["versionCode"] = newVersionCode.toString()
+        versionProps["versionName"] = newVersionName
+        versionPropsFile.outputStream().use { versionProps.store(it, null) }
+        println("Version updated: $appVersionCode -> $newVersionCode ($appVersionName -> $newVersionName)")
+    }
+}
+
 android {
     namespace = "com.whisper2.app"
     compileSdk = 35
 
     signingConfigs {
+        // Debug signing config - uses project keystore for consistent signatures
+        getByName("debug") {
+            storeFile = rootProject.file("whisper2-debug.keystore")
+            storePassword = "whisper2debug"
+            keyAlias = "whisper2"
+            keyPassword = "whisper2debug"
+        }
+        // Release signing config - uses keystore.properties
         create("release") {
             if (keystorePropertiesFile.exists()) {
-                storeFile = file(keystoreProperties["storeFile"] as String)
+                storeFile = rootProject.file(keystoreProperties["storeFile"] as String)
                 storePassword = keystoreProperties["storePassword"] as String
                 keyAlias = keystoreProperties["keyAlias"] as String
                 keyPassword = keystoreProperties["keyPassword"] as String
@@ -34,14 +68,17 @@ android {
         applicationId = "com.whisper2.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
         ksp { arg("room.schemaLocation", "${'$'}projectDir/schemas") }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
@@ -67,6 +104,7 @@ dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-process:2.8.7")
     implementation("androidx.activity:activity-compose:1.9.3")
 
     // Compose
@@ -104,8 +142,11 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
-    // WebRTC
-    implementation("io.getstream:stream-webrtc-android:1.3.0")
+    // WebRTC - Stream WebRTC (latest stable v1.3.9 with m125 patches)
+    implementation("io.getstream:stream-webrtc-android:1.3.9")
+
+    // Telecom (Android's CallKit equivalent)
+    implementation("androidx.core:core-telecom:1.0.0")
 
     // Firebase
     implementation(platform("com.google.firebase:firebase-bom:33.7.0"))

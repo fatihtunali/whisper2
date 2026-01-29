@@ -150,7 +150,9 @@ class CryptoService @Inject constructor(
      */
     fun deriveWhisperIdFromPublicKeyBase64(publicKeyBase64: String): String {
         return try {
-            val publicKeyData = Base64.decode(publicKeyBase64, Base64.NO_WRAP)
+            // Sanitize: URL-decoded + becomes space, fix it back
+            val sanitized = publicKeyBase64.replace(" ", "+").trim()
+            val publicKeyData = Base64.decode(sanitized, Base64.NO_WRAP)
             deriveWhisperIdFromPublicKey(publicKeyData)
         } catch (e: Exception) {
             generateWhisperId()

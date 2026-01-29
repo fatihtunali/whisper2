@@ -8,6 +8,9 @@ import com.whisper2.app.data.network.ws.WsClientImpl
 import com.whisper2.app.data.network.ws.WsConnectionState
 import com.whisper2.app.services.auth.AuthService
 import com.whisper2.app.services.auth.AuthState
+import com.whisper2.app.services.calls.ActiveCall
+import com.whisper2.app.services.calls.CallService
+import com.whisper2.app.services.calls.CallState
 import com.whisper2.app.services.messaging.MessageHandler
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharedFlow
@@ -19,10 +22,15 @@ import javax.inject.Inject
 class MainViewModel @Inject constructor(
     private val authService: AuthService,
     private val wsClient: WsClientImpl,
-    private val messageHandler: MessageHandler
+    private val messageHandler: MessageHandler,
+    private val callService: CallService  // Inject to ensure it's created early for incoming calls
 ) : ViewModel() {
     val authState: StateFlow<AuthState> = authService.authState
     val connectionState: StateFlow<WsConnectionState> = wsClient.connectionState
+
+    // Expose call state for incoming call detection
+    val callState: StateFlow<CallState> = callService.callState
+    val activeCall: StateFlow<ActiveCall?> = callService.activeCall
 
     // Expose new messages for UI updates
     val newMessages: SharedFlow<MessageEntity> = messageHandler.newMessages
@@ -35,14 +43,14 @@ class MainViewModel @Inject constructor(
             val currentAuth = authState.value
             val currentConnection = connectionState.value
 
-            Logger.d("[MainViewModel] Init: authState=$currentAuth, connectionState=$currentConnection")
+            Logger.i("[MainViewModel] Init: authState=$currentAuth, connectionState=$currentConnection")
 
             if (currentAuth is AuthState.Authenticated && currentConnection == WsConnectionState.DISCONNECTED) {
-                Logger.d("[MainViewModel] Auto-reconnecting WebSocket...")
+                Logger.i("[MainViewModel] Auto-reconnecting WebSocket...")
                 val result = authService.reconnect()
                 if (result.isSuccess && !hasFetchedPending) {
                     hasFetchedPending = true
-                    Logger.d("[MainViewModel] Reconnect success - fetching pending messages")
+                    Logger.i("[MainViewModel] Reconnect success - fetching pending messages")
                     fetchPendingMessages()
                 }
             }
@@ -53,7 +61,7 @@ class MainViewModel @Inject constructor(
             authState.collect { state ->
                 if (state is AuthState.Authenticated && connectionState.value == WsConnectionState.CONNECTED && !hasFetchedPending) {
                     hasFetchedPending = true
-                    Logger.d("[MainViewModel] Auth completed while connected - fetching pending messages")
+                    Logger.i("[MainViewModel] Auth completed while connected - fetching pending messages")
                     fetchPendingMessages()
                 }
             }

@@ -28,10 +28,9 @@ import com.whisper2.app.ui.screens.main.MainScreen
 import com.whisper2.app.ui.screens.main.ChatScreen
 import com.whisper2.app.ui.screens.main.GroupChatScreen
 import com.whisper2.app.ui.screens.calls.CallScreen
-import com.whisper2.app.ui.screens.calls.IncomingCallScreen
-import com.whisper2.app.ui.screens.calls.CallViewModel
-import com.whisper2.app.services.calls.CallState
+import com.whisper2.app.ui.NotificationData
 import com.whisper2.app.ui.viewmodels.AddContactState
+import com.whisper2.app.ui.viewmodels.MainViewModel
 import com.whisper2.app.ui.viewmodels.AuthViewModel
 import com.whisper2.app.ui.viewmodels.ContactsViewModel
 
@@ -69,11 +68,19 @@ sealed class Screen(val route: String) {
 }
 
 @Composable
-fun WhisperNavigation(authState: AuthState, connectionState: WsConnectionState) {
+fun WhisperNavigation(
+    authState: AuthState,
+    connectionState: WsConnectionState,
+    notificationData: NotificationData? = null,
+    onNotificationHandled: () -> Unit = {}
+) {
     when (authState) {
         is AuthState.Unauthenticated -> AuthNavigation()
         is AuthState.Authenticating -> LoadingScreen()
-        is AuthState.Authenticated -> MainNavigation()
+        is AuthState.Authenticated -> MainNavigation(
+            notificationData = notificationData,
+            onNotificationHandled = onNotificationHandled
+        )
         is AuthState.Error -> ErrorScreen(authState.message)
     }
 }
@@ -131,11 +138,34 @@ fun AuthNavigation() {
 }
 
 @Composable
-fun MainNavigation() {
+fun MainNavigation(
+    notificationData: NotificationData? = null,
+    onNotificationHandled: () -> Unit = {}
+) {
     val navController = rememberNavController()
     val authViewModel: AuthViewModel = hiltViewModel()
     val contactsViewModel: ContactsViewModel = hiltViewModel()
+    val mainViewModel: MainViewModel = hiltViewModel()  // This ensures CallService is created
     val gson = remember { Gson() }
+
+    // Call state is managed by Telecom - no navigation needed for incoming calls
+    // The Telecom system UI handles answer/decline, WebRTC runs in background
+
+    // Handle notification click - navigate to appropriate screen
+    LaunchedEffect(notificationData) {
+        notificationData?.let { data ->
+            when {
+                data.isIncomingCall -> {
+                    // Incoming calls are handled by Telecom - no navigation needed
+                }
+                data.conversationId != null -> {
+                    // Navigate to chat screen
+                    navController.navigate(Screen.Chat.createRoute(data.conversationId))
+                }
+            }
+            onNotificationHandled()
+        }
+    }
 
     NavHost(navController = navController, startDestination = Screen.Main.route) {
         composable(Screen.Main.route) {
@@ -278,43 +308,8 @@ fun MainNavigation() {
             )
         }
 
-        composable(
-            route = Screen.IncomingCall.route,
-            arguments = listOf(
-                navArgument("callerName") { type = NavType.StringType },
-                navArgument("callerId") { type = NavType.StringType },
-                navArgument("isVideo") { type = NavType.BoolType }
-            )
-        ) { backStackEntry ->
-            val callerName = Uri.decode(backStackEntry.arguments?.getString("callerName") ?: "")
-            val callerId = backStackEntry.arguments?.getString("callerId") ?: ""
-            val isVideo = backStackEntry.arguments?.getBoolean("isVideo") ?: false
-
-            IncomingCallScreen(
-                callerName = callerName,
-                callerId = callerId,
-                isVideo = isVideo,
-                onAnswer = {
-                    // Navigate to active call screen (already answered via ViewModel)
-                    navController.navigate("call_active") {
-                        popUpTo(Screen.IncomingCall.route) { inclusive = true }
-                    }
-                },
-                onDecline = {
-                    navController.popBackStack()
-                }
-            )
-        }
-
-        // Active call screen (for answered incoming calls)
-        composable("call_active") {
-            CallScreen(
-                peerId = null,
-                isVideo = false,
-                isOutgoing = false,
-                onCallEnded = { navController.popBackStack() }
-            )
-        }
+        // Incoming calls are handled by Telecom system UI
+        // No custom IncomingCall screen needed
     }
 }
 

@@ -12,6 +12,7 @@
 import 'dotenv/config';
 import http from 'http';
 import express from 'express';
+import path from 'path';
 import { WebSocketServer } from 'ws';
 import { logger } from './utils/logger';
 import { getPool, closePool } from './db/postgres';
@@ -88,6 +89,10 @@ async function main(): Promise<void> {
   const app = express();
   app.use(express.json());
   app.use(requestLogger);
+
+  // Serve static files from public directory
+  app.use(express.static(path.join(__dirname, '../public')));
+
   app.use('/', createHttpRouter());
   app.use(errorHandler);
 

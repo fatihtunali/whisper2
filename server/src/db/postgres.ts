@@ -30,11 +30,17 @@ export function getPool(): Pool {
       connectionTimeoutMillis: 5000,
     });
 
+    // Increase max listeners to prevent EventEmitter warnings
+    pool.setMaxListeners(100);
+
     pool.on('error', (err) => {
       logger.error({ err }, 'Unexpected PostgreSQL pool error');
     });
 
-    pool.on('connect', () => {
+    pool.on('connect', (client) => {
+      // Increase max listeners on individual client connections to prevent warnings
+      // when many concurrent operations are queued on a single connection
+      client.setMaxListeners(50);
       logger.debug('PostgreSQL client connected');
     });
   }

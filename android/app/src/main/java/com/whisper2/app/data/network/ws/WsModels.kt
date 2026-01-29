@@ -1,6 +1,7 @@
 package com.whisper2.app.data.network.ws
 
 import com.google.gson.JsonElement
+import com.google.gson.annotations.SerializedName
 import com.whisper2.app.core.Constants
 
 data class WsFrame<T>(
@@ -184,6 +185,7 @@ data class CallInitiatePayload(
     val callId: String,
     val from: String,
     val to: String,
+    @SerializedName("isVideo")
     val isVideo: Boolean,
     val timestamp: Long,
     val nonce: String,
@@ -194,6 +196,7 @@ data class CallInitiatePayload(
 data class CallIncomingPayload(
     val callId: String,
     val from: String,
+    @SerializedName("isVideo")
     val isVideo: Boolean,
     val timestamp: Long,
     val nonce: String,
@@ -259,6 +262,33 @@ data class CallRingingNotificationPayload(
     val from: String
 )
 
+// Incoming call_answer notification from server (no sessionToken/protocolVersion)
+data class CallAnswerNotificationPayload(
+    val callId: String,
+    val from: String,
+    val timestamp: Long,
+    val nonce: String,
+    val ciphertext: String,
+    val sig: String
+)
+
+// Incoming call_ice_candidate notification from server (no sessionToken/protocolVersion)
+data class CallIceCandidateNotificationPayload(
+    val callId: String,
+    val from: String,
+    val timestamp: Long,
+    val nonce: String,
+    val ciphertext: String,
+    val sig: String
+)
+
+// Incoming call_end notification from server (minimal payload)
+data class CallEndNotificationPayload(
+    val callId: String,
+    val from: String,
+    val reason: String
+)
+
 // System
 data class PingPayload(val timestamp: Long)
 data class PongPayload(val timestamp: Long, val serverTime: Long)
@@ -270,4 +300,23 @@ data class UpdateTokensPayload(
     val cryptoVersion: Int = Constants.CRYPTO_VERSION,
     val sessionToken: String,
     val pushToken: String
+)
+
+// Session
+data class SessionRefreshPayload(
+    val protocolVersion: Int = Constants.PROTOCOL_VERSION,
+    val cryptoVersion: Int = Constants.CRYPTO_VERSION,
+    val sessionToken: String
+)
+
+data class SessionRefreshAckPayload(
+    val sessionToken: String,
+    val sessionExpiresAt: Long,
+    val serverTime: Long
+)
+
+data class LogoutPayload(
+    val protocolVersion: Int = Constants.PROTOCOL_VERSION,
+    val cryptoVersion: Int = Constants.CRYPTO_VERSION,
+    val sessionToken: String
 )

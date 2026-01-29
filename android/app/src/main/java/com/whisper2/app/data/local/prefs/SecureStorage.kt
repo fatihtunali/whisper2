@@ -3,7 +3,7 @@ package com.whisper2.app.data.local.prefs
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKeys
+
 import com.whisper2.app.core.Constants
 import com.whisper2.app.core.Logger
 import com.whisper2.app.core.decodeBase64
@@ -27,14 +27,19 @@ class SecureStorage(private val context: Context, private val keystoreManager: K
         createEncryptedPrefs()
     }
 
-    private fun createEncryptedPrefs(): SharedPreferences =
-        EncryptedSharedPreferences.create(
-            Constants.SECURE_PREFS_NAME,
-            MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC),
+    private fun createEncryptedPrefs(): SharedPreferences {
+        val masterKey = androidx.security.crypto.MasterKey.Builder(context)
+            .setKeyScheme(androidx.security.crypto.MasterKey.KeyScheme.AES256_GCM)
+            .build()
+
+        return EncryptedSharedPreferences.create(
             context,
+            Constants.SECURE_PREFS_NAME,
+            masterKey,
             EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
         )
+    }
 
     private fun clearEncryptedPrefsFile() {
         val prefsFile = File(context.filesDir.parent, "shared_prefs/${Constants.SECURE_PREFS_NAME}.xml")

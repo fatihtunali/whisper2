@@ -1,5 +1,6 @@
 package com.whisper2.app.services.messaging
 
+import android.content.Context
 import android.util.Base64
 import com.whisper2.app.core.Constants
 import com.whisper2.app.core.Logger
@@ -14,6 +15,7 @@ import com.whisper2.app.data.local.db.entities.OutboxEntity
 import com.whisper2.app.data.local.prefs.SecureStorage
 import com.whisper2.app.data.network.ws.*
 import com.whisper2.app.services.attachments.AttachmentService
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import java.util.UUID
 import javax.inject.Inject
@@ -21,6 +23,7 @@ import javax.inject.Singleton
 
 @Singleton
 class MessagingService @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val messageDao: MessageDao,
     private val conversationDao: ConversationDao,
     private val contactDao: ContactDao,
@@ -87,7 +90,16 @@ class MessagingService @Inject constructor(
                 return
             }
 
-            val recipientPubKey = Base64.decode(recipientPubKeyBase64, Base64.NO_WRAP)
+            // Sanitize base64: remove spaces (can happen from URL encoding where + becomes space)
+            val sanitizedPubKey = recipientPubKeyBase64.replace(" ", "+").trim()
+
+            val recipientPubKey = try {
+                Base64.decode(sanitizedPubKey, Base64.NO_WRAP)
+            } catch (e: IllegalArgumentException) {
+                Logger.e("[MessagingService] Invalid base64 for recipient $peerId: '${recipientPubKeyBase64}'")
+                messageDao.updateStatus(messageId, Constants.MessageStatus.FAILED)
+                throw e
+            }
             val timestamp = System.currentTimeMillis()
 
             // Generate nonce (24 bytes)
@@ -141,22 +153,25 @@ class MessagingService @Inject constructor(
         }
     }
 
-    suspend fun sendAudioMessage(peerId: String, audioPath: String, duration: Long) {
+    suspend fun sendAudioMessage(peerId: String, audioPath: String, durationMs: Long) {
         val messageId = UUID.randomUUID().toString()
         val myId = secureStorage.whisperId ?: throw IllegalStateException("Not logged in")
+
+        // iOS sends duration in seconds as content
+        val durationSeconds = (durationMs / 1000).toInt()
 
         val message = MessageEntity(
             id = messageId,
             conversationId = peerId,
             from = myId,
             to = peerId,
-            contentType = Constants.ContentType.AUDIO,
-            content = "Voice message",
+            contentType = Constants.ContentType.VOICE,
+            content = durationSeconds.toString(),  // Duration in seconds (iOS format)
             timestamp = System.currentTimeMillis(),
             status = Constants.MessageStatus.PENDING,
             direction = Constants.Direction.OUTGOING,
             attachmentLocalPath = audioPath,
-            attachmentDuration = duration.toInt()
+            attachmentDuration = durationSeconds
         )
 
         messageDao.insert(message)
@@ -171,18 +186,18 @@ class MessagingService @Inject constructor(
                 messageDao.updateStatus(messageId, Constants.MessageStatus.FAILED)
                 return
             }
-            val recipientPubKey = Base64.decode(recipientPubKeyBase64, Base64.NO_WRAP)
+            val recipientPubKey = Base64.decode(recipientPubKeyBase64.replace(" ", "+").trim(), Base64.NO_WRAP)
 
             // Upload encrypted audio file
             val attachmentPointer = attachmentService.uploadAttachment(audioPath, recipientPubKey)
             Logger.d("[MessagingService] Audio uploaded: ${attachmentPointer.objectKey}")
 
-            // Send message with attachment pointer
+            // Send message with attachment pointer - content is duration in seconds (iOS format)
             sendEncryptedMessage(
                 messageId = messageId,
                 peerId = peerId,
-                msgType = Constants.ContentType.AUDIO,
-                content = "Voice message ($duration ms)",
+                msgType = Constants.ContentType.VOICE,
+                content = durationSeconds.toString(),
                 attachment = attachmentPointer
             )
         } catch (e: Exception) {
@@ -195,14 +210,20 @@ class MessagingService @Inject constructor(
         val messageId = UUID.randomUUID().toString()
         val myId = secureStorage.whisperId ?: throw IllegalStateException("Not logged in")
 
-        val content = "$latitude,$longitude"
+        // iOS format: JSON with latitude, longitude, timestamp
+        val locationJson = org.json.JSONObject().apply {
+            put("latitude", latitude)
+            put("longitude", longitude)
+            put("timestamp", System.currentTimeMillis())
+        }.toString()
+
         val message = MessageEntity(
             id = messageId,
             conversationId = peerId,
             from = myId,
             to = peerId,
             contentType = Constants.ContentType.LOCATION,
-            content = content,
+            content = locationJson,
             timestamp = System.currentTimeMillis(),
             status = Constants.MessageStatus.PENDING,
             direction = Constants.Direction.OUTGOING,
@@ -212,20 +233,30 @@ class MessagingService @Inject constructor(
 
         messageDao.insert(message)
         updateConversation(peerId, "Location")
-        sendEncryptedMessage(messageId, peerId, Constants.ContentType.LOCATION, content)
+        sendEncryptedMessage(messageId, peerId, Constants.ContentType.LOCATION, locationJson)
     }
 
     suspend fun sendAttachment(peerId: String, uri: String) {
         val messageId = UUID.randomUUID().toString()
         val myId = secureStorage.whisperId ?: throw IllegalStateException("Not logged in")
 
+        // Detect content type from URI
+        val contentUri = android.net.Uri.parse(uri)
+        val mimeType = context.contentResolver.getType(contentUri) ?: "application/octet-stream"
+
+        val (contentType, displayName) = when {
+            mimeType.startsWith("image/") -> Constants.ContentType.IMAGE to "Photo"
+            mimeType.startsWith("video/") -> Constants.ContentType.VIDEO to "Video"
+            else -> Constants.ContentType.FILE to "File"
+        }
+
         val message = MessageEntity(
             id = messageId,
             conversationId = peerId,
             from = myId,
             to = peerId,
-            contentType = Constants.ContentType.FILE,
-            content = "File",
+            contentType = contentType,
+            content = displayName,
             timestamp = System.currentTimeMillis(),
             status = Constants.MessageStatus.PENDING,
             direction = Constants.Direction.OUTGOING,
@@ -233,7 +264,7 @@ class MessagingService @Inject constructor(
         )
 
         messageDao.insert(message)
-        updateConversation(peerId, "File")
+        updateConversation(peerId, displayName)
 
         try {
             // Get recipient's public key for file encryption
@@ -244,19 +275,18 @@ class MessagingService @Inject constructor(
                 messageDao.updateStatus(messageId, Constants.MessageStatus.FAILED)
                 return
             }
-            val recipientPubKey = Base64.decode(recipientPubKeyBase64, Base64.NO_WRAP)
+            val recipientPubKey = Base64.decode(recipientPubKeyBase64.replace(" ", "+").trim(), Base64.NO_WRAP)
 
             // Upload encrypted file
-            val contentUri = android.net.Uri.parse(uri)
             val attachmentPointer = attachmentService.uploadAttachment(contentUri, recipientPubKey)
             Logger.d("[MessagingService] File uploaded: ${attachmentPointer.objectKey}")
 
-            // Send message with attachment pointer
+            // Send message with attachment pointer - use detected content type
             sendEncryptedMessage(
                 messageId = messageId,
                 peerId = peerId,
-                msgType = Constants.ContentType.FILE,
-                content = "File attachment",
+                msgType = contentType,  // Use detected type (image/video/file)
+                content = displayName,
                 attachment = attachmentPointer
             )
         } catch (e: Exception) {

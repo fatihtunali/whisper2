@@ -264,7 +264,7 @@ class GroupService @Inject constructor(
             val memberPubKeyBase64 = contact?.encPublicKey ?: continue
 
             try {
-                val memberPubKey = Base64.decode(memberPubKeyBase64, Base64.NO_WRAP)
+                val memberPubKey = Base64.decode(memberPubKeyBase64.replace(" ", "+").trim(), Base64.NO_WRAP)
                 val nonce = cryptoService.generateNonce()
                 val ciphertext = cryptoService.boxSeal(
                     content.toByteArray(Charsets.UTF_8),
@@ -437,7 +437,7 @@ class GroupService @Inject constructor(
         val senderPubKeyBase64 = contact?.encPublicKey ?: return
 
         try {
-            val senderPubKey = Base64.decode(senderPubKeyBase64, Base64.NO_WRAP)
+            val senderPubKey = Base64.decode(senderPubKeyBase64.replace(" ", "+").trim(), Base64.NO_WRAP)
             val ciphertext = Base64.decode(ciphertextB64, Base64.NO_WRAP)
             val nonce = Base64.decode(nonceB64, Base64.NO_WRAP)
 

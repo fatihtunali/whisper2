@@ -1,23 +1,37 @@
 package com.whisper2.app.services.calls
 
 import android.content.Context
+import android.content.Intent
 import android.media.AudioManager
+import android.os.Build
 import android.util.Base64
 import com.google.gson.Gson
 import com.google.gson.JsonElement
 import com.whisper2.app.core.Constants
 import com.whisper2.app.core.Logger
 import com.whisper2.app.crypto.CryptoService
+import com.whisper2.app.services.auth.AuthService
+import com.whisper2.app.services.auth.AuthState
 import com.whisper2.app.data.local.db.dao.CallRecordDao
 import com.whisper2.app.data.local.db.dao.ContactDao
 import com.whisper2.app.data.local.db.entities.CallRecordEntity
 import com.whisper2.app.data.local.prefs.SecureStorage
-import com.whisper2.app.data.network.ws.*
+import com.whisper2.app.data.network.ws.CallAnswerNotificationPayload
+import com.whisper2.app.data.network.ws.CallAnswerPayload
+import com.whisper2.app.data.network.ws.CallEndNotificationPayload
+import com.whisper2.app.data.network.ws.CallEndPayload
+import com.whisper2.app.data.network.ws.CallIceCandidateNotificationPayload
+import com.whisper2.app.data.network.ws.CallIceCandidatePayload
+import com.whisper2.app.data.network.ws.CallIncomingPayload
+import com.whisper2.app.data.network.ws.CallInitiatePayload
+import com.whisper2.app.data.network.ws.GetTurnCredentialsPayload
+import com.whisper2.app.data.network.ws.TurnCredentialsPayload
+import com.whisper2.app.data.network.ws.WsClientImpl
+import com.whisper2.app.data.network.ws.WsFrame
 import com.whisper2.app.di.ApplicationScope
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
-import kotlin.time.Duration.Companion.seconds
 import org.json.JSONObject
 import org.webrtc.*
 import java.util.UUID
@@ -64,6 +78,8 @@ class CallService @Inject constructor(
     private val contactDao: ContactDao,
     private val callRecordDao: CallRecordDao,
     private val gson: Gson,
+    private val telecomCallManager: TelecomCallManager,
+    private val authService: dagger.Lazy<AuthService>,
     @ApplicationScope private val scope: CoroutineScope
 ) {
     private val _callState = MutableStateFlow<CallState>(CallState.Idle)
@@ -82,12 +98,35 @@ class CallService @Inject constructor(
     private var videoCapturer: CameraVideoCapturer? = null
     private var surfaceTextureHelper: SurfaceTextureHelper? = null
 
+    // Shared EGL context for video rendering
+    private var eglBase: EglBase? = null
+    val eglBaseContext: EglBase.Context?
+        get() = eglBase?.eglBaseContext
+
     // Video renderers (set by UI)
     private var localVideoSink: VideoSink? = null
     private var remoteVideoSink: VideoSink? = null
 
+    // Store remote video track to add sink later when UI is ready
+    private var remoteVideoTrack: VideoTrack? = null
+
+    // CRITICAL: Must hold reference to remote MediaStream to prevent GC from disposing tracks!
+    // See: https://github.com/GetStream/webrtc-android/issues/176
+    private var remoteMediaStream: MediaStream? = null
+
     // Pending ICE candidates (received before remote description set)
-    private val pendingIceCandidates = mutableListOf<IceCandidate>()
+    private val pendingRemoteIceCandidates = mutableListOf<IceCandidate>()
+
+    // Pending local ICE candidates (generated before offer sent)
+    private val pendingLocalIceCandidates = mutableListOf<IceCandidate>()
+    private var localSdpSent = false
+
+    // Track received flags for proper Connected state
+    private var remoteAudioTrackReceived = false
+    private var remoteVideoTrackReceived = false
+
+    // Flag to prevent double-adding sink (onAddTrack and onAddStream both fire)
+    private var remoteVideoSinkAdded = false
 
     // Incoming call payload (stored for answering)
     private var pendingIncomingCall: CallIncomingPayload? = null
@@ -102,25 +141,42 @@ class CallService @Inject constructor(
     init {
         setupWebRTC()
         setupMessageHandler()
+        // Initialize Telecom integration (Android's CallKit equivalent)
+        telecomCallManager.initialize()
     }
 
     private fun setupWebRTC() {
-        val options = PeerConnectionFactory.InitializationOptions.builder(context)
-            .setEnableInternalTracer(true)
-            .createInitializationOptions()
-        PeerConnectionFactory.initialize(options)
+        try {
+            val options = PeerConnectionFactory.InitializationOptions.builder(context)
+                .setEnableInternalTracer(true)
+                .createInitializationOptions()
+            PeerConnectionFactory.initialize(options)
 
-        val encoderFactory = DefaultVideoEncoderFactory(
-            EglBase.create().eglBaseContext,
-            true,
-            true
-        )
-        val decoderFactory = DefaultVideoDecoderFactory(EglBase.create().eglBaseContext)
+            // Create shared EGL base
+            eglBase = EglBase.create()
+            val eglContext = eglBase!!.eglBaseContext
 
-        peerConnectionFactory = PeerConnectionFactory.builder()
-            .setVideoEncoderFactory(encoderFactory)
-            .setVideoDecoderFactory(decoderFactory)
-            .createPeerConnectionFactory()
+            // SAFE ENCODER CREATION
+            val encoderFactory = try {
+                DefaultVideoEncoderFactory(eglContext, true, false)
+            } catch (e: Exception) {
+                Logger.e("[CallService] Failed to create DefaultVideoEncoderFactory", e)
+                throw e // Critical failure
+            }
+
+            // Using Threema's WebRTC library which has proper decoder support
+            val decoderFactory = DefaultVideoDecoderFactory(eglContext)
+            Logger.i("[CallService] Using DefaultVideoDecoderFactory for video decoding")
+
+            peerConnectionFactory = PeerConnectionFactory.builder()
+                .setVideoEncoderFactory(encoderFactory)
+                .setVideoDecoderFactory(decoderFactory)
+                .createPeerConnectionFactory()
+
+            Logger.i("[CallService] WebRTC initialized successfully")
+        } catch (e: Exception) {
+            Logger.e("[CallService] CRITICAL: WebRTC initialization failed", e)
+        }
     }
 
     private fun setupMessageHandler() {
@@ -133,27 +189,37 @@ class CallService @Inject constructor(
 
     // MARK: - TURN Credentials
 
-    private suspend fun fetchTurnCredentials(): TurnCredentialsPayload? {
-        val sessionToken = secureStorage.sessionToken ?: return null
-
-        // Clear previous credentials
-        _turnCredentials.value = null
+    private suspend fun fetchTurnCredentials() {
+        val sessionToken = secureStorage.sessionToken ?: return
 
         val payload = GetTurnCredentialsPayload(sessionToken = sessionToken)
         wsClient.send(WsFrame(Constants.MsgType.GET_TURN_CREDENTIALS, payload = payload))
-
-        // Wait for credentials with timeout
-        return withTimeoutOrNull(5000L) {
-            _turnCredentials.first { it != null }
-        }
     }
 
-    private suspend fun ensureTurnCredentials(): TurnCredentialsPayload? {
-        // Return cached if available and not too old
-        _turnCredentials.value?.let { return it }
+    // MARK: - Wait for Authentication
 
-        // Fetch fresh credentials
-        return fetchTurnCredentials()
+    /**
+     * Wait for the WebSocket connection to be authenticated.
+     * When the app wakes from a push notification, the WS may be connecting but not yet authenticated.
+     * This ensures we don't send call commands before the challenge-response completes.
+     */
+    private suspend fun waitForAuthentication(timeout: Long = 10_000): Boolean {
+        val startTime = System.currentTimeMillis()
+        val checkInterval = 100L
+
+        while (System.currentTimeMillis() - startTime < timeout) {
+            val currentState = authService.get().authState.value
+            if (currentState is AuthState.Authenticated) {
+                return true
+            }
+            // If explicitly unauthenticated or error, trigger reconnect
+            if (currentState is AuthState.Unauthenticated || currentState is AuthState.Error) {
+                Logger.i("[CallService] Auth state is $currentState, triggering reconnect")
+                authService.get().reconnect()
+            }
+            delay(checkInterval)
+        }
+        return false
     }
 
     // MARK: - Initiate Call
@@ -167,21 +233,38 @@ class CallService @Inject constructor(
         // Get recipient's public key
         val contact = contactDao.getContactById(peerId)
         val recipientPublicKey = contact?.encPublicKey?.let {
-            Base64.decode(it, Base64.NO_WRAP)
+            Base64.decode(it.replace(" ", "+").trim(), Base64.NO_WRAP)
         } ?: return Result.failure(Exception("Contact public key not found"))
 
         return try {
-            // Fetch TURN credentials and wait for them
-            val turn = ensureTurnCredentials()
-            if (turn == null) {
-                Logger.w("No TURN credentials available, proceeding without TURN")
+            // Reset track flags
+            remoteAudioTrackReceived = false
+            remoteVideoTrackReceived = false
+            remoteVideoSinkAdded = false
+            localSdpSent = false
+
+            // Fetch TURN credentials
+            if (_turnCredentials.value == null) {
+                fetchTurnCredentials()
+                delay(1000) // Wait for credentials
             }
 
             val callId = UUID.randomUUID().toString().lowercase()
 
+            // RULE 2: Initialize audio routing BEFORE createPeerConnection
+            initializeAudioRouting(isVideo)
+
             // Create peer connection and generate offer
             createPeerConnection(isVideo)
-            val sdpOffer = createOffer()
+            val sdpOffer = createOffer(isVideo)
+
+            // Log SDP details for debugging
+            val hasVideoMLine = sdpOffer.contains("m=video")
+            val hasAudioMLine = sdpOffer.contains("m=audio")
+            Logger.i("[CallService] SDP Offer created - hasAudio=$hasAudioMLine, hasVideo=$hasVideoMLine, isVideoCall=$isVideo")
+            if (isVideo && !hasVideoMLine) {
+                Logger.e("[CallService] CRITICAL: Video call but NO m=video in SDP! localVideoTrack=${localVideoTrack != null}")
+            }
 
             // Encrypt SDP
             val nonce = cryptoService.generateNonce()
@@ -220,6 +303,11 @@ class CallService @Inject constructor(
             )
 
             wsClient.send(WsFrame(Constants.MsgType.CALL_INITIATE, payload = payload))
+            localSdpSent = true
+
+            // Flush any pending local ICE candidates now that offer is sent
+            pendingLocalIceCandidates.forEach { sendIceCandidate(it) }
+            pendingLocalIceCandidates.clear()
 
             // Update state
             _activeCall.value = ActiveCall(
@@ -230,6 +318,16 @@ class CallService @Inject constructor(
                 isOutgoing = true
             )
             _callState.value = CallState.Initiating
+
+            // Report outgoing call to Telecom system
+            Logger.i("[CallService] Reporting outgoing call to Telecom - isVideo: $isVideo")
+            telecomCallManager.reportOutgoingCall(
+                callId = callId,
+                calleeName = contact?.displayName ?: peerId,
+                calleeId = peerId,
+                isVideo = isVideo,
+                scope = scope
+            )
 
             // Configure audio
             configureAudioSession()
@@ -246,6 +344,18 @@ class CallService @Inject constructor(
 
     suspend fun answerCall(): Result<Unit> {
         val incomingPayload = pendingIncomingCall ?: return Result.failure(Exception("No incoming call"))
+        Logger.i("[CallService] *** answerCall - pendingIncomingCall.isVideo=${incomingPayload.isVideo} ***")
+
+        // CRITICAL: Wait for WebSocket authentication before answering
+        // When app wakes from push notification, the connection may not be authenticated yet
+        Logger.i("[CallService] Waiting for WebSocket authentication...")
+        val authenticated = waitForAuthentication(timeout = 10_000)
+        if (!authenticated) {
+            Logger.e("[CallService] Failed to authenticate WebSocket before answering call")
+            return Result.failure(Exception("WebSocket not authenticated"))
+        }
+        Logger.i("[CallService] WebSocket authenticated, proceeding with answer")
+
         val whisperId = secureStorage.whisperId ?: return Result.failure(Exception("Not authenticated"))
         val sessionToken = secureStorage.sessionToken ?: return Result.failure(Exception("No session"))
         val encPrivateKey = secureStorage.encPrivateKey ?: return Result.failure(Exception("No encryption key"))
@@ -254,14 +364,20 @@ class CallService @Inject constructor(
         // Get sender's public key
         val contact = contactDao.getContactById(incomingPayload.from)
         val senderPublicKey = contact?.encPublicKey?.let {
-            Base64.decode(it, Base64.NO_WRAP)
+            Base64.decode(it.replace(" ", "+").trim(), Base64.NO_WRAP)
         } ?: return Result.failure(Exception("Sender public key not found"))
 
         return try {
-            // Fetch TURN credentials and wait for them
-            val turn = ensureTurnCredentials()
-            if (turn == null) {
-                Logger.w("No TURN credentials available, proceeding without TURN")
+            // Reset track flags
+            remoteAudioTrackReceived = false
+            remoteVideoTrackReceived = false
+            remoteVideoSinkAdded = false
+            localSdpSent = false
+
+            // Fetch TURN if needed
+            if (_turnCredentials.value == null) {
+                fetchTurnCredentials()
+                delay(1000)
             }
 
             // Decrypt SDP offer
@@ -273,20 +389,42 @@ class CallService @Inject constructor(
                 Charsets.UTF_8
             )
 
+            // Log received offer SDP to verify m=video line
+            val hasVideoMLine = sdpOffer.contains("m=video")
+            val hasAudioMLine = sdpOffer.contains("m=audio")
+            Logger.i("[CallService] Received offer SDP - isVideo=${incomingPayload.isVideo}, hasAudio=$hasAudioMLine, hasVideo=$hasVideoMLine")
+            if (incomingPayload.isVideo && !hasVideoMLine) {
+                Logger.e("[CallService] CRITICAL: Video call but received offer has NO m=video line!")
+            }
+            if (incomingPayload.isVideo) {
+                Logger.i("[CallService] SDP Offer preview (first 500 chars): ${sdpOffer.take(500)}")
+            }
+
+            // RULE 2: Initialize audio routing BEFORE createPeerConnection
+            initializeAudioRouting(incomingPayload.isVideo)
+
             // Create peer connection and set remote description
             createPeerConnection(incomingPayload.isVideo)
 
             val remoteDesc = SessionDescription(SessionDescription.Type.OFFER, sdpOffer)
             peerConnection?.setRemoteDescription(SdpObserverAdapter(), remoteDesc)
 
-            // Process pending ICE candidates
-            pendingIceCandidates.forEach { candidate ->
+            // Process pending remote ICE candidates (buffered while ringing)
+            pendingRemoteIceCandidates.forEach { candidate ->
                 peerConnection?.addIceCandidate(candidate)
             }
-            pendingIceCandidates.clear()
+            pendingRemoteIceCandidates.clear()
 
-            // Create answer
-            val sdpAnswer = createAnswer()
+            // Create answer with correct isVideo flag
+            val sdpAnswer = createAnswer(incomingPayload.isVideo)
+
+            // Log answer SDP details
+            val answerHasVideo = sdpAnswer.contains("m=video")
+            val answerHasAudio = sdpAnswer.contains("m=audio")
+            Logger.i("[CallService] SDP Answer created - hasAudio=$answerHasAudio, hasVideo=$answerHasVideo, isVideoCall=${incomingPayload.isVideo}")
+            if (incomingPayload.isVideo && !answerHasVideo) {
+                Logger.e("[CallService] CRITICAL: Video call but answer has NO m=video line! localVideoTrack=${localVideoTrack != null}")
+            }
 
             // Encrypt answer
             val nonce = cryptoService.generateNonce()
@@ -324,6 +462,11 @@ class CallService @Inject constructor(
             )
 
             wsClient.send(WsFrame(Constants.MsgType.CALL_ANSWER, payload = payload))
+            localSdpSent = true
+
+            // Flush any pending local ICE candidates
+            pendingLocalIceCandidates.forEach { sendIceCandidate(it) }
+            pendingLocalIceCandidates.clear()
 
             // Update state
             _activeCall.value = ActiveCall(
@@ -334,9 +477,6 @@ class CallService @Inject constructor(
                 isOutgoing = false
             )
             _callState.value = CallState.Connecting
-
-            // Configure audio
-            configureAudioSession()
 
             pendingIncomingCall = null
 
@@ -370,7 +510,7 @@ class CallService @Inject constructor(
 
         val contact = contactDao.getContactById(call.peerId)
         val recipientPublicKey = contact?.encPublicKey?.let {
-            Base64.decode(it, Base64.NO_WRAP)
+            Base64.decode(it.replace(" ", "+").trim(), Base64.NO_WRAP)
         }
 
         if (recipientPublicKey != null) {
@@ -417,7 +557,14 @@ class CallService @Inject constructor(
 
         _callState.value = CallState.Ended(reason)
         recordCallToHistory(call, reason)
-        cleanup()
+
+        // End Telecom connection
+        telecomCallManager.endCallSync()
+
+        // Stop foreground service
+        CallForegroundService.stopService(context)
+
+        cleanupResources()  // Don't reset state - let screen see Ended state
     }
 
     // MARK: - Call Controls
@@ -430,7 +577,23 @@ class CallService @Inject constructor(
     fun toggleSpeaker() {
         val currentCall = _activeCall.value ?: return
         val newSpeakerState = !currentCall.isSpeakerOn
-        audioManager.isSpeakerphoneOn = newSpeakerState
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val devices = audioManager.availableCommunicationDevices
+            if (newSpeakerState) {
+                val speakerDevice = devices.firstOrNull { it.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                if (speakerDevice != null) {
+                    val result = audioManager.setCommunicationDevice(speakerDevice)
+                    Logger.i("[CallService] setCommunicationDevice (Speaker) result: $result")
+                }
+            } else {
+                audioManager.clearCommunicationDevice()
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.isSpeakerphoneOn = newSpeakerState
+        }
+
         _activeCall.value = currentCall.copy(isSpeakerOn = newSpeakerState)
     }
 
@@ -444,12 +607,61 @@ class CallService @Inject constructor(
     }
 
     fun setLocalVideoSink(sink: VideoSink?) {
-        localVideoSink = sink
-        localVideoTrack?.addSink(sink)
+        synchronized(this) {
+            Logger.i("[CallService] setLocalVideoSink called: sink=${if (sink != null) "SET" else "NULL"}, localVideoTrack=${if (localVideoTrack != null) "EXISTS" else "NULL"}")
+
+            // Remove old sink from track before setting new one (prevents GL crash on released renderer)
+            val oldSink = localVideoSink
+            if (oldSink != null && oldSink != sink) {
+                localVideoTrack?.let { track ->
+                    try {
+                        Logger.i("[CallService] Removing old local video sink from track")
+                        track.removeSink(oldSink)
+                    } catch (e: Exception) {
+                        Logger.w("[CallService] Error removing old local sink: ${e.message}")
+                    }
+                }
+            }
+
+            localVideoSink = sink
+            if (sink != null) {
+                localVideoTrack?.let { track ->
+                    Logger.i("[CallService] Adding local video sink to existing track")
+                    track.addSink(sink)
+                }
+            }
+        }
     }
 
     fun setRemoteVideoSink(sink: VideoSink?) {
-        remoteVideoSink = sink
+        synchronized(this) {
+            Logger.i("[CallService] setRemoteVideoSink called: sink=${if (sink != null) "SET" else "NULL"}, remoteVideoTrack=${if (remoteVideoTrack != null) "EXISTS" else "NULL"}, sinkAdded=$remoteVideoSinkAdded")
+
+            // Remove old sink from track before setting new one (prevents GL crash on released renderer)
+            val oldSink = remoteVideoSink
+            if (oldSink != null && oldSink != sink) {
+                remoteVideoTrack?.let { track ->
+                    try {
+                        Logger.i("[CallService] Removing old remote video sink from track")
+                        track.removeSink(oldSink)
+                    } catch (e: Exception) {
+                        Logger.w("[CallService] Error removing old remote sink: ${e.message}")
+                    }
+                }
+                remoteVideoSinkAdded = false  // Reset flag since we removed the sink
+            }
+
+            remoteVideoSink = sink
+            // If remote track already received and sink not yet added, add sink now
+            if (sink != null && !remoteVideoSinkAdded) {
+                remoteVideoTrack?.let { track ->
+                    Logger.i("[CallService] Adding sink to existing remote video track, enabled=${track.enabled()}")
+                    track.setEnabled(true)
+                    track.addSink(sink)
+                    remoteVideoSinkAdded = true
+                } ?: Logger.w("[CallService] setRemoteVideoSink: no remoteVideoTrack yet, will add when track arrives")
+            }
+        }
     }
 
     // MARK: - WebRTC Setup
@@ -487,11 +699,8 @@ class CallService @Inject constructor(
                     when (state) {
                         PeerConnection.IceConnectionState.CONNECTED,
                         PeerConnection.IceConnectionState.COMPLETED -> {
-                            _callState.value = CallState.Connected
-                            _activeCall.value?.let { call ->
-                                _activeCall.value = call.copy(startTime = System.currentTimeMillis())
-                            }
-                            startCallDurationTimer()
+                            // RULE 1: Only set Connected when media is actually flowing
+                            checkAndSetConnected()
                         }
                         PeerConnection.IceConnectionState.DISCONNECTED -> {
                             _callState.value = CallState.Reconnecting
@@ -513,7 +722,13 @@ class CallService @Inject constructor(
             override fun onIceCandidate(candidate: IceCandidate?) {
                 candidate?.let {
                     scope.launch {
-                        sendIceCandidate(it)
+                        // RULE 3: Buffer local ICE until SDP is sent
+                        if (localSdpSent) {
+                            sendIceCandidate(it)
+                        } else {
+                            Logger.d("Buffering local ICE candidate until SDP sent")
+                            pendingLocalIceCandidates.add(it)
+                        }
                     }
                 }
             }
@@ -521,24 +736,82 @@ class CallService @Inject constructor(
             override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) {}
 
             override fun onAddStream(stream: MediaStream?) {
-                stream?.videoTracks?.firstOrNull()?.let { remoteVideoTrack ->
-                    remoteVideoSink?.let { sink ->
-                        remoteVideoTrack.addSink(sink)
+                Logger.i("[CallService] onAddStream: video tracks=${stream?.videoTracks?.size}, audio tracks=${stream?.audioTracks?.size}")
+
+                // CRITICAL: Store reference to prevent GC from disposing the stream and its tracks!
+                remoteMediaStream = stream
+
+                // Handle audio track
+                stream?.audioTracks?.firstOrNull()?.let { audioTrack ->
+                    Logger.i("[CallService] onAddStream: got remote audio track, enabled=${audioTrack.enabled()}")
+                    audioTrack.setEnabled(true)
+                    remoteAudioTrackReceived = true
+                    scope.launch { checkAndSetConnected() }
+                }
+
+                // Handle video track
+                stream?.videoTracks?.firstOrNull()?.let { videoTrack ->
+                    Logger.i("[CallService] onAddStream: GOT REMOTE VIDEO TRACK! enabled=${videoTrack.enabled()}, id=${videoTrack.id()}")
+                    videoTrack.setEnabled(true)
+                    synchronized(this@CallService) {
+                        remoteVideoTrack = videoTrack
+                        remoteVideoTrackReceived = true
+                        // Only add sink if not already added (onAddTrack may have already done it)
+                        if (!remoteVideoSinkAdded) {
+                            remoteVideoSink?.let { sink ->
+                                Logger.i("[CallService] Adding remote video sink from onAddStream")
+                                videoTrack.addSink(sink)
+                                remoteVideoSinkAdded = true
+                            } ?: Logger.w("[CallService] onAddStream: remoteVideoSink is NULL, will add sink later")
+                        } else {
+                            Logger.i("[CallService] onAddStream: sink already added by onAddTrack, skipping")
+                        }
                     }
+                    scope.launch { checkAndSetConnected() }
                 }
             }
 
-            override fun onRemoveStream(stream: MediaStream?) {}
+            override fun onRemoveStream(stream: MediaStream?) {
+                remoteVideoTrack = null
+                remoteMediaStream = null
+            }
 
             override fun onDataChannel(channel: DataChannel?) {}
 
             override fun onRenegotiationNeeded() {}
 
             override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out MediaStream>?) {
+                val trackKind = receiver?.track()?.kind()
+                val trackId = receiver?.track()?.id()
+                val trackEnabled = receiver?.track()?.enabled()
+                Logger.i("[CallService] onAddTrack: kind=$trackKind, id=$trackId, enabled=$trackEnabled, streams=${streams?.size}")
+
                 receiver?.track()?.let { track ->
-                    if (track is VideoTrack) {
-                        remoteVideoSink?.let { sink ->
-                            track.addSink(sink)
+                    when (track) {
+                        is VideoTrack -> {
+                            Logger.i("[CallService] onAddTrack: GOT REMOTE VIDEO TRACK! enabled=${track.enabled()}, id=${track.id()}")
+                            track.setEnabled(true)
+                            synchronized(this@CallService) {
+                                remoteVideoTrack = track
+                                remoteVideoTrackReceived = true
+                                // Only add sink if not already added
+                                if (!remoteVideoSinkAdded) {
+                                    remoteVideoSink?.let { sink ->
+                                        Logger.i("[CallService] Adding remote video sink to track NOW")
+                                        track.addSink(sink)
+                                        remoteVideoSinkAdded = true
+                                    } ?: Logger.w("[CallService] onAddTrack: remoteVideoSink is NULL! Will add sink when UI sets it")
+                                } else {
+                                    Logger.i("[CallService] onAddTrack: sink already added, skipping")
+                                }
+                            }
+                            scope.launch { checkAndSetConnected() }
+                        }
+                        is AudioTrack -> {
+                            Logger.i("[CallService] onAddTrack: got remote audio track, enabled=${track.enabled()}")
+                            track.setEnabled(true)
+                            remoteAudioTrackReceived = true
+                            scope.launch { checkAndSetConnected() }
                         }
                     }
                 }
@@ -555,54 +828,122 @@ class CallService @Inject constructor(
 
         // Add video track if video call
         if (isVideo) {
-            val eglBase = EglBase.create()
-            surfaceTextureHelper = SurfaceTextureHelper.create("CaptureThread", eglBase.eglBaseContext)
+            val eglContext = eglBase?.eglBaseContext
+            if (eglContext == null) {
+                Logger.e("[CallService] EGL context is null, cannot create video track")
+                return
+            }
 
-            val videoSource = factory.createVideoSource(false)
-            videoCapturer = createCameraCapturer()
-            videoCapturer?.initialize(surfaceTextureHelper, context, videoSource.capturerObserver)
-            videoCapturer?.startCapture(1280, 720, 30)
-
-            localVideoTrack = factory.createVideoTrack("video0", videoSource)
-            localVideoTrack?.let { track ->
-                peerConnection?.addTrack(track, listOf("stream0"))
-                localVideoSink?.let { sink ->
-                    track.addSink(sink)
+            try {
+                surfaceTextureHelper = SurfaceTextureHelper.create("CaptureThread", eglContext)
+                if (surfaceTextureHelper == null) {
+                    Logger.e("[CallService] Failed to create SurfaceTextureHelper")
+                    return
                 }
+
+                val videoSource = factory.createVideoSource(false)
+                videoCapturer = createCameraCapturer()
+
+                if (videoCapturer == null) {
+                    Logger.e("[CallService] Failed to create camera capturer - no camera available")
+                    // Continue without video - don't crash the call
+                } else {
+                    videoCapturer?.initialize(surfaceTextureHelper, context, videoSource.capturerObserver)
+
+                    try {
+                        videoCapturer?.startCapture(1280, 720, 30)
+                        Logger.i("[CallService] Camera capture started successfully")
+                    } catch (e: Exception) {
+                        Logger.e("[CallService] Failed to start camera capture", e)
+                        // Continue without video capture
+                        try {
+                            videoCapturer?.dispose()
+                        } catch (ignored: Exception) {}
+                        videoCapturer = null
+                    }
+                }
+
+                // Only create video track if camera capturer succeeded
+                if (videoCapturer != null) {
+                    localVideoTrack = factory.createVideoTrack("video0", videoSource)
+                    localVideoTrack?.let { track ->
+                        peerConnection?.addTrack(track, listOf("stream0"))
+                        Logger.i("[CallService] Local video track added to peer connection")
+                        synchronized(this@CallService) {
+                            localVideoSink?.let { sink ->
+                                track.addSink(sink)
+                                Logger.i("[CallService] Local video sink attached (was waiting)")
+                            } ?: Logger.w("[CallService] No local video sink set yet - will attach when UI sets it")
+                        }
+                    }
+                } else {
+                    Logger.e("[CallService] Skipping video track creation - no camera capturer")
+                }
+            } catch (e: Exception) {
+                Logger.e("[CallService] Failed to initialize video components", e)
+                // Clean up partial video state
+                try {
+                    videoCapturer?.stopCapture()
+                } catch (ignored: Exception) {}
+                try {
+                    videoCapturer?.dispose()
+                } catch (ignored: Exception) {}
+                videoCapturer = null
+                surfaceTextureHelper?.dispose()
+                surfaceTextureHelper = null
+                // Don't return - continue with audio-only if video fails
             }
         }
     }
 
     private fun createCameraCapturer(): CameraVideoCapturer? {
-        val camera2Enumerator = Camera2Enumerator(context)
-        val deviceNames = camera2Enumerator.deviceNames
+        try {
+            val camera2Enumerator = Camera2Enumerator(context)
+            val deviceNames = camera2Enumerator.deviceNames
 
-        // Try front camera first
-        for (deviceName in deviceNames) {
-            if (camera2Enumerator.isFrontFacing(deviceName)) {
+            // Try front camera first
+            for (deviceName in deviceNames) {
+                if (camera2Enumerator.isFrontFacing(deviceName)) {
+                    return camera2Enumerator.createCapturer(deviceName, null)
+                }
+            }
+
+            // Fall back to any camera
+            for (deviceName in deviceNames) {
                 return camera2Enumerator.createCapturer(deviceName, null)
             }
+        } catch (e: Exception) {
+            Logger.e("[CallService] Failed to create camera capturer", e)
         }
-
-        // Fall back to any camera
-        for (deviceName in deviceNames) {
-            return camera2Enumerator.createCapturer(deviceName, null)
-        }
-
         return null
     }
 
-    private suspend fun createOffer(): String = suspendCancellableCoroutine { cont ->
+    private suspend fun createOffer(isVideo: Boolean): String = suspendCancellableCoroutine { cont ->
         val constraints = MediaConstraints().apply {
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo",
-                if (_activeCall.value?.isVideo == true) "true" else "false"))
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", if (isVideo) "true" else "false"))
         }
+        Logger.d("[CallService] createOffer: isVideo=$isVideo, OfferToReceiveVideo=${if (isVideo) "true" else "false"}")
 
         peerConnection?.createOffer(object : SdpObserver {
             override fun onCreateSuccess(desc: SessionDescription?) {
-                peerConnection?.setLocalDescription(SdpObserverAdapter(), desc)
-                cont.resume(desc?.description ?: "") {}
+                // Log SDP to verify m=video line exists
+                var sdp = desc?.description ?: ""
+                val hasVideoMLine = sdp.contains("m=video")
+                Logger.i("[CallService] Created offer - hasVideoMLine=$hasVideoMLine")
+                if (isVideo && !hasVideoMLine) {
+                    Logger.e("[CallService] WARNING: Video call but SDP has no m=video line!")
+                }
+
+                // Prefer H.264 codec - better hardware decoder support on most Android devices
+                // VP8 hardware decoder on some devices (MediaTek) has JNI issues
+                if (isVideo) {
+                    sdp = preferH264Codec(sdp)
+                }
+
+                val modifiedDesc = SessionDescription(desc?.type, sdp)
+                peerConnection?.setLocalDescription(SdpObserverAdapter(), modifiedDesc)
+                cont.resume(sdp) {}
             }
             override fun onSetSuccess() {}
             override fun onCreateFailure(error: String?) {
@@ -612,17 +953,32 @@ class CallService @Inject constructor(
         }, constraints)
     }
 
-    private suspend fun createAnswer(): String = suspendCancellableCoroutine { cont ->
+    private suspend fun createAnswer(isVideo: Boolean): String = suspendCancellableCoroutine { cont ->
         val constraints = MediaConstraints().apply {
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo",
-                if (_activeCall.value?.isVideo == true) "true" else "false"))
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", if (isVideo) "true" else "false"))
         }
+        Logger.d("[CallService] createAnswer: isVideo=$isVideo, OfferToReceiveVideo=${if (isVideo) "true" else "false"}")
 
         peerConnection?.createAnswer(object : SdpObserver {
             override fun onCreateSuccess(desc: SessionDescription?) {
-                peerConnection?.setLocalDescription(SdpObserverAdapter(), desc)
-                cont.resume(desc?.description ?: "") {}
+                // Log SDP to verify m=video line exists
+                var sdp = desc?.description ?: ""
+                val hasVideoMLine = sdp.contains("m=video")
+                Logger.i("[CallService] Created answer - hasVideoMLine=$hasVideoMLine")
+                if (isVideo && !hasVideoMLine) {
+                    Logger.e("[CallService] WARNING: Video call but answer SDP has no m=video line!")
+                }
+
+                // Prefer H.264 codec - better hardware decoder support on most Android devices
+                // VP8 hardware decoder on some devices (MediaTek) has JNI issues
+                if (isVideo) {
+                    sdp = preferH264Codec(sdp)
+                }
+
+                val modifiedDesc = SessionDescription(desc?.type, sdp)
+                peerConnection?.setLocalDescription(SdpObserverAdapter(), modifiedDesc)
+                cont.resume(sdp) {}
             }
             override fun onSetSuccess() {}
             override fun onCreateFailure(error: String?) {
@@ -632,8 +988,103 @@ class CallService @Inject constructor(
         }, constraints)
     }
 
-    private fun configureAudioSession() {
+    /**
+     * Prefer H.264 codec for better hardware decoder support.
+     * VP8 hardware decoder on some devices (MediaTek) has JNI issues.
+     * H.264 has wider hardware support.
+     */
+    private fun preferH264Codec(sdp: String): String {
+        val lines = sdp.split("\r\n").toMutableList()
+        var videoMLineIndex = -1
+        var h264PayloadType: String? = null
+
+        // Find the m=video line and H.264 payload type
+        for (i in lines.indices) {
+            val line = lines[i]
+            if (line.startsWith("m=video")) {
+                videoMLineIndex = i
+            }
+            // Find H.264 payload type from rtpmap
+            if (line.contains("H264/90000")) {
+                val match = Regex("a=rtpmap:(\\d+) H264/90000").find(line)
+                h264PayloadType = match?.groupValues?.get(1)
+                Logger.d("[CallService] Found H264 payload type: $h264PayloadType")
+            }
+        }
+
+        if (videoMLineIndex == -1 || h264PayloadType == null) {
+            Logger.d("[CallService] No video line or H264 not found, returning original SDP")
+            return sdp
+        }
+
+        // Reorder payload types in m=video line to put H.264 first
+        val mLine = lines[videoMLineIndex]
+        val parts = mLine.split(" ").toMutableList()
+        if (parts.size > 3) {
+            // Format: m=video PORT PROTO PAYLOAD_TYPES...
+            val payloadTypes = parts.subList(3, parts.size).toMutableList()
+            if (payloadTypes.remove(h264PayloadType)) {
+                payloadTypes.add(0, h264PayloadType)
+                val newMLine = parts.subList(0, 3).joinToString(" ") + " " + payloadTypes.joinToString(" ")
+                lines[videoMLineIndex] = newMLine
+                Logger.i("[CallService] Reordered codecs to prefer H264: $newMLine")
+            }
+        }
+
+        return lines.joinToString("\r\n")
+    }
+
+    /**
+     * Log all transceivers for debugging
+     */
+    private fun logTransceivers(context: String) {
+        peerConnection?.transceivers?.forEachIndexed { index, transceiver ->
+            val mid = transceiver.mid
+            val direction = transceiver.direction
+            val currentDirection = transceiver.currentDirection
+            val mediaType = transceiver.mediaType
+            val receiver = transceiver.receiver
+            val trackKind = receiver.track()?.kind()
+            val trackEnabled = receiver.track()?.enabled()
+            Logger.i("[CallService] Transceiver[$index] $context: mid=$mid, mediaType=$mediaType, direction=$direction, currentDirection=$currentDirection, trackKind=$trackKind, trackEnabled=$trackEnabled")
+        }
+    }
+
+    /**
+     * RULE 2: Audio routing must start BEFORE SDP/createPeerConnection
+     */
+    private fun initializeAudioRouting(isVideo: Boolean) {
+        Logger.d("[CallService] Initializing audio routing, isVideo=$isVideo")
+
+        // Request audio focus
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val focusRequest = android.media.AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                .setAudioAttributes(
+                    android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
+                .build()
+            audioManager.requestAudioFocus(focusRequest)
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.requestAudioFocus(null, AudioManager.STREAM_VOICE_CALL, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+        }
+
+        // Set communication mode BEFORE creating peer connection
         audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+
+        // Speaker on for video, off for audio
+        @Suppress("DEPRECATION")
+        audioManager.isSpeakerphoneOn = isVideo
+
+        Logger.d("[CallService] Audio routing initialized: mode=${audioManager.mode}, speaker=$isVideo")
+    }
+
+    private fun configureAudioSession() {
+        // Legacy - now handled by initializeAudioRouting
+        @Suppress("DEPRECATION")
         audioManager.isSpeakerphoneOn = _activeCall.value?.isVideo == true
     }
 
@@ -648,7 +1099,7 @@ class CallService @Inject constructor(
 
         val contact = contactDao.getContactById(call.peerId)
         val recipientPublicKey = contact?.encPublicKey?.let {
-            Base64.decode(it, Base64.NO_WRAP)
+            Base64.decode(it.replace(" ", "+").trim(), Base64.NO_WRAP)
         } ?: return
 
         try {
@@ -699,9 +1150,13 @@ class CallService @Inject constructor(
     // MARK: - Message Handling
 
     private fun handleMessage(frame: WsFrame<JsonElement>) {
+        Logger.d("[CallService] Received message: ${frame.type}")
         when (frame.type) {
             Constants.MsgType.TURN_CREDENTIALS -> handleTurnCredentials(frame)
-            Constants.MsgType.CALL_INCOMING -> handleCallIncoming(frame)
+            Constants.MsgType.CALL_INCOMING -> {
+                Logger.i("[CallService] INCOMING CALL RECEIVED!")
+                handleCallIncoming(frame)
+            }
             Constants.MsgType.CALL_ANSWER -> handleCallAnswer(frame)
             Constants.MsgType.CALL_ICE_CANDIDATE -> handleIceCandidate(frame)
             Constants.MsgType.CALL_END -> handleCallEnd(frame)
@@ -720,34 +1175,94 @@ class CallService @Inject constructor(
 
     private fun handleCallIncoming(frame: WsFrame<JsonElement>) {
         try {
+            Logger.d("[CallService] Parsing incoming call payload")
+
+            // SAFE BOOLEAN EXTRACTION
+            var isVideoFromJson = false
+            try {
+                if (frame.payload.isJsonObject) {
+                    val jsonObj = frame.payload.asJsonObject
+                    if (jsonObj.has("isVideo")) {
+                        isVideoFromJson = jsonObj.get("isVideo").asBoolean
+                    }
+                }
+            } catch (e: Exception) {
+                Logger.e("[CallService] Manual JSON parsing failed, relying on Gson", e)
+            }
+
             val payload = gson.fromJson(frame.payload, CallIncomingPayload::class.java)
-            pendingIncomingCall = payload
+
+            // Combine parsed data safely
+            val finalIsVideo = if (frame.payload.isJsonObject && frame.payload.asJsonObject.has("isVideo")) {
+                isVideoFromJson
+            } else {
+                payload.isVideo
+            }
+
+            val correctedPayload = payload.copy(isVideo = finalIsVideo)
+            pendingIncomingCall = correctedPayload
+
+            Logger.i("[CallService] Incoming Call processed - isVideo: $finalIsVideo")
 
             scope.launch {
-                val contact = contactDao.getContactById(payload.from)
+                val contact = contactDao.getContactById(correctedPayload.from)
+                Logger.d("[CallService] Contact lookup: ${contact?.displayName ?: "not found"}")
+
                 _activeCall.value = ActiveCall(
-                    callId = payload.callId,
-                    peerId = payload.from,
+                    callId = correctedPayload.callId,
+                    peerId = correctedPayload.from,
                     peerName = contact?.displayName,
-                    isVideo = payload.isVideo,
+                    isVideo = correctedPayload.isVideo,
                     isOutgoing = false
                 )
                 _callState.value = CallState.Ringing
+                Logger.i("[CallService] ActiveCall created with isVideo=${correctedPayload.isVideo}")
+
+                // Set up onEndCall callback for when user hangs up during an active call
+                telecomCallManager.onEndCall = {
+                    Logger.i("[CallService] Telecom onEndCall callback")
+                    scope.launch {
+                        endCall(CallEndReason.ENDED)
+                    }
+                }
+
+                // Report incoming call to Telecom system
+                try {
+                    Logger.i("[CallService] Passing isVideo=${correctedPayload.isVideo} to Telecom")
+                    val telecomSuccess = telecomCallManager.reportIncomingCall(
+                        callId = correctedPayload.callId,
+                        callerName = contact?.displayName ?: correctedPayload.from,
+                        callerId = correctedPayload.from,
+                        isVideo = correctedPayload.isVideo,
+                        scope = scope
+                    )
+                    Logger.i("[CallService] Telecom reportIncomingCall result: $telecomSuccess")
+
+                    if (telecomSuccess) {
+                        delay(100) // Small delay to allow ConnectionService to create connection
+                        setupConnectionCallbacks()
+                    }
+                } catch (e: Exception) {
+                    Logger.e("[CallService] Telecom reporting failed", e)
+                }
             }
         } catch (e: Exception) {
-            Logger.e("Failed to handle incoming call", e)
+            Logger.e("[CallService] handleCallIncoming CRASHED", e)
         }
     }
 
     private fun handleCallAnswer(frame: WsFrame<JsonElement>) {
         try {
-            val payload = gson.fromJson(frame.payload, CallAnswerPayload::class.java)
+            // Server sends minimal payload: { callId, from, timestamp, nonce, ciphertext, sig }
+            val payload = gson.fromJson(frame.payload, CallAnswerNotificationPayload::class.java)
             val encPrivateKey = secureStorage.encPrivateKey ?: return
+
+            Logger.d("Received call_answer: callId=${payload.callId}, from=${payload.from}")
 
             scope.launch {
                 val contact = contactDao.getContactById(payload.from)
                 val senderPublicKey = contact?.encPublicKey?.let {
-                    Base64.decode(it, Base64.NO_WRAP)
+                    Base64.decode(it.replace(" ", "+").trim(), Base64.NO_WRAP)
                 } ?: return@launch
 
                 // Decrypt SDP answer
@@ -759,14 +1274,25 @@ class CallService @Inject constructor(
                     Charsets.UTF_8
                 )
 
+                // Log received answer SDP to verify m=video line
+                val hasVideoMLine = sdpAnswer.contains("m=video")
+                val isVideo = _activeCall.value?.isVideo == true
+                Logger.i("[CallService] Received answer SDP - isVideo=$isVideo, hasVideoMLine=$hasVideoMLine")
+                if (isVideo && !hasVideoMLine) {
+                    Logger.e("[CallService] WARNING: Video call but received answer has no m=video line!")
+                }
+
                 val remoteDesc = SessionDescription(SessionDescription.Type.ANSWER, sdpAnswer)
                 peerConnection?.setRemoteDescription(SdpObserverAdapter(), remoteDesc)
 
-                // Process pending ICE candidates
-                pendingIceCandidates.forEach { candidate ->
+                // Log transceivers after remote SDP is set
+                logTransceivers("after setRemoteDescription (answer)")
+
+                // Process pending remote ICE candidates
+                pendingRemoteIceCandidates.forEach { candidate ->
                     peerConnection?.addIceCandidate(candidate)
                 }
-                pendingIceCandidates.clear()
+                pendingRemoteIceCandidates.clear()
 
                 _callState.value = CallState.Connecting
             }
@@ -777,13 +1303,14 @@ class CallService @Inject constructor(
 
     private fun handleIceCandidate(frame: WsFrame<JsonElement>) {
         try {
-            val payload = gson.fromJson(frame.payload, CallIceCandidatePayload::class.java)
+            // Server sends minimal payload: { callId, from, timestamp, nonce, ciphertext, sig }
+            val payload = gson.fromJson(frame.payload, CallIceCandidateNotificationPayload::class.java)
             val encPrivateKey = secureStorage.encPrivateKey ?: return
 
             scope.launch {
                 val contact = contactDao.getContactById(payload.from)
                 val senderPublicKey = contact?.encPublicKey?.let {
-                    Base64.decode(it, Base64.NO_WRAP)
+                    Base64.decode(it.replace(" ", "+").trim(), Base64.NO_WRAP)
                 } ?: return@launch
 
                 val ciphertextData = Base64.decode(payload.ciphertext, Base64.NO_WRAP)
@@ -801,9 +1328,10 @@ class CallService @Inject constructor(
 
                 val candidate = IceCandidate(sdpMid, sdpMLineIndex, sdp)
 
-                // If remote description not set yet, queue the candidate
-                if (peerConnection?.remoteDescription == null) {
-                    pendingIceCandidates.add(candidate)
+                // RULE 3: If peer connection doesn't exist or remote description not set, buffer
+                if (peerConnection == null || peerConnection?.remoteDescription == null) {
+                    Logger.d("Buffering remote ICE candidate until PC + remote SDP ready")
+                    pendingRemoteIceCandidates.add(candidate)
                 } else {
                     peerConnection?.addIceCandidate(candidate)
                 }
@@ -815,19 +1343,27 @@ class CallService @Inject constructor(
 
     private fun handleCallEnd(frame: WsFrame<JsonElement>) {
         try {
-            val payload = gson.fromJson(frame.payload, CallEndPayload::class.java)
+            // Server sends minimal payload: { callId, from, reason }
+            val payload = gson.fromJson(frame.payload, CallEndNotificationPayload::class.java)
             val reason = try {
                 CallEndReason.valueOf(payload.reason.uppercase())
             } catch (e: Exception) {
                 CallEndReason.ENDED
             }
 
+            Logger.d("Received call_end: callId=${payload.callId}, from=${payload.from}, reason=${payload.reason}")
+
             scope.launch {
                 _activeCall.value?.let { call ->
                     recordCallToHistory(call, reason)
                 }
                 _callState.value = CallState.Ended(reason)
-                cleanup()
+
+                // Remote ended - clean up Telecom and foreground service
+                telecomCallManager.remoteCallEnded()
+                CallForegroundService.stopService(context)
+
+                cleanupResources()  // Don't reset state - let screen see Ended state
             }
         } catch (e: Exception) {
             Logger.e("Failed to handle call end", e)
@@ -836,6 +1372,37 @@ class CallService @Inject constructor(
 
     private fun handleCallRinging() {
         _callState.value = CallState.Ringing
+    }
+
+    /**
+     * RULE 1: Check if we can transition to Connected state
+     * Connected = ICE connected + tracks received
+     */
+    private fun checkAndSetConnected() {
+        val iceState = peerConnection?.iceConnectionState()
+        val isIceConnected = iceState == PeerConnection.IceConnectionState.CONNECTED ||
+                             iceState == PeerConnection.IceConnectionState.COMPLETED
+
+        val isVideo = _activeCall.value?.isVideo == true
+
+        // For audio calls: need ICE + audio track
+        // For video calls: need ICE + video track (audio optional)
+        val mediaReady = if (isVideo) {
+            remoteVideoTrackReceived
+        } else {
+            remoteAudioTrackReceived
+        }
+
+        Logger.d("[CallService] checkAndSetConnected: ICE=$isIceConnected, mediaReady=$mediaReady, audioTrack=$remoteAudioTrackReceived, videoTrack=$remoteVideoTrackReceived")
+
+        if (isIceConnected && mediaReady && _callState.value != CallState.Connected) {
+            Logger.i("[CallService] Media flowing - setting state to Connected")
+            _callState.value = CallState.Connected
+            _activeCall.value?.let { call ->
+                _activeCall.value = call.copy(startTime = System.currentTimeMillis())
+            }
+            startCallDurationTimer()
+        }
     }
 
     // MARK: - Call Duration Timer
@@ -882,35 +1449,120 @@ class CallService @Inject constructor(
 
     // MARK: - Cleanup
 
-    private fun cleanup() {
+    private fun cleanupResources() {
         callDurationJob?.cancel()
         callDurationJob = null
         _callDuration.value = 0
 
-        videoCapturer?.stopCapture()
-        videoCapturer?.dispose()
+        // Stop and dispose video capturer with proper exception handling
+        try {
+            videoCapturer?.stopCapture()
+        } catch (e: Exception) {
+            Logger.w("[CallService] Exception stopping video capturer: ${e.message}")
+        }
+        try {
+            videoCapturer?.dispose()
+        } catch (e: Exception) {
+            Logger.w("[CallService] Exception disposing video capturer: ${e.message}")
+        }
         videoCapturer = null
 
-        surfaceTextureHelper?.dispose()
+        try {
+            surfaceTextureHelper?.dispose()
+        } catch (e: Exception) {
+            Logger.w("[CallService] Exception disposing surfaceTextureHelper: ${e.message}")
+        }
         surfaceTextureHelper = null
 
-        localVideoTrack?.dispose()
+        try {
+            localVideoTrack?.dispose()
+        } catch (e: Exception) {
+            Logger.w("[CallService] Exception disposing localVideoTrack: ${e.message}")
+        }
         localVideoTrack = null
-        localAudioTrack?.dispose()
+
+        try {
+            localAudioTrack?.dispose()
+        } catch (e: Exception) {
+            Logger.w("[CallService] Exception disposing localAudioTrack: ${e.message}")
+        }
         localAudioTrack = null
 
-        peerConnection?.close()
+        try {
+            peerConnection?.close()
+        } catch (e: Exception) {
+            Logger.w("[CallService] Exception closing peer connection: ${e.message}")
+        }
         peerConnection = null
 
-        pendingIceCandidates.clear()
+        pendingRemoteIceCandidates.clear()
+        pendingLocalIceCandidates.clear()
         pendingIncomingCall = null
+        remoteVideoTrack = null
+        remoteMediaStream = null
 
-        _activeCall.value = null
-        _callState.value = CallState.Idle
+        // Reset flags
+        localSdpSent = false
+        remoteAudioTrackReceived = false
+        remoteVideoTrackReceived = false
+        remoteVideoSinkAdded = false
 
         // Reset audio
         audioManager.mode = AudioManager.MODE_NORMAL
-        audioManager.isSpeakerphoneOn = false
+        audioManager.mode = AudioManager.MODE_NORMAL
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            audioManager.clearCommunicationDevice()
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.isSpeakerphoneOn = false
+        }
+    }
+
+    private fun cleanup() {
+        cleanupResources()
+        _activeCall.value = null
+        _callState.value = CallState.Idle
+    }
+
+    // Called after screen navigates away
+    fun resetCallState() {
+        _activeCall.value = null
+        _callState.value = CallState.Idle
+    }
+
+    // Set up callbacks on the WhisperConnection (after it's created by ConnectionService)
+    private fun setupConnectionCallbacks() {
+        WhisperConnectionService.activeConnection?.let { connection ->
+            Logger.i("[CallService] Setting up WhisperConnection callbacks")
+
+            // Handle answer from wearable/external device (Telecom triggers this)
+            connection.onAnswerCallback = { isVideo ->
+                Logger.i("[CallService] WhisperConnection onAnswerCallback from external device")
+                scope.launch { answerCall() }
+            }
+
+            // Handle reject from wearable/external device
+            connection.onRejectCallback = {
+                Logger.i("[CallService] WhisperConnection onRejectCallback from external device")
+                scope.launch { declineCall() }
+            }
+
+            // Handle disconnect during active call
+            connection.onDisconnectCallback = {
+                Logger.i("[CallService] WhisperConnection onDisconnectCallback")
+                scope.launch { endCall(CallEndReason.ENDED) }
+            }
+        } ?: Logger.w("[CallService] No active connection yet to set callbacks on")
+    }
+
+    /**
+     * Set the Telecom connection to active state (call UI -> this should be called when user answers)
+     */
+    fun setConnectionActive() {
+        WhisperConnectionService.activeConnection?.let { connection ->
+            Logger.i("[CallService] Setting Telecom connection to ACTIVE")
+            connection.setActive()
+        } ?: Logger.w("[CallService] setConnectionActive: No active Telecom connection!")
     }
 }
 

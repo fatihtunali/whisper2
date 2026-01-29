@@ -4,7 +4,8 @@ import android.util.Base64
 import java.text.Normalizer
 
 fun ByteArray.encodeBase64(): String = Base64.encodeToString(this, Base64.NO_WRAP)
-fun String.decodeBase64(): ByteArray = Base64.decode(this, Base64.NO_WRAP)
+// Sanitize: URL-decoded + becomes space, fix it back before decoding
+fun String.decodeBase64(): ByteArray = Base64.decode(this.replace(" ", "+").trim(), Base64.NO_WRAP)
 fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 fun String.fromHex(): ByteArray = chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 

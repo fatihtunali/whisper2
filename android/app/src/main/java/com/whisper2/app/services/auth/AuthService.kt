@@ -8,7 +8,17 @@ import com.whisper2.app.core.Constants
 import com.whisper2.app.core.Logger
 import com.whisper2.app.crypto.CryptoService
 import com.whisper2.app.data.local.prefs.SecureStorage
-import com.whisper2.app.data.network.ws.*
+import com.whisper2.app.data.network.ws.ErrorPayload
+import com.whisper2.app.data.network.ws.LogoutPayload
+import com.whisper2.app.data.network.ws.RegisterAckPayload
+import com.whisper2.app.data.network.ws.RegisterBeginPayload
+import com.whisper2.app.data.network.ws.RegisterChallengePayload
+import com.whisper2.app.data.network.ws.RegisterProofPayload
+import com.whisper2.app.data.network.ws.SessionRefreshAckPayload
+import com.whisper2.app.data.network.ws.UpdateTokensPayload
+import com.whisper2.app.data.network.ws.WsClientImpl
+import com.whisper2.app.data.network.ws.WsConnectionState
+import com.whisper2.app.data.network.ws.WsFrame
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.tasks.await
@@ -268,6 +278,33 @@ class AuthService @Inject constructor(
         }
     }
 
+    /**
+     * Sync FCM token with server after successful authentication.
+     * This ensures the server has the latest token even after reinstall.
+     */
+    private fun syncFcmTokenAfterAuth() {
+        scope.launch {
+            try {
+                // Force get fresh token from Firebase
+                val token = FirebaseMessaging.getInstance().token.await()
+                val sessionToken = secureStorage.sessionToken ?: return@launch
+
+                // Update local cache
+                secureStorage.fcmToken = token
+
+                // Send to server
+                val payload = UpdateTokensPayload(
+                    sessionToken = sessionToken,
+                    pushToken = token
+                )
+                wsClient.send(WsFrame(Constants.MsgType.UPDATE_TOKENS, payload = payload))
+                Logger.auth("FCM token synced after auth: ${token.take(20)}...")
+            } catch (e: Exception) {
+                Logger.e("Failed to sync FCM token after auth", e)
+            }
+        }
+    }
+
     private suspend fun waitForConnection() {
         var attempts = 0
         while (wsClient.connectionState.value != WsConnectionState.CONNECTED && attempts < 100) {
@@ -299,6 +336,8 @@ class AuthService @Inject constructor(
                     val payload = gson.fromJson(frame.payload, RegisterAckPayload::class.java)
                     Logger.auth("Received ack: ${payload.whisperId}, success=${payload.success}")
                     if (payload.success) {
+                        // Sync FCM token after successful auth
+                        syncFcmTokenAfterAuth()
                         ackContinuation?.resume(payload)
                     } else {
                         ackContinuation?.resumeWithException(AuthException("Registration rejected"))
@@ -324,6 +363,17 @@ class AuthService @Inject constructor(
                     Logger.e("Failed to parse error", e)
                 }
             }
+
+            Constants.MsgType.SESSION_REFRESH_ACK -> {
+                try {
+                    val payload = gson.fromJson(frame.payload, SessionRefreshAckPayload::class.java)
+                    Logger.auth("Session refreshed: expires at ${payload.sessionExpiresAt}")
+                    secureStorage.sessionToken = payload.sessionToken
+                    secureStorage.sessionExpiresAt = payload.sessionExpiresAt
+                } catch (e: Exception) {
+                    Logger.e("Failed to parse session refresh ack", e)
+                }
+            }
         }
     }
 
@@ -333,9 +383,10 @@ class AuthService @Inject constructor(
                 val token = secureStorage.sessionToken
                 if (token != null) {
                     // Send logout to server
+                    val payload = LogoutPayload(sessionToken = token)
                     wsClient.send(WsFrame(
-                        type = "logout",
-                        payload = mapOf("sessionToken" to token)
+                        type = Constants.MsgType.LOGOUT,
+                        payload = payload
                     ))
                 }
             } catch (e: Exception) {

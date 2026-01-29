@@ -9,6 +9,8 @@ import com.whisper2.app.services.calls.CallState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import org.webrtc.EglBase
+import org.webrtc.VideoSink
 import javax.inject.Inject
 
 @HiltViewModel
@@ -19,6 +21,8 @@ class CallViewModel @Inject constructor(
     val callState: StateFlow<CallState> = callService.callState
     val activeCall: StateFlow<ActiveCall?> = callService.activeCall
     val callDuration: StateFlow<Long> = callService.callDuration
+    val eglBaseContext: EglBase.Context?
+        get() = callService.eglBaseContext
 
     fun initiateCall(peerId: String, isVideo: Boolean) {
         viewModelScope.launch {
@@ -36,6 +40,10 @@ class CallViewModel @Inject constructor(
         viewModelScope.launch {
             callService.declineCall()
         }
+    }
+
+    fun setConnectionActive() {
+        callService.setConnectionActive()
     }
 
     fun endCall() {
@@ -58,5 +66,17 @@ class CallViewModel @Inject constructor(
 
     fun switchCamera() {
         callService.switchCamera()
+    }
+
+    fun resetCallState() {
+        callService.resetCallState()
+    }
+
+    fun setLocalVideoSink(sink: VideoSink?) {
+        callService.setLocalVideoSink(sink)
+    }
+
+    fun setRemoteVideoSink(sink: VideoSink?) {
+        callService.setRemoteVideoSink(sink)
     }
 }

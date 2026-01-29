@@ -13,8 +13,14 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.DISABLE_KEYGUARD" />
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
 
     <application
         android:name=".App"
@@ -26,6 +32,17 @@
         android:theme="@style/Theme.Whisper2"
         android:networkSecurityConfig="@xml/network_security_config">
 
+        <!-- FCM default notification settings -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_notification" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/notification_color" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="messages" />
+
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
@@ -36,6 +53,17 @@
             </intent-filter>
         </activity>
 
+        <!-- Unified incoming call activity (handles both audio and video) -->
+        <activity
+            android:name=".ui.IncomingCallActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:showOnLockScreen="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:taskAffinity=""
+            android:excludeFromRecents="true" />
+
         <service android:name=".services.push.FcmService" android:exported="false">
             <intent-filter>
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
@@ -45,6 +73,16 @@
         <service
             android:name=".services.calls.CallForegroundService"
             android:exported="false"
-            android:foregroundServiceType="phoneCall|microphone|camera" />
+            android:foregroundServiceType="phoneCall" />
+
+        <!-- VoIP ConnectionService for Telecom framework integration -->
+        <service
+            android:name=".services.calls.WhisperConnectionService"
+            android:permission="android.permission.BIND_TELECOM_CONNECTION_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.telecom.ConnectionService" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

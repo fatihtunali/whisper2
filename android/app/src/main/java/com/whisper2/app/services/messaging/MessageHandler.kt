@@ -1,8 +1,15 @@
 package com.whisper2.app.services.messaging
 
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
 import android.util.Base64
+import androidx.core.app.NotificationCompat
+import androidx.lifecycle.ProcessLifecycleOwner
 import com.google.gson.Gson
 import com.google.gson.JsonElement
+import com.whisper2.app.R
 import com.whisper2.app.core.Constants
 import com.whisper2.app.core.Logger
 import com.whisper2.app.crypto.CryptoService
@@ -13,6 +20,8 @@ import com.whisper2.app.data.local.db.entities.ConversationEntity
 import com.whisper2.app.data.local.db.entities.MessageEntity
 import com.whisper2.app.data.local.prefs.SecureStorage
 import com.whisper2.app.data.network.ws.*
+import com.whisper2.app.ui.MainActivity
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -26,6 +35,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class MessageHandler @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val wsClient: WsClientImpl,
     private val messageDao: MessageDao,
     private val conversationDao: ConversationDao,
@@ -46,6 +56,11 @@ class MessageHandler @Inject constructor(
 
     init {
         startListening()
+        // Clear any stale typing indicators from previous sessions
+        scope.launch {
+            conversationDao.clearAllTyping()
+            Logger.d("[MessageHandler] Cleared all stale typing indicators")
+        }
     }
 
     private fun startListening() {
@@ -72,6 +87,12 @@ class MessageHandler @Inject constructor(
             }
             Constants.MsgType.TYPING_NOTIFICATION -> {
                 handleTypingNotification(frame.payload)
+            }
+            Constants.MsgType.MESSAGE_DELETED -> {
+                handleMessageDeleted(frame.payload)
+            }
+            Constants.MsgType.MESSAGE_DELIVERED -> {
+                handleMessageDelivered(frame.payload)
             }
         }
     }
@@ -122,6 +143,14 @@ class MessageHandler @Inject constructor(
             // Emit for UI
             _newMessages.emit(message)
 
+            // Clear typing indicator when message is received (they finished typing)
+            conversationDao.setTyping(msg.from, false)
+            typingTimeoutJobs[msg.from]?.cancel()
+            _typingNotifications.emit(TypingNotificationPayload(msg.from, false))
+
+            // Show notification if app is in background
+            showMessageNotification(msg.from, decryptedContent, contact?.displayName)
+
             // Send delivery receipt
             sendDeliveryReceipt(msg.messageId, msg.from, "delivered")
 
@@ -157,7 +186,9 @@ class MessageHandler @Inject constructor(
                 return "[Message Request - Accept to decrypt]"
             }
 
-            val senderPubKey = Base64.decode(senderPubKeyBase64, Base64.NO_WRAP)
+            // Sanitize base64: spaces can appear when + is URL-decoded incorrectly
+            val sanitizedPubKey = senderPubKeyBase64.replace(" ", "+").trim()
+            val senderPubKey = Base64.decode(sanitizedPubKey, Base64.NO_WRAP)
             val nonce = Base64.decode(msg.nonce, Base64.NO_WRAP)
             val ciphertext = Base64.decode(msg.ciphertext, Base64.NO_WRAP)
 
@@ -294,6 +325,9 @@ class MessageHandler @Inject constructor(
         }
     }
 
+    // Track typing timeout jobs per user
+    private val typingTimeoutJobs = mutableMapOf<String, Job>()
+
     /**
      * Handle typing notification from another user.
      */
@@ -301,9 +335,63 @@ class MessageHandler @Inject constructor(
         try {
             val notification = gson.fromJson(payload, TypingNotificationPayload::class.java)
             Logger.d("[MessageHandler] Typing notification from ${notification.from}: ${notification.isTyping}")
+
+            // Update database so ChatsListScreen shows typing indicator
+            conversationDao.setTyping(notification.from, notification.isTyping)
+
+            // Cancel any existing timeout for this user
+            typingTimeoutJobs[notification.from]?.cancel()
+
+            // If user is typing, set a timeout to auto-clear after 5 seconds
+            if (notification.isTyping) {
+                typingTimeoutJobs[notification.from] = scope.launch {
+                    delay(5000)
+                    conversationDao.setTyping(notification.from, false)
+                    // Also emit to clear in ChatViewModel
+                    _typingNotifications.emit(TypingNotificationPayload(notification.from, false))
+                    Logger.d("[MessageHandler] Auto-cleared typing for ${notification.from}")
+                }
+            }
+
+            // Emit for ChatScreen UI
             _typingNotifications.emit(notification)
         } catch (e: Exception) {
             Logger.e("[MessageHandler] Failed to handle typing notification", e)
+        }
+    }
+
+    /**
+     * Handle message deleted notification from server.
+     * Server sends this when someone deletes a message for everyone.
+     */
+    private suspend fun handleMessageDeleted(payload: JsonElement) {
+        try {
+            val data = gson.fromJson(payload, MessageDeletedPayload::class.java)
+            Logger.d("[MessageHandler] Message deleted: ${data.messageId} by ${data.deletedBy}")
+
+            if (data.deleteForEveryone) {
+                // Delete message from local database
+                messageDao.deleteById(data.messageId)
+                Logger.d("[MessageHandler] Deleted message ${data.messageId} from database")
+            }
+        } catch (e: Exception) {
+            Logger.e("[MessageHandler] Failed to handle message deleted", e)
+        }
+    }
+
+    /**
+     * Handle message delivered notification from server.
+     * Server sends this to sender when recipient confirms delivery.
+     */
+    private suspend fun handleMessageDelivered(payload: JsonElement) {
+        try {
+            val data = gson.fromJson(payload, MessageDeliveredPayload::class.java)
+            Logger.d("[MessageHandler] Message delivered: ${data.messageId} status=${data.status}")
+
+            // Update message status in database
+            messageDao.updateStatus(data.messageId, data.status)
+        } catch (e: Exception) {
+            Logger.e("[MessageHandler] Failed to handle message delivered", e)
         }
     }
 
@@ -327,6 +415,69 @@ class MessageHandler @Inject constructor(
             } catch (e: Exception) {
                 Logger.e("[MessageHandler] Failed to fetch pending messages", e)
             }
+        }
+    }
+
+    /**
+     * Show notification for incoming message.
+     * Only shows if app is in background or screen is locked.
+     */
+    private fun showMessageNotification(senderId: String, content: String, senderName: String?) {
+        try {
+            // Check if app is in foreground - skip notification if user is actively using the app
+            val isAppInForeground = ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(
+                androidx.lifecycle.Lifecycle.State.RESUMED
+            )
+
+            if (isAppInForeground) {
+                Logger.d("[MessageHandler] App in foreground, skipping notification")
+                return
+            }
+
+            val displayName = senderName ?: senderId.takeLast(8)
+            val preview = if (content.startsWith("[")) "New message" else content.take(100)
+
+            val intent = Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra("conversationId", senderId)
+            }
+
+            val requestCode = System.currentTimeMillis().toInt()
+            val pendingIntent = PendingIntent.getActivity(
+                context,
+                requestCode,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            // Full screen intent for lock screen
+            val fullScreenIntent = PendingIntent.getActivity(
+                context,
+                requestCode + 1,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val notification = NotificationCompat.Builder(context, "messages")
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle(displayName)
+                .setContentText(preview)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setAutoCancel(true)
+                .setContentIntent(pendingIntent)
+                .setFullScreenIntent(fullScreenIntent, true)
+                .setDefaults(NotificationCompat.DEFAULT_ALL)
+                .build()
+
+            val notificationId = 1001 + (senderId.hashCode() % 1000)
+            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.notify(notificationId, notification)
+
+            Logger.i("[MessageHandler] Notification posted for message from $displayName")
+        } catch (e: Exception) {
+            Logger.e("[MessageHandler] Failed to show notification", e)
         }
     }
 }

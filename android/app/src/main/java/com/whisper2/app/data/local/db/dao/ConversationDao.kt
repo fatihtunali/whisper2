@@ -27,6 +27,9 @@ interface ConversationDao {
     @Query("UPDATE conversations SET isTyping = :isTyping WHERE peerId = :peerId")
     suspend fun setTyping(peerId: String, isTyping: Boolean)
 
+    @Query("UPDATE conversations SET isTyping = 0")
+    suspend fun clearAllTyping()
+
     @Query("DELETE FROM conversations WHERE peerId = :peerId")
     suspend fun deleteByPeerId(peerId: String)
 

@@ -49,6 +49,7 @@ object ServiceModule {
     @Provides
     @Singleton
     fun provideMessagingService(
+        @ApplicationContext context: Context,
         messageDao: MessageDao,
         conversationDao: ConversationDao,
         contactDao: ContactDao,
@@ -58,7 +59,7 @@ object ServiceModule {
         secureStorage: SecureStorage,
         attachmentService: AttachmentService
     ): MessagingService = MessagingService(
-        messageDao, conversationDao, contactDao, outboxDao, wsClient, cryptoService, secureStorage, attachmentService
+        context, messageDao, conversationDao, contactDao, outboxDao, wsClient, cryptoService, secureStorage, attachmentService
     )
 
     @Provides
@@ -74,6 +75,7 @@ object ServiceModule {
     @Provides
     @Singleton
     fun provideMessageHandler(
+        @ApplicationContext context: Context,
         wsClient: WsClientImpl,
         messageDao: MessageDao,
         conversationDao: ConversationDao,
@@ -82,6 +84,6 @@ object ServiceModule {
         secureStorage: SecureStorage,
         gson: Gson
     ): MessageHandler = MessageHandler(
-        wsClient, messageDao, conversationDao, contactDao, cryptoService, secureStorage, gson
+        context, wsClient, messageDao, conversationDao, contactDao, cryptoService, secureStorage, gson
     )
 }
