@@ -62,6 +62,29 @@ struct SettingsView: View {
                         }
                     }
                     .listRowBackground(Color.gray.opacity(0.15))
+
+                    // Privacy section
+                    Section("Privacy") {
+                        NavigationLink(destination: BlockedUsersView()) {
+                            HStack {
+                                Image(systemName: "hand.raised.fill")
+                                    .foregroundColor(.red)
+                                Text("Blocked Users")
+                                    .foregroundColor(.white)
+                                Spacer()
+                                if viewModel.blockedCount > 0 {
+                                    Text("\(viewModel.blockedCount)")
+                                        .font(.caption)
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Color.red.opacity(0.3))
+                                        .cornerRadius(10)
+                                }
+                            }
+                        }
+                    }
+                    .listRowBackground(Color.gray.opacity(0.15))
                     
                     // About section
                     Section("About") {

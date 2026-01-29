@@ -249,10 +249,19 @@ final class ContactsService: ObservableObject {
     
     /// Accept a message request - adds sender to contacts
     func acceptMessageRequest(senderId: String, publicKey: Data) {
-        guard var request = messageRequests[senderId] else { return }
-        
+        print("=== ContactsService.acceptMessageRequest ===")
+        print("  senderId: \(senderId)")
+        print("  publicKey length: \(publicKey.count)")
+
+        guard var request = messageRequests[senderId] else {
+            print("  -> ERROR: No request found for senderId!")
+            return
+        }
+        print("  -> Found request, adding contact...")
+
         // Add to contacts with their public key
         addContact(whisperId: senderId, encPublicKey: publicKey, nickname: nil)
+        print("  -> Contact added successfully")
         
         // Update request status
         request = MessageRequest(

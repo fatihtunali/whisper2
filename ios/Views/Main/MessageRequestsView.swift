@@ -18,10 +18,14 @@ struct MessageRequestsView: View {
                         ForEach(viewModel.requests) { request in
                             MessageRequestRow(
                                 request: request,
-                                onAccept: { viewModel.acceptRequestDirectly(request) },
-                                onPreview: { viewModel.showPreviewSheet(for: request) },
-                                onDecline: { viewModel.declineRequest(request) },
-                                onBlock: { viewModel.blockRequest(request) }
+                                onAccept: {
+                                    print(">>> ACCEPT button tapped for: \(request.senderId)")
+                                    viewModel.acceptRequest(request)
+                                },
+                                onBlock: {
+                                    print(">>> BLOCK button tapped for: \(request.senderId)")
+                                    viewModel.blockRequest(request)
+                                }
                             )
                             .listRowBackground(Color.black)
                             .listRowSeparatorTint(Color.gray.opacity(0.3))
@@ -35,27 +39,6 @@ struct MessageRequestsView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
-                }
-            }
-            .sheet(isPresented: $viewModel.showQRScanner) {
-                if let request = viewModel.selectedRequest {
-                    PreviewRequestScannerView(
-                        request: request,
-                        onScanned: { publicKey in
-                            viewModel.handleScannedKey(publicKey, for: request)
-                        }
-                    )
-                }
-            }
-            .sheet(isPresented: $viewModel.showPreviewMessages) {
-                if let request = viewModel.selectedRequest,
-                   let publicKey = viewModel.scannedPublicKey {
-                    MessagePreviewView(
-                        request: request,
-                        senderPublicKey: publicKey,
-                        onAccept: { viewModel.acceptRequest(request, publicKey: publicKey) },
-                        onBlock: { viewModel.blockFromPreview(request) }
-                    )
                 }
             }
             .alert("Block User?", isPresented: $viewModel.showBlockConfirm) {
@@ -98,8 +81,6 @@ struct EmptyRequestsView: View {
 struct MessageRequestRow: View {
     let request: MessageRequest
     let onAccept: () -> Void
-    let onPreview: () -> Void
-    let onDecline: () -> Void
     let onBlock: () -> Void
 
     /// Whether we have the sender's public key (can accept directly without QR scan)
@@ -141,13 +122,13 @@ struct MessageRequestRow: View {
                 Spacer()
             }
 
-            // Info banner - different message based on whether we have public key
+            // Info banner
             HStack(spacing: 8) {
                 Image(systemName: hasPublicKey ? "checkmark.shield.fill" : "lock.shield.fill")
                     .foregroundColor(hasPublicKey ? .green : .orange)
                 Text(hasPublicKey
-                    ? "Ready to accept - messages will be decrypted automatically"
-                    : "Scan QR to preview messages, then decide to accept or block")
+                    ? "Ready to accept - messages will be decrypted"
+                    : "Accept to add contact, then scan their QR to enable messaging")
                     .font(.caption)
                     .foregroundColor(.gray)
             }
@@ -155,98 +136,39 @@ struct MessageRequestRow: View {
             .background(hasPublicKey ? Color.green.opacity(0.1) : Color.orange.opacity(0.1))
             .cornerRadius(8)
 
-            // Action buttons - different layout based on whether we have public key
-            if hasPublicKey {
-                // Has public key: Accept, Ignore, Block
-                HStack(spacing: 12) {
-                    Button(action: onBlock) {
-                        HStack {
-                            Image(systemName: "hand.raised.fill")
-                            Text("Block")
-                        }
-                        .font(.subheadline)
-                        .foregroundColor(.red)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background(Color.red.opacity(0.15))
-                        .cornerRadius(8)
+            // Action buttons - just Accept and Block
+            HStack(spacing: 12) {
+                Button(action: onBlock) {
+                    HStack {
+                        Image(systemName: "hand.raised.fill")
+                        Text("Block")
                     }
-
-                    Button(action: onDecline) {
-                        Text("Ignore")
-                            .font(.subheadline)
-                            .foregroundColor(.gray)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
-                            .background(Color.gray.opacity(0.2))
-                            .cornerRadius(8)
-                    }
-
-                    Button(action: onAccept) {
-                        HStack {
-                            Image(systemName: "checkmark.circle.fill")
-                            Text("Accept")
-                        }
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background(
-                            LinearGradient(
-                                colors: [.green, .green.opacity(0.7)],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
-                        .cornerRadius(8)
-                    }
+                    .font(.subheadline)
+                    .foregroundColor(.red)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Color.red.opacity(0.15))
+                    .cornerRadius(8)
                 }
-            } else {
-                // No public key: Block, Ignore, Scan QR
-                HStack(spacing: 12) {
-                    Button(action: onBlock) {
-                        HStack {
-                            Image(systemName: "hand.raised.fill")
-                            Text("Block")
-                        }
-                        .font(.subheadline)
-                        .foregroundColor(.red)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background(Color.red.opacity(0.15))
-                        .cornerRadius(8)
-                    }
 
-                    Button(action: onDecline) {
-                        Text("Ignore")
-                            .font(.subheadline)
-                            .foregroundColor(.gray)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
-                            .background(Color.gray.opacity(0.2))
-                            .cornerRadius(8)
+                Button(action: onAccept) {
+                    HStack {
+                        Image(systemName: "checkmark.circle.fill")
+                        Text("Accept")
                     }
-
-                    Button(action: onPreview) {
-                        HStack {
-                            Image(systemName: "qrcode.viewfinder")
-                            Text("Scan QR")
-                        }
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background(
-                            LinearGradient(
-                                colors: [.blue, .purple],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(
+                        LinearGradient(
+                            colors: [.green, .green.opacity(0.7)],
+                            startPoint: .leading,
+                            endPoint: .trailing
                         )
-                        .cornerRadius(8)
-                    }
+                    )
+                    .cornerRadius(8)
                 }
             }
         }
@@ -260,331 +182,10 @@ struct MessageRequestRow: View {
     }
 }
 
-/// Scanner view for previewing a request (scan first to get public key)
-struct PreviewRequestScannerView: View {
-    let request: MessageRequest
-    let onScanned: (Data) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var error: String?
-
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                QRScannerView { result in
-                    handleScan(result)
-                }
-
-                VStack {
-                    // Info header
-                    VStack(spacing: 8) {
-                        Text("Scan to Preview Messages")
-                            .font(.headline)
-                            .foregroundColor(.white)
-                        Text("Ask \(request.senderId) to show their QR code so you can read their messages")
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                            .multilineTextAlignment(.center)
-                    }
-                    .padding()
-                    .background(Color.black.opacity(0.7))
-                    .cornerRadius(12)
-                    .padding(.top, 60)
-
-                    Spacer()
-
-                    if let error = error {
-                        Text(error)
-                            .foregroundColor(.white)
-                            .padding()
-                            .background(Color.red.opacity(0.8))
-                            .cornerRadius(8)
-                            .padding()
-                    }
-                }
-            }
-            .navigationTitle("Preview Messages")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                        .foregroundColor(.white)
-                }
-            }
-        }
-    }
-
-    private func handleScan(_ result: String) {
-        // Parse QR code
-        guard let url = URL(string: result),
-              url.scheme == "whisper2",
-              url.host == "add",
-              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              let queryItems = components.queryItems else {
-            error = "Invalid QR code"
-            return
-        }
-
-        guard let idItem = queryItems.first(where: { $0.name == "id" }),
-              let scannedId = idItem.value else {
-            error = "QR code missing Whisper ID"
-            return
-        }
-
-        // Verify it matches the request sender
-        guard scannedId == request.senderId else {
-            error = "QR code is for \(scannedId), not \(request.senderId)"
-            return
-        }
-
-        guard let keyItem = queryItems.first(where: { $0.name == "key" }),
-              let keyBase64 = keyItem.value,
-              let publicKey = Data(base64Encoded: keyBase64),
-              publicKey.count == 32 else {
-            error = "Invalid public key in QR code"
-            return
-        }
-
-        onScanned(publicKey)
-        dismiss()
-    }
-}
-
-/// View showing decrypted message preview before accepting/blocking
-struct MessagePreviewView: View {
-    let request: MessageRequest
-    let senderPublicKey: Data
-    let onAccept: () -> Void
-    let onBlock: () -> Void
-    @Environment(\.dismiss) private var dismiss
-
-    @State private var decryptedMessages: [DecryptedPreviewMessage] = []
-    @State private var isLoading = true
-    @State private var decryptionError: String?
-
-    private let contactsService = ContactsService.shared
-    private let crypto = CryptoService.shared
-    private let auth = AuthService.shared
-
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                Color.black.ignoresSafeArea()
-
-                if isLoading {
-                    ProgressView("Decrypting messages...")
-                        .foregroundColor(.white)
-                } else if let error = decryptionError {
-                    VStack(spacing: 16) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 50))
-                            .foregroundColor(.orange)
-                        Text("Decryption Error")
-                            .font(.headline)
-                            .foregroundColor(.white)
-                        Text(error)
-                            .font(.subheadline)
-                            .foregroundColor(.gray)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
-                    }
-                } else {
-                    VStack(spacing: 0) {
-                        // Sender info header
-                        VStack(spacing: 8) {
-                            Circle()
-                                .fill(Color.orange.opacity(0.3))
-                                .frame(width: 60, height: 60)
-                                .overlay(
-                                    Image(systemName: "person.fill")
-                                        .font(.title)
-                                        .foregroundColor(.orange)
-                                )
-
-                            Text(request.senderId)
-                                .font(.headline)
-                                .foregroundColor(.white)
-
-                            Text("\(decryptedMessages.count) message\(decryptedMessages.count == 1 ? "" : "s")")
-                                .font(.caption)
-                                .foregroundColor(.gray)
-                        }
-                        .padding()
-                        .frame(maxWidth: .infinity)
-                        .background(Color.gray.opacity(0.1))
-
-                        // Messages list
-                        ScrollView {
-                            LazyVStack(alignment: .leading, spacing: 12) {
-                                ForEach(decryptedMessages) { message in
-                                    PreviewMessageBubble(message: message)
-                                }
-                            }
-                            .padding()
-                        }
-
-                        // Action buttons
-                        VStack(spacing: 12) {
-                            Button(action: {
-                                onAccept()
-                                dismiss()
-                            }) {
-                                HStack {
-                                    Image(systemName: "checkmark.circle.fill")
-                                    Text("Accept & Add to Contacts")
-                                }
-                                .font(.headline)
-                                .foregroundColor(.white)
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(
-                                    LinearGradient(
-                                        colors: [.green, .green.opacity(0.7)],
-                                        startPoint: .leading,
-                                        endPoint: .trailing
-                                    )
-                                )
-                                .cornerRadius(12)
-                            }
-
-                            Button(action: {
-                                onBlock()
-                                dismiss()
-                            }) {
-                                HStack {
-                                    Image(systemName: "hand.raised.fill")
-                                    Text("Block This User")
-                                }
-                                .font(.headline)
-                                .foregroundColor(.white)
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(Color.red.opacity(0.8))
-                                .cornerRadius(12)
-                            }
-
-                            Button("Decide Later") {
-                                dismiss()
-                            }
-                            .font(.subheadline)
-                            .foregroundColor(.gray)
-                            .padding(.top, 4)
-                        }
-                        .padding()
-                        .background(Color.black)
-                    }
-                }
-            }
-            .navigationTitle("Message Preview")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
-                }
-            }
-        }
-        .onAppear {
-            decryptMessages()
-        }
-    }
-
-    private func decryptMessages() {
-        guard let user = auth.currentUser else {
-            decryptionError = "Not authenticated"
-            isLoading = false
-            return
-        }
-
-        let pendingPayloads = contactsService.getPendingMessages(for: request.senderId)
-
-        if pendingPayloads.isEmpty {
-            decryptionError = "No messages found"
-            isLoading = false
-            return
-        }
-
-        var messages: [DecryptedPreviewMessage] = []
-
-        for payload in pendingPayloads {
-            guard let ciphertextData = Data(base64Encoded: payload.ciphertext),
-                  let nonceData = Data(base64Encoded: payload.nonce) else {
-                continue
-            }
-
-            do {
-                let decrypted = try crypto.decryptMessage(
-                    ciphertext: ciphertextData,
-                    nonce: nonceData,
-                    senderPublicKey: senderPublicKey,
-                    recipientPrivateKey: user.encPrivateKey
-                )
-
-                let message = DecryptedPreviewMessage(
-                    id: payload.messageId,
-                    content: decrypted,
-                    timestamp: Date(timeIntervalSince1970: Double(payload.timestamp) / 1000),
-                    msgType: payload.msgType
-                )
-                messages.append(message)
-            } catch {
-                let failedMessage = DecryptedPreviewMessage(
-                    id: payload.messageId,
-                    content: "[Decryption failed]",
-                    timestamp: Date(timeIntervalSince1970: Double(payload.timestamp) / 1000),
-                    msgType: payload.msgType
-                )
-                messages.append(failedMessage)
-            }
-        }
-
-        decryptedMessages = messages.sorted { $0.timestamp < $1.timestamp }
-        isLoading = false
-    }
-}
-
-/// A single decrypted message for preview
-struct DecryptedPreviewMessage: Identifiable {
-    let id: String
-    let content: String
-    let timestamp: Date
-    let msgType: String
-}
-
-/// Message bubble for preview
-struct PreviewMessageBubble: View {
-    let message: DecryptedPreviewMessage
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(message.content)
-                .font(.body)
-                .foregroundColor(.white)
-                .padding(12)
-                .background(Color.gray.opacity(0.3))
-                .cornerRadius(16)
-
-            Text(formatTime(message.timestamp))
-                .font(.caption2)
-                .foregroundColor(.gray)
-                .padding(.leading, 4)
-        }
-    }
-
-    private func formatTime(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
-    }
-}
-
 /// ViewModel for message requests
 @MainActor
 class MessageRequestsViewModel: ObservableObject {
     @Published var requests: [MessageRequest] = []
-    @Published var showQRScanner = false
-    @Published var showPreviewMessages = false
-    @Published var selectedRequest: MessageRequest?
-    @Published var scannedPublicKey: Data?
     @Published var showBlockConfirm = false
     @Published var requestToBlock: MessageRequest?
 
@@ -597,7 +198,6 @@ class MessageRequestsViewModel: ObservableObject {
     }
 
     deinit {
-        // Explicitly cancel all subscriptions to prevent race conditions during teardown
         cancellables.removeAll()
     }
 
@@ -620,71 +220,41 @@ class MessageRequestsViewModel: ObservableObject {
         requests = contactsService.getMessageRequests()
     }
 
-    /// Show preview for messages - skip QR scanner if public key is already available
-    func showPreviewSheet(for request: MessageRequest) {
-        selectedRequest = request
+    /// Accept the request - add sender to contacts
+    func acceptRequest(_ request: MessageRequest) {
+        print("=== acceptRequest called ===")
+        print("  senderId: \(request.senderId)")
+        print("  hasPublicKey: \(request.senderEncPublicKey != nil)")
+        print("  publicKeyCount: \(request.senderEncPublicKey?.count ?? 0)")
 
-        // If we already have the sender's public key, skip QR scanner
-        if let publicKey = request.senderEncPublicKey, publicKey.count == 32 {
-            scannedPublicKey = publicKey
-            showPreviewMessages = true
+        // Get public key - use from request if available, otherwise use placeholder
+        let publicKey: Data
+        if let key = request.senderEncPublicKey, key.count == 32 {
+            publicKey = key
+            print("  -> Using public key from request")
         } else {
-            // Need QR scan to get public key
-            scannedPublicKey = nil
-            showQRScanner = true
+            // No public key yet - add contact with placeholder, they'll need to scan QR later
+            publicKey = Data(repeating: 0, count: 32)
+            print("  -> No public key, using placeholder (will need QR scan for messaging)")
         }
-    }
 
-    /// Called after QR is scanned - show message preview
-    func handleScannedKey(_ publicKey: Data, for request: MessageRequest) {
-        scannedPublicKey = publicKey
-        showQRScanner = false
-
-        // Small delay to allow sheet dismissal animation
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            self?.showPreviewMessages = true
-        }
-    }
-
-    /// Accept the request directly (when public key is available in the request)
-    func acceptRequestDirectly(_ request: MessageRequest) {
-        guard let publicKey = request.senderEncPublicKey, publicKey.count == 32 else {
-            // Fallback to QR scan if no valid public key
-            showPreviewSheet(for: request)
-            return
-        }
+        print("  -> Calling contactsService.acceptMessageRequest")
         contactsService.acceptMessageRequest(senderId: request.senderId, publicKey: publicKey)
-    }
-
-    /// Accept the request and add to contacts (called from preview)
-    func acceptRequest(_ request: MessageRequest, publicKey: Data) {
-        contactsService.acceptMessageRequest(senderId: request.senderId, publicKey: publicKey)
-        showPreviewMessages = false
-        selectedRequest = nil
-        scannedPublicKey = nil
-    }
-
-    /// Block from preview screen
-    func blockFromPreview(_ request: MessageRequest) {
-        contactsService.declineMessageRequest(senderId: request.senderId, block: true)
-        showPreviewMessages = false
-        selectedRequest = nil
-        scannedPublicKey = nil
-    }
-
-    /// Decline without blocking (ignore)
-    func declineRequest(_ request: MessageRequest) {
-        contactsService.declineMessageRequest(senderId: request.senderId, block: false)
+        print("  -> acceptMessageRequest completed")
     }
 
     /// Show block confirmation dialog
     func blockRequest(_ request: MessageRequest) {
+        print("=== blockRequest called ===")
+        print("  senderId: \(request.senderId)")
         requestToBlock = request
         showBlockConfirm = true
     }
 
     /// Confirm block from dialog
     func confirmBlock(_ request: MessageRequest) {
+        print("=== confirmBlock called ===")
+        print("  senderId: \(request.senderId)")
         contactsService.declineMessageRequest(senderId: request.senderId, block: true)
         requestToBlock = nil
     }
