@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
+import com.whisper2.app.BuildConfig
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -141,7 +142,7 @@ fun SettingsScreen(
                     icon = Icons.Default.Info,
                     iconColor = Color(0xFF3B82F6),
                     title = "Version",
-                    subtitle = "1.0.0"
+                    subtitle = BuildConfig.VERSION_NAME
                 )
             }
             item {
