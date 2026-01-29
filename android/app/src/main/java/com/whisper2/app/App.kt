@@ -1,6 +1,7 @@
 package com.whisper2.app
 
 import android.app.Application
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.media.AudioAttributes
@@ -30,6 +31,7 @@ class App : Application() {
                 enableVibration(true)
                 vibrationPattern = longArrayOf(0, 250, 250, 250)
                 setShowBadge(true)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
                 setSound(
                     Settings.System.DEFAULT_NOTIFICATION_URI,
                     AudioAttributes.Builder()
@@ -50,6 +52,8 @@ class App : Application() {
                 enableVibration(true)
                 vibrationPattern = longArrayOf(0, 1000, 500, 1000)
                 setShowBadge(true)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                setBypassDnd(true) // Allow calls to bypass Do Not Disturb
                 setSound(
                     Settings.System.DEFAULT_RINGTONE_URI,
                     AudioAttributes.Builder()

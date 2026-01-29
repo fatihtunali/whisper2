@@ -94,7 +94,8 @@ class TelecomCallManager @Inject constructor(
         isVideo: Boolean,
         scope: CoroutineScope
     ): Boolean {
-        Logger.i("[TelecomCallManager] reportIncomingCall - callId: $callId, caller: $callerName, callerId: $callerId, isVideo: $isVideo")
+        Logger.i("[TelecomCallManager] *** reportIncomingCall - isVideo=$isVideo ***")
+        Logger.i("[TelecomCallManager] callId: $callId, caller: $callerName, callerId: $callerId")
 
         val tm = telecomManager ?: run {
             Logger.e("[TelecomCallManager] TelecomManager not initialized!")
@@ -107,6 +108,16 @@ class TelecomCallManager @Inject constructor(
         }
 
         return try {
+            // Store call info in shared state BEFORE calling addNewIncomingCall
+            // This ensures the info is available even if TelecomManager doesn't pass extras correctly
+            WhisperConnectionService.pendingCallInfo = WhisperConnectionService.Companion.PendingCallInfo(
+                callId = callId,
+                callerId = callerId,
+                callerName = callerName,
+                isVideo = isVideo
+            )
+            Logger.i("[TelecomCallManager] *** Stored pendingCallInfo with isVideo=$isVideo ***")
+
             // Create extras bundle with call information
             val extras = Bundle().apply {
                 putString(WhisperConnectionService.EXTRA_CALL_ID, callId)

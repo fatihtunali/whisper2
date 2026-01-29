@@ -12,10 +12,11 @@ object Logger {
     fun w(msg: String) = Log.w(TAG, msg)
     fun e(msg: String, t: Throwable? = null) = if (t != null) Log.e(TAG, msg, t) else Log.e(TAG, msg)
 
-    fun ws(msg: String) = d("[WS] $msg")
+    // Important logs that should show even in release builds
+    fun ws(msg: String) = Log.i(TAG, "[WS] $msg")
     fun crypto(msg: String) { if (isDebug) d("[CRYPTO] $msg") }
-    fun auth(msg: String) = d("[AUTH] $msg")
-    fun call(msg: String) = d("[CALL] $msg")
+    fun auth(msg: String) = Log.i(TAG, "[AUTH] $msg")
+    fun call(msg: String) = Log.i(TAG, "[CALL] $msg")
 
     fun redact(v: String): String = if (v.length <= 8) "***" else "${v.take(4)}...${v.takeLast(4)}"
 }

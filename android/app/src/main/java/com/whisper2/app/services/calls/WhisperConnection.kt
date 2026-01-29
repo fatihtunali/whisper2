@@ -36,14 +36,23 @@ class WhisperConnection(
     }
 
     override fun onShowIncomingCallUi() {
-        Logger.i("[WhisperConnection] onShowIncomingCallUi - starting CallForegroundService to show UI")
+        Logger.i("[WhisperConnection] *** onShowIncomingCallUi - isVideoCall=$isVideoCall ***")
+        Logger.i("[WhisperConnection] callId=$callId, callerId=$callerId, callerName=$callerName")
+
+        // Validate we have the required info
+        val finalCallId = callId ?: ""
+        val finalCallerId = callerId ?: ""
+        val finalCallerName = callerName ?: finalCallerId.ifEmpty { "Unknown Caller" }
+
+        Logger.i("[WhisperConnection] Starting CallForegroundService with: callId=$finalCallId, callerId=$finalCallerId, callerName=$finalCallerName, isVideo=$isVideoCall")
+
         // For self-managed VoIP calls, Android does NOT show any system UI
-        // We MUST start our own incoming call UI here
+        // We MUST start our own incoming call UI here via CallForegroundService
         CallForegroundService.startIncomingCall(
             context = context,
-            callId = callId ?: "",
-            callerId = callerId ?: "",
-            callerName = callerName,
+            callId = finalCallId,
+            callerId = finalCallerId,
+            callerName = finalCallerName,
             isVideo = isVideoCall
         )
     }
@@ -107,6 +116,7 @@ class WhisperConnection(
         onUnholdCallback?.invoke()
     }
 
+    @Deprecated("Deprecated in Android API")
     override fun onCallAudioStateChanged(state: CallAudioState?) {
         Logger.d("[WhisperConnection] onCallAudioStateChanged - route: ${state?.route}, muted: ${state?.isMuted}")
         state?.let {

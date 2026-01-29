@@ -24,12 +24,17 @@ import com.whisper2.app.ui.theme.*
  * Premium Metal Message Input Bar
  * iOS-inspired with glass effect and refined interactions.
  */
+enum class AttachmentType {
+    PHOTO_VIDEO,
+    FILE
+}
+
 @Composable
 fun MessageInputBar(
     text: String,
     onTextChange: (String) -> Unit,
     onSend: () -> Unit,
-    onAttachment: () -> Unit,
+    onAttachment: (AttachmentType) -> Unit,
     onVoiceMessage: () -> Unit,
     onLocation: () -> Unit,
     isEnabled: Boolean
@@ -104,7 +109,7 @@ fun MessageInputBar(
                         text = { Text("Photo/Video", color = TextPrimary) },
                         onClick = {
                             showAttachmentMenu = false
-                            onAttachment()
+                            onAttachment(AttachmentType.PHOTO_VIDEO)
                         },
                         leadingIcon = {
                             Icon(
@@ -118,7 +123,7 @@ fun MessageInputBar(
                         text = { Text("File", color = TextPrimary) },
                         onClick = {
                             showAttachmentMenu = false
-                            onAttachment()
+                            onAttachment(AttachmentType.FILE)
                         },
                         leadingIcon = {
                             Icon(

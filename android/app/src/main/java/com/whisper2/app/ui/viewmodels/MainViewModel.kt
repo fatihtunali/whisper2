@@ -43,14 +43,14 @@ class MainViewModel @Inject constructor(
             val currentAuth = authState.value
             val currentConnection = connectionState.value
 
-            Logger.d("[MainViewModel] Init: authState=$currentAuth, connectionState=$currentConnection")
+            Logger.i("[MainViewModel] Init: authState=$currentAuth, connectionState=$currentConnection")
 
             if (currentAuth is AuthState.Authenticated && currentConnection == WsConnectionState.DISCONNECTED) {
-                Logger.d("[MainViewModel] Auto-reconnecting WebSocket...")
+                Logger.i("[MainViewModel] Auto-reconnecting WebSocket...")
                 val result = authService.reconnect()
                 if (result.isSuccess && !hasFetchedPending) {
                     hasFetchedPending = true
-                    Logger.d("[MainViewModel] Reconnect success - fetching pending messages")
+                    Logger.i("[MainViewModel] Reconnect success - fetching pending messages")
                     fetchPendingMessages()
                 }
             }
@@ -61,7 +61,7 @@ class MainViewModel @Inject constructor(
             authState.collect { state ->
                 if (state is AuthState.Authenticated && connectionState.value == WsConnectionState.CONNECTED && !hasFetchedPending) {
                     hasFetchedPending = true
-                    Logger.d("[MainViewModel] Auth completed while connected - fetching pending messages")
+                    Logger.i("[MainViewModel] Auth completed while connected - fetching pending messages")
                     fetchPendingMessages()
                 }
             }

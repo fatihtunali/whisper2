@@ -53,6 +53,7 @@
             </intent-filter>
         </activity>
 
+        <!-- Unified incoming call activity (handles both audio and video) -->
         <activity
             android:name=".ui.IncomingCallActivity"
             android:exported="false"

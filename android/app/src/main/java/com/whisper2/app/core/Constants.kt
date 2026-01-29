@@ -97,7 +97,8 @@ object Constants {
     object ContentType {
         const val TEXT = "text"
         const val IMAGE = "image"
-        const val AUDIO = "audio"
+        const val VIDEO = "video"
+        const val VOICE = "voice"  // iOS uses "voice" not "audio"
         const val FILE = "file"
         const val LOCATION = "location"
     }

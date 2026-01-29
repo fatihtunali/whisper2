@@ -15,6 +15,32 @@ if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(keystorePropertiesFile.inputStream())
 }
 
+// Auto-increment version
+val versionPropsFile = rootProject.file("version.properties")
+val versionProps = Properties()
+if (versionPropsFile.exists()) {
+    versionProps.load(versionPropsFile.inputStream())
+}
+val appVersionCode = (versionProps["versionCode"] as String?)?.toIntOrNull() ?: 1
+val appVersionName = (versionProps["versionName"] as String?) ?: "1.0.0"
+
+// Increment version on release build
+gradle.taskGraph.whenReady {
+    if (hasTask(":app:bundleRelease") || hasTask(":app:assembleRelease")) {
+        val newVersionCode = appVersionCode + 1
+        val versionParts = appVersionName.split(".")
+        val major = versionParts.getOrNull(0)?.toIntOrNull() ?: 1
+        val minor = versionParts.getOrNull(1)?.toIntOrNull() ?: 0
+        val patch = (versionParts.getOrNull(2)?.toIntOrNull() ?: 0) + 1
+        val newVersionName = "$major.$minor.$patch"
+
+        versionProps["versionCode"] = newVersionCode.toString()
+        versionProps["versionName"] = newVersionName
+        versionPropsFile.outputStream().use { versionProps.store(it, null) }
+        println("Version updated: $appVersionCode -> $newVersionCode ($appVersionName -> $newVersionName)")
+    }
+}
+
 android {
     namespace = "com.whisper2.app"
     compileSdk = 35
@@ -42,8 +68,8 @@ android {
         applicationId = "com.whisper2.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
         ksp { arg("room.schemaLocation", "${'$'}projectDir/schemas") }
@@ -78,6 +104,7 @@ dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-process:2.8.7")
     implementation("androidx.activity:activity-compose:1.9.3")
 
     // Compose

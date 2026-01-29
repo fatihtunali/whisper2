@@ -168,18 +168,15 @@ class FcmService : FirebaseMessagingService() {
         val fromId = data["from"] ?: return
         val isVideo = data["isVideo"]?.toBoolean() ?: false
 
-        Logger.d("[FcmService] Call push - callId: $callId, from: $fromId, isVideo: $isVideo")
+        Logger.i("[FcmService] Call push (legacy) - callId: $callId, from: $fromId, isVideo: $isVideo")
+        Logger.i("[FcmService] NOT showing notification - CallForegroundService will handle UI")
 
-        // For calls, the CallService with CallKit-equivalent handling should be triggered
-        // This is handled by VoIP push on iOS, on Android we use high-priority FCM
-        showNotification(
-            title = if (isVideo) "Incoming Video Call" else "Incoming Call",
-            body = "From $fromId",
-            isCall = true,
-            callId = callId
-        )
+        // DO NOT show notification here!
+        // CallForegroundService will show the proper incoming call UI
+        // with answer/decline buttons and route to IncomingCallActivity
+        // (unified activity handles both audio and video calls)
 
-        // Wake up WebSocket for call signaling
+        // Only wake up WebSocket for call signaling
         wakeUpConnection()
     }
 
@@ -257,28 +254,42 @@ class FcmService : FirebaseMessagingService() {
             if (isCall) putExtra("isIncomingCall", true)
         }
 
+        // Use unique request code for each notification to avoid PendingIntent reuse
+        val requestCode = System.currentTimeMillis().toInt()
+
         val pendingIntent = PendingIntent.getActivity(
             this,
-            0,
+            requestCode,
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
         val channelId = if (isCall) CHANNEL_ID_CALLS else CHANNEL_ID_MESSAGES
-        val notificationId = if (isCall) NOTIFICATION_ID_CALL else NOTIFICATION_ID_MESSAGE
+        // Use unique notification ID for messages so they don't replace each other
+        val notificationId = if (isCall) NOTIFICATION_ID_CALL else (NOTIFICATION_ID_MESSAGE + requestCode % 1000)
 
-        val notification = NotificationCompat.Builder(this, channelId)
+        val builder = NotificationCompat.Builder(this, channelId)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
             .setContentText(body)
             .setPriority(if (isCall) NotificationCompat.PRIORITY_MAX else NotificationCompat.PRIORITY_HIGH)
             .setCategory(if (isCall) NotificationCompat.CATEGORY_CALL else NotificationCompat.CATEGORY_MESSAGE)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC) // Show on lock screen
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
-            .build()
+            .setDefaults(NotificationCompat.DEFAULT_ALL) // Sound, vibration, lights
+
+        // Add full screen intent for lock screen / heads-up display
+        val fullScreenIntent = PendingIntent.getActivity(
+            this,
+            requestCode + 1,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        builder.setFullScreenIntent(fullScreenIntent, true)
 
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.notify(notificationId, notification)
+        manager.notify(notificationId, builder.build())
         Logger.i("[FcmService] Notification posted - id: $notificationId, title: $title, channel: $channelId")
     }
 }

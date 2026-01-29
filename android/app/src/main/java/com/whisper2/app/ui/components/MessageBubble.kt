@@ -1,5 +1,7 @@
 package com.whisper2.app.ui.components
 
+import android.media.MediaPlayer
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -14,11 +16,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.whisper2.app.data.local.db.entities.MessageEntity
 import com.whisper2.app.ui.theme.*
+import kotlinx.coroutines.delay
+import java.io.File
 
 /**
  * Premium Metal Message Bubble
@@ -118,7 +123,7 @@ fun MessageBubble(
                 ) {
                     // Content based on type
                     when (message.contentType) {
-                        "audio" -> AudioMessageContent(message, isOutgoing)
+                        "voice", "audio" -> VoiceMessageContent(message, isOutgoing)
                         "location" -> LocationMessageContent(message, isOutgoing)
                         "image" -> ImageMessageContent(message, isOutgoing)
                         "video" -> VideoMessageContent(message, isOutgoing)
@@ -215,14 +220,53 @@ private fun TextMessageContent(content: String) {
     )
 }
 
+/**
+ * Voice message content with audio player.
+ * Plays audio from local file path or can be downloaded from server.
+ */
 @Composable
-private fun AudioMessageContent(message: MessageEntity, isOutgoing: Boolean) {
+private fun VoiceMessageContent(message: MessageEntity, isOutgoing: Boolean) {
+    val context = LocalContext.current
+    var isPlaying by remember { mutableStateOf(false) }
+    var currentPosition by remember { mutableStateOf(0f) }
+    var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
+
+    // Duration from message (content is duration in seconds for voice messages)
+    val durationSeconds = message.attachmentDuration ?: message.content.toIntOrNull() ?: 0
+
+    // Cleanup media player when composable is disposed
+    DisposableEffect(message.id) {
+        onDispose {
+            mediaPlayer?.release()
+            mediaPlayer = null
+        }
+    }
+
+    // Update progress while playing
+    LaunchedEffect(isPlaying) {
+        while (isPlaying && mediaPlayer != null) {
+            try {
+                mediaPlayer?.let { player ->
+                    if (player.isPlaying) {
+                        val duration = player.duration.toFloat()
+                        if (duration > 0) {
+                            currentPosition = player.currentPosition / duration
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // Player may be released
+            }
+            delay(100)
+        }
+    }
+
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         modifier = Modifier.padding(vertical = 4.dp)
     ) {
-        // Play button with glow effect
+        // Play/Pause button with glow effect
         Box(
             modifier = Modifier
                 .size(44.dp)
@@ -237,10 +281,46 @@ private fun AudioMessageContent(message: MessageEntity, isOutgoing: Boolean) {
                 ),
             contentAlignment = Alignment.Center
         ) {
-            IconButton(onClick = { /* Play audio */ }) {
+            IconButton(
+                onClick = {
+                    if (isPlaying) {
+                        // Pause
+                        mediaPlayer?.pause()
+                        isPlaying = false
+                    } else {
+                        // Play
+                        val localPath = message.attachmentLocalPath
+                        if (localPath != null && (File(localPath).exists() || localPath.startsWith("content://"))) {
+                            try {
+                                if (mediaPlayer == null) {
+                                    mediaPlayer = MediaPlayer().apply {
+                                        if (localPath.startsWith("content://")) {
+                                            setDataSource(context, Uri.parse(localPath))
+                                        } else {
+                                            setDataSource(localPath)
+                                        }
+                                        prepare()
+                                        setOnCompletionListener {
+                                            isPlaying = false
+                                            currentPosition = 0f
+                                        }
+                                    }
+                                }
+                                mediaPlayer?.start()
+                                isPlaying = true
+                            } catch (e: Exception) {
+                                android.util.Log.e("VoiceMessage", "Error playing audio: ${e.message}")
+                            }
+                        } else {
+                            // TODO: Download from server if not available locally
+                            android.util.Log.d("VoiceMessage", "Audio file not available locally")
+                        }
+                    }
+                }
+            ) {
                 Icon(
-                    Icons.Default.PlayArrow,
-                    null,
+                    if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = if (isPlaying) "Pause" else "Play",
                     tint = Color.White,
                     modifier = Modifier.size(28.dp)
                 )
@@ -248,12 +328,14 @@ private fun AudioMessageContent(message: MessageEntity, isOutgoing: Boolean) {
         }
 
         Column {
-            // Waveform visualization
+            // Waveform visualization with progress
             Row(
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
                 modifier = Modifier.width(100.dp)
             ) {
-                repeat(20) { index ->
+                val totalBars = 20
+                val playedBars = (currentPosition * totalBars).toInt()
+                repeat(totalBars) { index ->
                     val height = (8 + (index * 7 % 16)).dp
                     Box(
                         modifier = Modifier
@@ -261,16 +343,18 @@ private fun AudioMessageContent(message: MessageEntity, isOutgoing: Boolean) {
                             .height(height)
                             .clip(RoundedCornerShape(2.dp))
                             .background(
-                                Color.White.copy(
-                                    alpha = if (index < 8) 0.8f else 0.4f
-                                )
+                                if (index <= playedBars) {
+                                    Color.White.copy(alpha = 0.9f)
+                                } else {
+                                    Color.White.copy(alpha = 0.4f)
+                                }
                             )
                     )
                 }
             }
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "${message.attachmentDuration?.let { it / 1000 } ?: 0}s",
+                text = "${durationSeconds}s",
                 fontSize = 11.sp,
                 color = Color.White.copy(alpha = 0.6f)
             )

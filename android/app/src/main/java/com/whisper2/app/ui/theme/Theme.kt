@@ -76,7 +76,9 @@ fun Whisper2Theme(
         SideEffect {
             val window = (view.context as Activity).window
             // Deep metal status bar and navigation bar
+            @Suppress("DEPRECATION")
             window.statusBarColor = MetalBlack.toArgb()
+            @Suppress("DEPRECATION")
             window.navigationBarColor = MetalBlack.toArgb()
             // Light icons on dark background
             WindowCompat.getInsetsController(window, view).apply {

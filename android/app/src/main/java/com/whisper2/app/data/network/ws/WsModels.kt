@@ -1,6 +1,7 @@
 package com.whisper2.app.data.network.ws
 
 import com.google.gson.JsonElement
+import com.google.gson.annotations.SerializedName
 import com.whisper2.app.core.Constants
 
 data class WsFrame<T>(
@@ -184,6 +185,7 @@ data class CallInitiatePayload(
     val callId: String,
     val from: String,
     val to: String,
+    @SerializedName("isVideo")
     val isVideo: Boolean,
     val timestamp: Long,
     val nonce: String,
@@ -194,6 +196,7 @@ data class CallInitiatePayload(
 data class CallIncomingPayload(
     val callId: String,
     val from: String,
+    @SerializedName("isVideo")
     val isVideo: Boolean,
     val timestamp: Long,
     val nonce: String,

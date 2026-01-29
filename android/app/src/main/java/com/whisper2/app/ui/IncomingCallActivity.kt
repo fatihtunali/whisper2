@@ -7,6 +7,8 @@ import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.core.view.WindowCompat
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.LaunchedEffect
@@ -27,6 +29,10 @@ import com.whisper2.app.ui.theme.MetalBlack
 import com.whisper2.app.ui.theme.Whisper2Theme
 import dagger.hilt.android.AndroidEntryPoint
 
+/**
+ * Unified Activity for all incoming calls (both audio and video).
+ * Uses the same code path - isVideo flag determines UI behavior.
+ */
 @AndroidEntryPoint
 class IncomingCallActivity : ComponentActivity() {
 
@@ -37,6 +43,18 @@ class IncomingCallActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Get call details from intent
+        callId = intent.getStringExtra(CallForegroundService.EXTRA_CALL_ID)
+        callerId = intent.getStringExtra(CallForegroundService.EXTRA_CALLER_ID) ?: ""
+        callerName = intent.getStringExtra(CallForegroundService.EXTRA_CALLER_NAME) ?: callerId
+        isVideo = intent.getBooleanExtra(CallForegroundService.EXTRA_IS_VIDEO, false)
+
+        Logger.i("[IncomingCallActivity] onCreate: callId=$callId, caller=$callerName, isVideo=$isVideo")
+
+        // Enable edge-to-edge display
+        enableEdgeToEdge()
+        WindowCompat.setDecorFitsSystemWindows(window, false)
 
         // Allow activity to show over lock screen
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
@@ -56,14 +74,6 @@ class IncomingCallActivity : ComponentActivity() {
         // Keep screen on during call
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        // Get call details from intent
-        callId = intent.getStringExtra(CallForegroundService.EXTRA_CALL_ID)
-        callerId = intent.getStringExtra(CallForegroundService.EXTRA_CALLER_ID) ?: ""
-        callerName = intent.getStringExtra(CallForegroundService.EXTRA_CALLER_NAME) ?: callerId
-        isVideo = intent.getBooleanExtra(CallForegroundService.EXTRA_IS_VIDEO, false)
-
-        Logger.d("[IncomingCallActivity] onCreate: callId=$callId, caller=$callerName, isVideo=$isVideo")
-
         // Check if this was launched from notification answer button
         val autoAnswer = intent.getBooleanExtra("auto_answer", false)
 
@@ -80,10 +90,9 @@ class IncomingCallActivity : ComponentActivity() {
                     // Auto-answer if launched from notification Answer button
                     LaunchedEffect(autoAnswer) {
                         if (autoAnswer) {
-                            Logger.d("[IncomingCallActivity] Auto-answering call")
+                            Logger.i("[IncomingCallActivity] Auto-answering call (isVideo=$isVideo)")
                             try {
                                 viewModel.setConnectionActive()
-                                viewModel.answerCall()
                                 CallForegroundService.stopService(this@IncomingCallActivity)
                                 answered = true
                             } catch (e: Exception) {
@@ -96,42 +105,42 @@ class IncomingCallActivity : ComponentActivity() {
                     LaunchedEffect(callState) {
                         if (callState is CallState.Ended || callState is CallState.Idle) {
                             if (answered) {
-                                Logger.d("[IncomingCallActivity] Call ended, finishing activity")
+                                Logger.i("[IncomingCallActivity] Call ended, finishing activity")
                                 finish()
                             }
                         }
                     }
 
                     if (!answered) {
-                        // Show incoming call UI
+                        // Show incoming call UI (same screen for both audio and video)
                         IncomingCallScreen(
                             callerName = callerName ?: "Unknown",
                             callerId = callerId ?: "",
                             isVideo = isVideo,
                             onAnswer = {
-                                Logger.d("[IncomingCallActivity] Answer clicked")
+                                Logger.i("[IncomingCallActivity] Answer clicked (isVideo=$isVideo)")
                                 viewModel.setConnectionActive()
-                                viewModel.answerCall()
                                 CallForegroundService.stopService(this@IncomingCallActivity)
                                 answered = true
                             },
                             onDecline = {
-                                Logger.d("[IncomingCallActivity] Decline clicked")
+                                Logger.i("[IncomingCallActivity] Decline clicked")
                                 viewModel.declineCall()
                                 CallForegroundService.stopService(this@IncomingCallActivity)
                                 finish()
                             }
                         )
                     } else {
-                        // Show active call UI - no navigation needed
+                        // Show active call UI (unified screen handles both audio and video)
                         CallScreen(
                             peerId = callerId ?: "",
                             isVideo = isVideo,
                             isOutgoing = false,
                             onCallEnded = {
-                                Logger.d("[IncomingCallActivity] Call ended callback")
+                                Logger.i("[IncomingCallActivity] Call ended callback")
                                 finish()
-                            }
+                            },
+                            shouldAnswerIncoming = true
                         )
                     }
                 }
@@ -139,6 +148,7 @@ class IncomingCallActivity : ComponentActivity() {
         }
     }
 
+    @Deprecated("Deprecated in Android API")
     override fun onBackPressed() {
         // Don't allow back press during incoming call
         // User must answer or decline

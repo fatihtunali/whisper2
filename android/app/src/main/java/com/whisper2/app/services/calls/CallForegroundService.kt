@@ -14,6 +14,7 @@ import android.os.IBinder
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.content.pm.ServiceInfo
 import androidx.core.app.NotificationCompat
 import com.whisper2.app.R
 import com.whisper2.app.core.Logger
@@ -69,7 +70,7 @@ class CallForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Logger.d("[CallForegroundService] onStartCommand: ${intent?.action}")
+        Logger.i("[CallForegroundService] onStartCommand: action=${intent?.action}")
 
         when (intent?.action) {
             ACTION_INCOMING_CALL -> {
@@ -77,6 +78,12 @@ class CallForegroundService : Service() {
                 val callerId = intent.getStringExtra(EXTRA_CALLER_ID) ?: ""
                 val callerName = intent.getStringExtra(EXTRA_CALLER_NAME) ?: callerId
                 val isVideo = intent.getBooleanExtra(EXTRA_IS_VIDEO, false)
+
+                Logger.i("[CallForegroundService] *** INCOMING CALL ***")
+                Logger.i("[CallForegroundService] callId=$callId")
+                Logger.i("[CallForegroundService] callerId=$callerId")
+                Logger.i("[CallForegroundService] callerName=$callerName")
+                Logger.i("[CallForegroundService] isVideo=$isVideo")
 
                 showIncomingCallNotification(callId, callerId, callerName, isVideo)
                 startVibration()
@@ -103,9 +110,14 @@ class CallForegroundService : Service() {
         callerName: String,
         isVideo: Boolean
     ) {
-        // Full screen intent - opens IncomingCallActivity
+        // Use unified IncomingCallActivity for both audio and video calls
+        val activityClass = IncomingCallActivity::class.java
+
+        Logger.i("[CallForegroundService] Routing to IncomingCallActivity (isVideo=$isVideo)")
+
+        // Full screen intent - opens the appropriate activity
         // Use SINGLE_TOP to reuse existing activity instead of creating new one
-        val fullScreenIntent = Intent(this, IncomingCallActivity::class.java).apply {
+        val fullScreenIntent = Intent(this, activityClass).apply {
             putExtra(EXTRA_CALL_ID, callId)
             putExtra(EXTRA_CALLER_ID, callerId)
             putExtra(EXTRA_CALLER_NAME, callerName)
@@ -119,9 +131,9 @@ class CallForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Answer action - launch IncomingCallActivity with answer flag
+        // Answer action - launch the appropriate activity with answer flag
         // Use SINGLE_TOP to reuse existing activity
-        val answerIntent = Intent(this, IncomingCallActivity::class.java).apply {
+        val answerIntent = Intent(this, activityClass).apply {
             putExtra(EXTRA_CALL_ID, callId)
             putExtra(EXTRA_CALLER_ID, callerId)
             putExtra(EXTRA_CALLER_NAME, callerName)
@@ -183,7 +195,17 @@ class CallForegroundService : Service() {
                 .build()
         }
 
-        startForeground(NOTIFICATION_ID, notification)
+        // Android 10+ (API 29+) requires foregroundServiceType to match manifest declaration
+        // Android 14+ (API 34+) strictly enforces this - missing type causes SecurityException crash
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
         Logger.i("[CallForegroundService] Showing incoming call notification for $callerName (CallStyle=${Build.VERSION.SDK_INT >= Build.VERSION_CODES.S})")
     }
 
