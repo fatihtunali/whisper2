@@ -115,8 +115,8 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
-    // WebRTC
-    implementation("io.getstream:stream-webrtc-android:1.3.0")
+    // WebRTC - Stream WebRTC (latest stable v1.3.9 with m125 patches)
+    implementation("io.getstream:stream-webrtc-android:1.3.9")
 
     // Telecom (Android's CallKit equivalent)
     implementation("androidx.core:core-telecom:1.0.0")
