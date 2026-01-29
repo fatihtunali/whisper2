@@ -10,6 +10,8 @@ import com.google.gson.JsonElement
 import com.whisper2.app.core.Constants
 import com.whisper2.app.core.Logger
 import com.whisper2.app.crypto.CryptoService
+import com.whisper2.app.services.auth.AuthService
+import com.whisper2.app.services.auth.AuthState
 import com.whisper2.app.data.local.db.dao.CallRecordDao
 import com.whisper2.app.data.local.db.dao.ContactDao
 import com.whisper2.app.data.local.db.entities.CallRecordEntity
@@ -77,6 +79,7 @@ class CallService @Inject constructor(
     private val callRecordDao: CallRecordDao,
     private val gson: Gson,
     private val telecomCallManager: TelecomCallManager,
+    private val authService: dagger.Lazy<AuthService>,
     @ApplicationScope private val scope: CoroutineScope
 ) {
     private val _callState = MutableStateFlow<CallState>(CallState.Idle)
@@ -191,6 +194,32 @@ class CallService @Inject constructor(
 
         val payload = GetTurnCredentialsPayload(sessionToken = sessionToken)
         wsClient.send(WsFrame(Constants.MsgType.GET_TURN_CREDENTIALS, payload = payload))
+    }
+
+    // MARK: - Wait for Authentication
+
+    /**
+     * Wait for the WebSocket connection to be authenticated.
+     * When the app wakes from a push notification, the WS may be connecting but not yet authenticated.
+     * This ensures we don't send call commands before the challenge-response completes.
+     */
+    private suspend fun waitForAuthentication(timeout: Long = 10_000): Boolean {
+        val startTime = System.currentTimeMillis()
+        val checkInterval = 100L
+
+        while (System.currentTimeMillis() - startTime < timeout) {
+            val currentState = authService.get().authState.value
+            if (currentState is AuthState.Authenticated) {
+                return true
+            }
+            // If explicitly unauthenticated or error, trigger reconnect
+            if (currentState is AuthState.Unauthenticated || currentState is AuthState.Error) {
+                Logger.i("[CallService] Auth state is $currentState, triggering reconnect")
+                authService.get().reconnect()
+            }
+            delay(checkInterval)
+        }
+        return false
     }
 
     // MARK: - Initiate Call
@@ -316,6 +345,16 @@ class CallService @Inject constructor(
     suspend fun answerCall(): Result<Unit> {
         val incomingPayload = pendingIncomingCall ?: return Result.failure(Exception("No incoming call"))
         Logger.i("[CallService] *** answerCall - pendingIncomingCall.isVideo=${incomingPayload.isVideo} ***")
+
+        // CRITICAL: Wait for WebSocket authentication before answering
+        // When app wakes from push notification, the connection may not be authenticated yet
+        Logger.i("[CallService] Waiting for WebSocket authentication...")
+        val authenticated = waitForAuthentication(timeout = 10_000)
+        if (!authenticated) {
+            Logger.e("[CallService] Failed to authenticate WebSocket before answering call")
+            return Result.failure(Exception("WebSocket not authenticated"))
+        }
+        Logger.i("[CallService] WebSocket authenticated, proceeding with answer")
 
         val whisperId = secureStorage.whisperId ?: return Result.failure(Exception("Not authenticated"))
         val sessionToken = secureStorage.sessionToken ?: return Result.failure(Exception("No session"))
