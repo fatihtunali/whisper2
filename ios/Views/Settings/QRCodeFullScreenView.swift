@@ -112,7 +112,7 @@ struct QRCodeFullScreenView: View {
         }
         .sheet(isPresented: $showShareSheet) {
             if let qrImage = qrCodeImage {
-                ShareSheet(items: [qrImage, "Scan this to add me on Whisper2"])
+                QRShareSheet(items: [qrImage, "Scan this to add me on Whisper2"])
             }
         }
         .alert("Saved", isPresented: $showSaveSuccess) {
@@ -166,9 +166,9 @@ struct QRCodeFullScreenView: View {
     }
 }
 
-// MARK: - Share Sheet
+// MARK: - QR Share Sheet
 
-struct ShareSheet: UIViewControllerRepresentable {
+struct QRShareSheet: UIViewControllerRepresentable {
     let items: [Any]
 
     func makeUIViewController(context: Context) -> UIActivityViewController {

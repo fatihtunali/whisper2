@@ -326,7 +326,7 @@ struct VideoPreviewPlayer: View {
     var body: some View {
         ZStack {
             if let player = player {
-                VideoPlayerView(player: player)
+                AttachmentVideoPlayer(player: player)
                     .aspectRatio(contentMode: .fit)
             }
 
@@ -364,8 +364,8 @@ struct VideoPreviewPlayer: View {
     }
 }
 
-/// UIKit AVPlayer wrapper for SwiftUI
-struct VideoPlayerView: UIViewRepresentable {
+/// UIKit AVPlayer wrapper for SwiftUI (for attachment preview)
+struct AttachmentVideoPlayer: UIViewRepresentable {
     let player: AVPlayer
 
     func makeUIView(context: Context) -> UIView {
