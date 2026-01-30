@@ -11,13 +11,13 @@
  */
 
 import * as crypto from 'crypto';
-import { query } from '../db/postgres';
 import * as redis from '../db/redis';
 import { RedisKeys, TTL, CallData, CallState } from '../db/redis-keys';
 import { connectionManager } from './ConnectionManager';
 import { pushService } from './PushService';
 import { logger } from '../utils/logger';
 import { verifySignature, isTimestampValid, isValidNonce } from '../utils/crypto';
+import { userExists, getUserKeys } from '../db/UserRepository';
 import {
   ErrorCode,
   CallInitiatePayload,
@@ -119,7 +119,7 @@ export class CallService {
     }
 
     // 4. Get caller's sign key
-    const callerKeys = await this.getUserKeys(from);
+    const callerKeys = await getUserKeys(from);
     if (!callerKeys) {
       return {
         success: false,
@@ -147,7 +147,7 @@ export class CallService {
     }
 
     // 6. Verify callee exists and is active
-    const calleeExists = await this.userExists(to);
+    const calleeExists = await userExists(to);
     if (!calleeExists) {
       return {
         success: false,
@@ -309,7 +309,7 @@ export class CallService {
     }
 
     // 4. Get callee's sign key and verify signature
-    const calleeKeys = await this.getUserKeys(from);
+    const calleeKeys = await getUserKeys(from);
     if (!calleeKeys) {
       return {
         success: false,
@@ -410,7 +410,7 @@ export class CallService {
     }
 
     // 4. Get sender's sign key and verify signature
-    const senderKeys = await this.getUserKeys(from);
+    const senderKeys = await getUserKeys(from);
     if (!senderKeys) {
       return {
         success: false,
@@ -613,27 +613,6 @@ export class CallService {
   // ===========================================================================
   // PRIVATE HELPERS
   // ===========================================================================
-
-  private async userExists(whisperId: string): Promise<boolean> {
-    const result = await query(
-      `SELECT 1 FROM users WHERE whisper_id = $1 AND status = 'active'`,
-      [whisperId]
-    );
-    return (result.rowCount ?? 0) > 0;
-  }
-
-  private async getUserKeys(
-    whisperId: string
-  ): Promise<{ enc_public_key: string; sign_public_key: string } | null> {
-    const result = await query<{
-      enc_public_key: string;
-      sign_public_key: string;
-    }>(
-      `SELECT enc_public_key, sign_public_key FROM users WHERE whisper_id = $1 AND status = 'active'`,
-      [whisperId]
-    );
-    return result.rows[0] || null;
-  }
 
   private async getCall(callId: string): Promise<CallData | null> {
     const callKey = RedisKeys.call(callId);

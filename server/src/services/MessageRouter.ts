@@ -9,7 +9,6 @@
  * - Manage message deduplication
  */
 
-import { query } from '../db/postgres';
 import * as redis from '../db/redis';
 import { RedisKeys, TTL } from '../db/redis-keys';
 import { connectionManager } from './ConnectionManager';
@@ -17,7 +16,6 @@ import { logger } from '../utils/logger';
 import {
   verifySignature,
   isTimestampValid,
-  isValidNonce,
 } from '../utils/crypto';
 import { pushService } from './PushService';
 import {
@@ -32,6 +30,12 @@ import {
   TIMESTAMP_SKEW_MS,
 } from '../types/protocol';
 import { attachmentService } from './AttachmentService';
+import { userExists, getUserKeys } from '../db/UserRepository';
+import {
+  validateAttachment,
+  isDuplicateMessage,
+  markMessageProcessed,
+} from '../utils/validation';
 
 // =============================================================================
 // TYPES
@@ -70,36 +74,7 @@ export interface FetchResult {
 // =============================================================================
 
 const PENDING_LIMIT_DEFAULT = 50;
-const DEDUP_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days
-
-// Payload size limits (before base64 expansion memory spikes)
 const MAX_CIPHERTEXT_B64_LEN = 100_000; // ~75KB decoded
-const MAX_OBJECT_KEY_LEN = 255;
-const MAX_CONTENT_TYPE_LEN = 100;
-const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024; // 100MB max file size
-
-// Required prefix for attachment object keys (prevents bucket key reference attacks)
-const OBJECT_KEY_PREFIX = 'whisper/att/';
-
-// Allowed content types for attachments
-const ALLOWED_CONTENT_TYPES = new Set([
-  'image/jpeg',
-  'image/png',
-  'image/gif',
-  'image/webp',
-  'image/heic',
-  'video/mp4',
-  'video/quicktime',
-  'audio/aac',
-  'audio/m4a',
-  'audio/mpeg',
-  'audio/ogg',
-  'application/pdf',
-  'application/octet-stream',
-]);
-
-// Object key allowed characters (prevent path traversal)
-const OBJECT_KEY_PATTERN = /^[a-zA-Z0-9_\-./]+$/;
 
 // =============================================================================
 // MESSAGE ROUTER SERVICE
@@ -169,122 +144,23 @@ export class MessageRouter {
       };
     }
 
-    // 3b. Validate attachment if present
+    // 3b. Validate attachment if present (using shared validation)
     if (payload.attachment) {
-      const att = payload.attachment;
-
-      // Validate objectKey: non-empty, safe characters, required prefix, no path traversal
-      if (!att.objectKey || att.objectKey.length === 0 || att.objectKey.length > MAX_OBJECT_KEY_LEN) {
-        logger.warn({ messageId }, 'Invalid attachment objectKey length');
+      const attValidation = validateAttachment(payload.attachment);
+      if (!attValidation.valid) {
+        logger.warn({ messageId, error: attValidation.error }, 'Attachment validation failed');
         return {
           success: false,
           error: {
             code: 'INVALID_PAYLOAD',
-            message: 'Invalid attachment objectKey',
-          },
-        };
-      }
-      // Must start with required prefix (prevents bucket key reference attacks)
-      if (!att.objectKey.startsWith(OBJECT_KEY_PREFIX)) {
-        logger.warn({ messageId, objectKey: att.objectKey }, 'Attachment objectKey missing required prefix');
-        return {
-          success: false,
-          error: {
-            code: 'INVALID_PAYLOAD',
-            message: `Attachment objectKey must start with '${OBJECT_KEY_PREFIX}'`,
-          },
-        };
-      }
-      if (!OBJECT_KEY_PATTERN.test(att.objectKey)) {
-        logger.warn({ messageId, objectKey: att.objectKey }, 'Invalid attachment objectKey characters');
-        return {
-          success: false,
-          error: {
-            code: 'INVALID_PAYLOAD',
-            message: 'Invalid attachment objectKey format',
-          },
-        };
-      }
-      if (att.objectKey.includes('..')) {
-        logger.warn({ messageId }, 'Path traversal attempt in objectKey');
-        return {
-          success: false,
-          error: {
-            code: 'INVALID_PAYLOAD',
-            message: 'Invalid attachment objectKey',
-          },
-        };
-      }
-
-      // Validate contentType
-      if (!att.contentType || att.contentType.length > MAX_CONTENT_TYPE_LEN) {
-        logger.warn({ messageId }, 'Invalid attachment contentType');
-        return {
-          success: false,
-          error: {
-            code: 'INVALID_PAYLOAD',
-            message: 'Invalid attachment contentType',
-          },
-        };
-      }
-      if (!ALLOWED_CONTENT_TYPES.has(att.contentType)) {
-        logger.warn({ messageId, contentType: att.contentType }, 'Disallowed attachment contentType');
-        return {
-          success: false,
-          error: {
-            code: 'INVALID_PAYLOAD',
-            message: 'Unsupported attachment contentType',
-          },
-        };
-      }
-
-      // Validate ciphertextSize is positive and within limits
-      if (!Number.isFinite(att.ciphertextSize) || att.ciphertextSize <= 0) {
-        logger.warn({ messageId }, 'Invalid attachment ciphertextSize');
-        return {
-          success: false,
-          error: {
-            code: 'INVALID_PAYLOAD',
-            message: 'Invalid attachment ciphertextSize',
-          },
-        };
-      }
-      if (att.ciphertextSize > MAX_ATTACHMENT_BYTES) {
-        logger.warn({ messageId, size: att.ciphertextSize }, 'Attachment too large');
-        return {
-          success: false,
-          error: {
-            code: 'INVALID_PAYLOAD',
-            message: `Attachment exceeds maximum size (${MAX_ATTACHMENT_BYTES / 1024 / 1024}MB)`,
-          },
-        };
-      }
-
-      // Validate attachment nonces (must be exactly 24 bytes)
-      if (!isValidNonce(att.fileNonce)) {
-        logger.warn({ messageId }, 'Invalid attachment fileNonce (must be 24 bytes)');
-        return {
-          success: false,
-          error: {
-            code: 'INVALID_PAYLOAD',
-            message: 'Invalid attachment fileNonce (must be 24 bytes)',
-          },
-        };
-      }
-      if (!att.fileKeyBox || !isValidNonce(att.fileKeyBox.nonce)) {
-        logger.warn({ messageId }, 'Invalid attachment fileKeyBox.nonce (must be 24 bytes)');
-        return {
-          success: false,
-          error: {
-            code: 'INVALID_PAYLOAD',
-            message: 'Invalid attachment fileKeyBox.nonce (must be 24 bytes)',
+            message: attValidation.error!,
           },
         };
       }
     }
 
     // 4. Get sender's signPublicKey from DB
-    const senderKeys = await this.getUserKeys(from);
+    const senderKeys = await getUserKeys(from);
     if (!senderKeys) {
       logger.warn({ from }, 'Sender not found in DB');
       return {
@@ -319,7 +195,7 @@ export class MessageRouter {
     }
 
     // 6. Check recipient exists
-    const recipientExists = await this.userExists(to);
+    const recipientExists = await userExists(to);
     if (!recipientExists) {
       logger.warn({ to }, 'Recipient not found');
       return {
@@ -332,7 +208,7 @@ export class MessageRouter {
     }
 
     // 7. Check idempotency (dedup)
-    const isDuplicate = await this.checkDuplicate(from, messageId);
+    const isDuplicate = await isDuplicateMessage(from, messageId);
     if (isDuplicate) {
       logger.info({ messageId, from }, 'Duplicate message, returning ACK');
       return {
@@ -342,7 +218,7 @@ export class MessageRouter {
     }
 
     // 8. Mark message as processed (dedup)
-    await this.markProcessed(from, messageId);
+    await markMessageProcessed(from, messageId);
 
     // 9. Build message_received payload for recipient
     // Omit optional fields when not present (cleaner cross-platform decoding)
@@ -511,51 +387,6 @@ export class MessageRouter {
   // ===========================================================================
   // PRIVATE HELPERS
   // ===========================================================================
-
-  private async getUserKeys(
-    whisperId: string
-  ): Promise<{ enc_public_key: string; sign_public_key: string } | null> {
-    const result = await query<{
-      enc_public_key: string;
-      sign_public_key: string;
-    }>(
-      'SELECT enc_public_key, sign_public_key FROM users WHERE whisper_id = $1 AND status = $2',
-      [whisperId, 'active']
-    );
-    return result.rows[0] || null;
-  }
-
-  private async userExists(whisperId: string): Promise<boolean> {
-    const result = await query(
-      'SELECT 1 FROM users WHERE whisper_id = $1 AND status = $2',
-      [whisperId, 'active']
-    );
-    return (result.rowCount ?? 0) > 0;
-  }
-
-  /**
-   * Check if message was already processed (dedup).
-   * Uses Redis SETNX pattern.
-   */
-  private async checkDuplicate(
-    senderId: string,
-    messageId: string
-  ): Promise<boolean> {
-    const key = `dedup:${senderId}:${messageId}`;
-    const exists = await redis.exists(key);
-    return exists;
-  }
-
-  /**
-   * Mark message as processed for dedup.
-   */
-  private async markProcessed(
-    senderId: string,
-    messageId: string
-  ): Promise<void> {
-    const key = `dedup:${senderId}:${messageId}`;
-    await redis.setWithTTL(key, '1', DEDUP_TTL_SECONDS);
-  }
 
   /**
    * Store message in pending queue for offline recipient.

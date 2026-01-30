@@ -19,7 +19,6 @@ import { RedisKeys, TTL } from '../db/redis-keys';
 import {
   verifySignature,
   isTimestampValid,
-  isValidNonce,
 } from '../utils/crypto';
 import { pushService } from './PushService';
 import {
@@ -27,6 +26,12 @@ import {
   MessageReceivedPayload,
   AttachmentPointer,
 } from '../types/protocol';
+import { userExists, getUserKeys } from '../db/UserRepository';
+import {
+  validateAttachment,
+  isDuplicateMessage,
+  markMessageProcessed,
+} from '../utils/validation';
 
 // =============================================================================
 // CONSTANTS (Frozen per spec)
@@ -35,17 +40,6 @@ import {
 const MAX_GROUP_MEMBERS = 50;
 const MAX_GROUP_TITLE_LEN = 64;
 const MAX_CIPHERTEXT_B64_LEN = 100_000;
-const MAX_OBJECT_KEY_LEN = 255;
-const OBJECT_KEY_PREFIX = 'whisper/att/';
-const OBJECT_KEY_PATTERN = /^[a-zA-Z0-9_\-./]+$/;
-const DEDUP_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days
-
-const ALLOWED_CONTENT_TYPES = new Set([
-  'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic',
-  'video/mp4', 'video/quicktime',
-  'audio/aac', 'audio/m4a', 'audio/mpeg', 'audio/ogg',
-  'application/pdf', 'application/octet-stream',
-]);
 
 // =============================================================================
 // TYPES
@@ -175,7 +169,7 @@ export class GroupService {
 
     // Verify all members exist and are active
     for (const memberId of uniqueMembers) {
-      const exists = await this.userExists(memberId);
+      const exists = await userExists(memberId);
       if (!exists) {
         return {
           success: false,
@@ -326,7 +320,7 @@ export class GroupService {
         }
 
         for (const memberId of uniqueAdds) {
-          const exists = await this.userExists(memberId);
+          const exists = await userExists(memberId);
           if (!exists) {
             return {
               success: false,
@@ -503,7 +497,7 @@ export class GroupService {
     }
 
     // Get sender's signPublicKey
-    const senderKeys = await this.getUserKeys(senderWhisperId);
+    const senderKeys = await getUserKeys(senderWhisperId);
     if (!senderKeys) {
       return {
         success: false,
@@ -564,7 +558,7 @@ export class GroupService {
 
     // Validate attachment if present
     if (attachment) {
-      const attValidation = this.validateAttachment(attachment);
+      const attValidation = validateAttachment(attachment);
       if (!attValidation.valid) {
         return {
           success: false,
@@ -574,7 +568,7 @@ export class GroupService {
     }
 
     // Check idempotency
-    const isDuplicate = await this.checkDuplicate(senderWhisperId, messageId);
+    const isDuplicate = await isDuplicateMessage(senderWhisperId, messageId);
     if (isDuplicate) {
       logger.info({ messageId, from }, 'Duplicate group message, returning ACK');
       return {
@@ -584,7 +578,7 @@ export class GroupService {
     }
 
     // Mark as processed
-    await this.markProcessed(senderWhisperId, messageId);
+    await markMessageProcessed(senderWhisperId, messageId);
 
     // Route to each recipient
     for (const envelope of recipients) {
@@ -754,65 +748,6 @@ export class GroupService {
   // ===========================================================================
   // PRIVATE HELPERS
   // ===========================================================================
-
-  private async userExists(whisperId: string): Promise<boolean> {
-    const result = await query(
-      `SELECT 1 FROM users WHERE whisper_id = $1 AND status = 'active'`,
-      [whisperId]
-    );
-    return (result.rowCount ?? 0) > 0;
-  }
-
-  private async getUserKeys(
-    whisperId: string
-  ): Promise<{ enc_public_key: string; sign_public_key: string } | null> {
-    const result = await query<{
-      enc_public_key: string;
-      sign_public_key: string;
-    }>(
-      `SELECT enc_public_key, sign_public_key FROM users WHERE whisper_id = $1 AND status = 'active'`,
-      [whisperId]
-    );
-    return result.rows[0] || null;
-  }
-
-  private validateAttachment(att: AttachmentPointer): { valid: boolean; error?: string } {
-    if (!att.objectKey || att.objectKey.length === 0 || att.objectKey.length > MAX_OBJECT_KEY_LEN) {
-      return { valid: false, error: 'Invalid attachment objectKey' };
-    }
-    if (!att.objectKey.startsWith(OBJECT_KEY_PREFIX)) {
-      return { valid: false, error: `Attachment objectKey must start with '${OBJECT_KEY_PREFIX}'` };
-    }
-    if (!OBJECT_KEY_PATTERN.test(att.objectKey)) {
-      return { valid: false, error: 'Invalid attachment objectKey format' };
-    }
-    if (att.objectKey.includes('..')) {
-      return { valid: false, error: 'Invalid attachment objectKey' };
-    }
-    if (!att.contentType || !ALLOWED_CONTENT_TYPES.has(att.contentType)) {
-      return { valid: false, error: 'Invalid attachment contentType' };
-    }
-    if (!Number.isFinite(att.ciphertextSize) || att.ciphertextSize <= 0) {
-      return { valid: false, error: 'Invalid attachment ciphertextSize' };
-    }
-    if (!isValidNonce(att.fileNonce)) {
-      return { valid: false, error: 'Invalid attachment fileNonce' };
-    }
-    if (!att.fileKeyBox || !isValidNonce(att.fileKeyBox.nonce)) {
-      return { valid: false, error: 'Invalid attachment fileKeyBox.nonce' };
-    }
-    return { valid: true };
-  }
-
-  private async checkDuplicate(senderId: string, messageId: string): Promise<boolean> {
-    const key = `dedup:${senderId}:${messageId}`;
-    return await redis.exists(key);
-  }
-
-  private async markProcessed(senderId: string, messageId: string): Promise<void> {
-    const key = `dedup:${senderId}:${messageId}`;
-    await redis.setWithTTL(key, '1', DEDUP_TTL_SECONDS);
-  }
 
   private async storePending(recipientId: string, message: MessageReceivedPayload): Promise<void> {
     const key = RedisKeys.pending(recipientId);

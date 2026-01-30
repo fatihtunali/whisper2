@@ -25,6 +25,7 @@ import {
   isValidPublicKey,
 } from '../utils/crypto';
 import { logger } from '../utils/logger';
+import { userExistsAnyStatus } from '../db/UserRepository';
 import {
   RegisterBeginPayload,
   RegisterChallengePayload,
@@ -72,7 +73,7 @@ export class AuthService {
 
     // If recovery attempt, verify user exists
     if (whisperId) {
-      const userExists = await this.userExists(whisperId);
+      const userExists = await userExistsAnyStatus(whisperId);
       if (!userExists) {
         logger.warn({ whisperId }, 'Recovery attempted for non-existent user');
         return {
@@ -436,14 +437,6 @@ export class AuthService {
   // ===========================================================================
   // PRIVATE HELPERS
   // ===========================================================================
-
-  private async userExists(whisperId: string): Promise<boolean> {
-    const result = await query(
-      'SELECT 1 FROM users WHERE whisper_id = $1',
-      [whisperId]
-    );
-    return (result.rowCount ?? 0) > 0;
-  }
 
   private async getUser(
     whisperId: string
