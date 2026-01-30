@@ -5,6 +5,7 @@ struct ChatView: View {
     let conversation: Conversation
     @StateObject private var viewModel: ChatViewModel
     @ObservedObject private var messagingService = MessagingService.shared
+    @ObservedObject private var webSocket = WebSocketService.shared
     @FocusState private var isInputFocused: Bool
     @State private var showAddKeyAlert = false
     @State private var showContactProfile = false
@@ -19,6 +20,23 @@ struct ChatView: View {
         messagingService.getDisappearingMessageTimer(for: conversation.peerId)
     }
 
+    private var connectionStatusColor: Color {
+        switch webSocket.connectionState {
+        case .connected: return .green
+        case .connecting, .reconnecting: return .orange
+        case .disconnected: return .red
+        }
+    }
+
+    private var connectionStatusText: String {
+        switch webSocket.connectionState {
+        case .connected: return "Connected"
+        case .connecting: return "Connecting..."
+        case .reconnecting: return "Reconnecting..."
+        case .disconnected: return "Disconnected"
+        }
+    }
+
     init(conversation: Conversation) {
         self.conversation = conversation
         self._viewModel = StateObject(wrappedValue: ChatViewModel(conversationId: conversation.peerId))
@@ -29,6 +47,21 @@ struct ChatView: View {
             theme.backgroundColor.color.ignoresSafeArea()
 
             VStack(spacing: 0) {
+                // Connection lost warning
+                if webSocket.connectionState == .disconnected {
+                    HStack {
+                        Image(systemName: "wifi.slash")
+                            .foregroundColor(.red)
+                        Text("No connection - messages will be sent when reconnected")
+                            .font(.caption)
+                            .foregroundColor(.red)
+                        Spacer()
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                    .background(Color.red.opacity(0.1))
+                }
+
                 // Key missing warning
                 if !viewModel.canSendMessages {
                     HStack {
@@ -139,7 +172,17 @@ struct ChatView: View {
                         Text(viewModel.contactName)
                             .font(.headline)
                             .foregroundColor(.white)
-                        if let contact = ContactsService.shared.getContact(whisperId: conversation.peerId) {
+                        // Show connection status if not connected, otherwise show online status
+                        if webSocket.connectionState != .connected {
+                            HStack(spacing: 4) {
+                                Circle()
+                                    .fill(connectionStatusColor)
+                                    .frame(width: 6, height: 6)
+                                Text(connectionStatusText)
+                                    .font(.caption2)
+                                    .foregroundColor(connectionStatusColor)
+                            }
+                        } else if let contact = ContactsService.shared.getContact(whisperId: conversation.peerId) {
                             Text(contact.isOnline ? "Online" : "Tap for info")
                                 .font(.caption2)
                                 .foregroundColor(contact.isOnline ? .green : .gray)

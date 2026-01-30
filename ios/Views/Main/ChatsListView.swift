@@ -1,9 +1,59 @@
 import SwiftUI
 
+/// Connection status indicator
+struct ConnectionStatusBar: View {
+    @ObservedObject private var webSocket = WebSocketService.shared
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(statusColor)
+                .frame(width: 8, height: 8)
+
+            Text(statusText)
+                .font(.caption2)
+                .foregroundColor(statusColor)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        .background(statusColor.opacity(0.15))
+        .cornerRadius(12)
+        .opacity(webSocket.connectionState == .connected ? 0 : 1)
+        .animation(.easeInOut(duration: 0.3), value: webSocket.connectionState)
+    }
+
+    private var statusColor: Color {
+        switch webSocket.connectionState {
+        case .connected:
+            return .green
+        case .connecting:
+            return .orange
+        case .reconnecting:
+            return .orange
+        case .disconnected:
+            return .red
+        }
+    }
+
+    private var statusText: String {
+        switch webSocket.connectionState {
+        case .connected:
+            return "Connected"
+        case .connecting:
+            return "Connecting..."
+        case .reconnecting:
+            return "Reconnecting..."
+        case .disconnected:
+            return "Disconnected"
+        }
+    }
+}
+
 /// Conversation list view
 struct ChatsListView: View {
     @ObservedObject var viewModel: ChatsViewModel
     @ObservedObject private var contactsService = ContactsService.shared
+    @ObservedObject private var webSocket = WebSocketService.shared
     @State private var showNewChat = false
     @State private var showMessageRequests = false
     @State private var searchText = ""
@@ -94,15 +144,22 @@ struct ChatsListView: View {
             .navigationTitle("Chats")
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    if pendingRequestCount > 0 {
-                        Button(action: { showMessageRequests = true }) {
-                            ZStack(alignment: .topTrailing) {
-                                Image(systemName: "tray.fill")
-                                Circle()
-                                    .fill(Color.orange)
-                                    .frame(width: 8, height: 8)
-                                    .offset(x: 2, y: -2)
+                    HStack(spacing: 12) {
+                        if pendingRequestCount > 0 {
+                            Button(action: { showMessageRequests = true }) {
+                                ZStack(alignment: .topTrailing) {
+                                    Image(systemName: "tray.fill")
+                                    Circle()
+                                        .fill(Color.orange)
+                                        .frame(width: 8, height: 8)
+                                        .offset(x: 2, y: -2)
+                                }
                             }
+                        }
+
+                        // Connection status (only show when not connected)
+                        if webSocket.connectionState != .connected {
+                            ConnectionStatusBar()
                         }
                     }
                 }
