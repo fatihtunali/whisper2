@@ -272,9 +272,27 @@ export class AuthService {
       whisperId = claimedWhisperId;
       logger.info({ whisperId, deviceId }, 'Identity recovered');
     } else {
-      // NEW REGISTRATION: server assigns Whisper ID
-      whisperId = await this.createUser(encPublicKey, signPublicKey);
-      logger.info({ whisperId, deviceId }, 'New identity created');
+      // Check if user already exists with these public keys (mnemonic-based recovery)
+      const existingUserByKeys = await this.findUserByPublicKeys(encPublicKey, signPublicKey);
+
+      if (existingUserByKeys) {
+        // User exists with these keys - this is a mnemonic-based recovery
+        if (existingUserByKeys.status === 'banned') {
+          return {
+            success: false,
+            error: {
+              code: 'USER_BANNED',
+              message: 'Account is banned',
+            },
+          };
+        }
+        whisperId = existingUserByKeys.whisper_id;
+        logger.info({ whisperId, deviceId }, 'Identity recovered by public keys');
+      } else {
+        // NEW REGISTRATION: server assigns Whisper ID
+        whisperId = await this.createUser(encPublicKey, signPublicKey);
+        logger.info({ whisperId, deviceId }, 'New identity created');
+      }
     }
 
     // 6. Single-active-device: invalidate old sessions
@@ -437,6 +455,24 @@ export class AuthService {
     }>(
       'SELECT enc_public_key, sign_public_key, status FROM users WHERE whisper_id = $1',
       [whisperId]
+    );
+    return result.rows[0] || null;
+  }
+
+  /**
+   * Find user by their public keys (for mnemonic-based recovery)
+   * This allows recovery when user doesn't know their WhisperID
+   */
+  private async findUserByPublicKeys(
+    encPublicKey: string,
+    signPublicKey: string
+  ): Promise<{ whisper_id: string; status: string } | null> {
+    const result = await query<{
+      whisper_id: string;
+      status: string;
+    }>(
+      'SELECT whisper_id, status FROM users WHERE enc_public_key = $1 AND sign_public_key = $2',
+      [encPublicKey, signPublicKey]
     );
     return result.rows[0] || null;
   }
