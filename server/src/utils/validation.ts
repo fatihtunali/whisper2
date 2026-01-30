@@ -1,7 +1,7 @@
 /**
  * Shared validation utilities - eliminates duplication across services
  */
-import { redis } from '../db/redis';
+import * as redis from '../db/redis';
 import { isValidNonce } from './crypto';
 
 // Attachment validation constants (single source of truth)

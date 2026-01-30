@@ -16,6 +16,7 @@ import { logger } from '../utils/logger';
 import {
   verifySignature,
   isTimestampValid,
+  isValidNonce,
 } from '../utils/crypto';
 import { pushService } from './PushService';
 import {

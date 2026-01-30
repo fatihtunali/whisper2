@@ -19,6 +19,7 @@ import { RedisKeys, TTL } from '../db/redis-keys';
 import {
   verifySignature,
   isTimestampValid,
+  isValidNonce,
 } from '../utils/crypto';
 import { pushService } from './PushService';
 import {
