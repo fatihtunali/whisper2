@@ -100,10 +100,19 @@ export class ConnectionManager {
 
     const { whisperId, deviceId, platform } = session;
 
-    // If user was already connected elsewhere, kick old connection
+    // If user was already connected elsewhere, handle old connection
     const oldConnId = this.userConnections.get(whisperId);
     if (oldConnId && oldConnId !== connId) {
-      await this.kickConnection(oldConnId, 'new_session');
+      const oldConn = this.connections.get(oldConnId);
+      if (oldConn && oldConn.deviceId === deviceId) {
+        // Same device reconnecting - just close old connection silently
+        // Don't send kick message to avoid reconnection loop
+        logger.info({ oldConnId, connId, whisperId, deviceId }, 'Same device reconnecting - closing old connection silently');
+        this.removeConnection(oldConnId, 'reconnect');
+      } else {
+        // Different device - kick with message
+        await this.kickConnection(oldConnId, 'new_session');
+      }
     }
 
     // Update connection with auth info
