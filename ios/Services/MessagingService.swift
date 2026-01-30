@@ -43,6 +43,10 @@ final class MessagingService: ObservableObject {
     private var conversationsSaveWorkItem: DispatchWorkItem?
     private let saveDebounceInterval: TimeInterval = 0.3 // 300ms debounce
 
+    // Thread-safety locks for concurrent access to messages and conversations
+    private let messagesLock = NSLock()
+    private let conversationsLock = NSLock()
+
     private init() {
         loadFromStorage()
         setupMessageHandler()
@@ -531,6 +535,9 @@ final class MessagingService: ObservableObject {
 
     /// Delete a message locally only
     func deleteLocalMessage(messageId: String, conversationId: String) {
+        messagesLock.lock()
+        defer { messagesLock.unlock() }
+
         if var convoMessages = messages[conversationId] {
             convoMessages.removeAll { $0.id == messageId }
             messages[conversationId] = convoMessages
@@ -748,10 +755,13 @@ final class MessagingService: ObservableObject {
     
     private func handleMessageAccepted(_ data: Data) {
         guard let frame = try? JSONDecoder().decode(WsFrame<MessageAcceptedPayload>.self, from: data) else { return }
-        
+
         let messageId = frame.payload.messageId
-        
+
         DispatchQueue.main.async {
+            self.messagesLock.lock()
+            defer { self.messagesLock.unlock() }
+
             for (convId, msgs) in self.messages {
                 if let index = msgs.firstIndex(where: { $0.id == messageId }) {
                     self.messages[convId]?[index].status = .sent
@@ -761,7 +771,7 @@ final class MessagingService: ObservableObject {
             }
         }
     }
-    
+
     private func handleMessageDelivered(_ data: Data) {
         guard let frame = try? JSONDecoder().decode(WsFrame<MessageDeliveredPayload>.self, from: data) else { return }
 
@@ -769,6 +779,9 @@ final class MessagingService: ObservableObject {
         let status: MessageStatus = payload.status == "read" ? .read : .delivered
 
         DispatchQueue.main.async {
+            self.messagesLock.lock()
+            defer { self.messagesLock.unlock() }
+
             for (convId, msgs) in self.messages {
                 if let index = msgs.firstIndex(where: { $0.id == payload.messageId }) {
                     self.messages[convId]?[index].status = status
@@ -804,22 +817,31 @@ final class MessagingService: ObservableObject {
             self.typingTimers[senderId]?.invalidate()
             self.typingTimers[senderId] = nil
 
+            // Lock for thread-safe access
+            self.conversationsLock.lock()
             if let index = self.conversations.firstIndex(where: { $0.peerId == senderId }) {
                 self.objectWillChange.send()
                 self.conversations[index].isTyping = isTyping
 
                 // If typing started, set a timeout to auto-clear after 5 seconds
                 if isTyping {
+                    self.conversationsLock.unlock()
                     self.typingTimers[senderId] = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { [weak self] _ in
                         DispatchQueue.main.async {
+                            self?.conversationsLock.lock()
                             if let idx = self?.conversations.firstIndex(where: { $0.peerId == senderId }) {
                                 self?.objectWillChange.send()
                                 self?.conversations[idx].isTyping = false
                             }
+                            self?.conversationsLock.unlock()
                             self?.typingTimers[senderId] = nil
                         }
                     }
+                } else {
+                    self.conversationsLock.unlock()
                 }
+            } else {
+                self.conversationsLock.unlock()
             }
         }
     }
@@ -840,6 +862,10 @@ final class MessagingService: ObservableObject {
     // MARK: - Helpers
 
     private func updateConversation(for peerId: String, lastMessage: String, unreadIncrement: Int = 0) {
+        // Lock to prevent race conditions during read-modify-write
+        conversationsLock.lock()
+        defer { conversationsLock.unlock() }
+
         // Notify observers that changes are coming (required for in-place array modifications)
         objectWillChange.send()
 
@@ -866,6 +892,8 @@ final class MessagingService: ObservableObject {
     }
 
     func markAsRead(conversationId: String) {
+        // Lock conversations for thread-safe access
+        conversationsLock.lock()
         if let index = conversations.firstIndex(where: { $0.peerId == conversationId }) {
             if conversations[index].unreadCount > 0 {
                 objectWillChange.send()
@@ -874,20 +902,22 @@ final class MessagingService: ObservableObject {
                 updateAppBadge()
             }
         }
+        conversationsLock.unlock()
 
-        guard var msgs = messages[conversationId] else { return }
+        // Lock messages for thread-safe access
+        messagesLock.lock()
+        guard var msgs = messages[conversationId] else {
+            messagesLock.unlock()
+            return
+        }
 
         // Find messages that need to be marked as read (incoming, delivered but not yet read)
         var needsSave = false
+        var receiptsToSend: [(messageId: String, senderId: String)] = []
+
         for i in msgs.indices {
             if msgs[i].direction == .incoming && msgs[i].status == .delivered {
-                // Send read receipt only once
-                let messageId = msgs[i].id
-                let senderId = msgs[i].from
-                Task {
-                    try? await sendDeliveryReceipt(messageId: messageId, from: senderId, status: "read")
-                }
-                // Update local status to read so we don't send receipt again
+                receiptsToSend.append((messageId: msgs[i].id, senderId: msgs[i].from))
                 msgs[i].status = .read
                 needsSave = true
             }
@@ -897,6 +927,14 @@ final class MessagingService: ObservableObject {
         if needsSave {
             messages[conversationId] = msgs
             saveMessagesToStorage()
+        }
+        messagesLock.unlock()
+
+        // Send receipts outside the lock to avoid blocking
+        for receipt in receiptsToSend {
+            Task {
+                try? await sendDeliveryReceipt(messageId: receipt.messageId, from: receipt.senderId, status: "read")
+            }
         }
     }
     
@@ -967,34 +1005,45 @@ final class MessagingService: ObservableObject {
     /// Clear all messaging data (for wipe data feature)
     /// Clear messages for a specific conversation
     func clearMessages(for conversationId: String) {
+        messagesLock.lock()
         messages[conversationId] = []
         saveMessagesToStorage()
+        messagesLock.unlock()
 
         // Update conversation to show no messages
+        conversationsLock.lock()
         if let index = conversations.firstIndex(where: { $0.peerId == conversationId }) {
             conversations[index].lastMessage = nil
             conversations[index].lastMessageTime = nil
             conversations[index].unreadCount = 0
             saveConversationsToStorage()
         }
+        conversationsLock.unlock()
     }
 
     /// Delete a conversation completely (chat and messages)
     func deleteConversation(conversationId: String) {
         // Remove messages
+        messagesLock.lock()
         messages.removeValue(forKey: conversationId)
         saveMessagesToStorage()
+        messagesLock.unlock()
 
         // Remove conversation
+        conversationsLock.lock()
         if let index = conversations.firstIndex(where: { $0.peerId == conversationId }) {
             conversations.remove(at: index)
             saveConversationsToStorage()
             updateAppBadge()
         }
+        conversationsLock.unlock()
     }
 
     /// Set chat theme for a conversation
     func setChatTheme(for conversationId: String, themeId: String) {
+        conversationsLock.lock()
+        defer { conversationsLock.unlock() }
+
         if let index = conversations.firstIndex(where: { $0.peerId == conversationId }) {
             conversations[index].chatThemeId = themeId
         } else {
@@ -1012,7 +1061,9 @@ final class MessagingService: ObservableObject {
 
     /// Get chat theme for a conversation
     func getChatTheme(for conversationId: String) -> ChatTheme {
+        conversationsLock.lock()
         let conversation = conversations.first { $0.peerId == conversationId }
+        conversationsLock.unlock()
         return ChatTheme.getTheme(id: conversation?.chatThemeId)
     }
 
@@ -1020,6 +1071,9 @@ final class MessagingService: ObservableObject {
 
     /// Set disappearing message timer for a conversation
     func setDisappearingMessageTimer(for conversationId: String, timer: DisappearingMessageTimer) {
+        conversationsLock.lock()
+        defer { conversationsLock.unlock() }
+
         objectWillChange.send()
         if let index = conversations.firstIndex(where: { $0.peerId == conversationId }) {
             conversations[index].disappearingMessageTimer = timer
@@ -1038,7 +1092,9 @@ final class MessagingService: ObservableObject {
 
     /// Get disappearing message timer for a conversation
     func getDisappearingMessageTimer(for conversationId: String) -> DisappearingMessageTimer {
+        conversationsLock.lock()
         let conversation = conversations.first { $0.peerId == conversationId }
+        conversationsLock.unlock()
         return conversation?.disappearingMessageTimer ?? .off
     }
 
@@ -1057,6 +1113,7 @@ final class MessagingService: ObservableObject {
         let now = Date()
         var hasChanges = false
 
+        messagesLock.lock()
         for (convId, msgs) in messages {
             let expiredIds = msgs.compactMap { msg -> String? in
                 guard let disappearsAt = msg.disappearsAt, disappearsAt <= now else { return nil }
@@ -1071,6 +1128,7 @@ final class MessagingService: ObservableObject {
                 print("Deleted \(expiredIds.count) expired messages from conversation \(convId)")
             }
         }
+        messagesLock.unlock()
 
         if hasChanges {
             DispatchQueue.main.async {
@@ -1088,8 +1146,14 @@ final class MessagingService: ObservableObject {
     }
 
     func clearAllData() {
+        messagesLock.lock()
         messages.removeAll()
+        messagesLock.unlock()
+
+        conversationsLock.lock()
         conversations.removeAll()
+        conversationsLock.unlock()
+
         keychain.delete(key: messagesStorageKey)
         keychain.delete(key: conversationsStorageKey)
     }

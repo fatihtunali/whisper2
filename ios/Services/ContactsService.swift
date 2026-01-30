@@ -18,38 +18,52 @@ final class ContactsService: ObservableObject {
     private let blockedStorageKey = "whisper2.blocked.data"
     private let requestsStorageKey = "whisper2.requests.data"
     private let pendingMsgsStorageKey = "whisper2.pending.msgs.data"
-    
+
+    // Thread-safety lock for concurrent access to contacts dictionary
+    private let contactsLock = NSLock()
+
     private init() {
         loadFromStorage()
         setupMessageHandler()
     }
     
     // MARK: - Public API - Contacts
-    
+
     func getContact(whisperId: String) -> Contact? {
+        contactsLock.lock()
+        defer { contactsLock.unlock() }
         return contacts[whisperId]
     }
-    
+
     func getPublicKey(for whisperId: String) -> Data? {
+        contactsLock.lock()
+        defer { contactsLock.unlock() }
         return contacts[whisperId]?.encPublicKey
     }
-    
+
     func addContact(_ contact: Contact) {
+        contactsLock.lock()
         contacts[contact.whisperId] = contact
         saveContactsToStorage()
+        contactsLock.unlock()
     }
-    
+
     func addContact(whisperId: String, encPublicKey: Data, nickname: String? = nil) {
         let contact = Contact(
             whisperId: whisperId,
             encPublicKey: encPublicKey,
             nickname: nickname
         )
+        contactsLock.lock()
         contacts[whisperId] = contact
         saveContactsToStorage()
+        contactsLock.unlock()
     }
     
     func updateContactPublicKey(whisperId: String, encPublicKey: Data) {
+        contactsLock.lock()
+        defer { contactsLock.unlock() }
+
         if var contact = contacts[whisperId] {
             if contact.encPublicKey == Data(repeating: 0, count: 32) {
                 contact = Contact(
@@ -76,26 +90,37 @@ final class ContactsService: ObservableObject {
             saveContactsToStorage()
         }
     }
-    
+
     func deleteContact(whisperId: String) {
+        contactsLock.lock()
         contacts.removeValue(forKey: whisperId)
         saveContactsToStorage()
+        contactsLock.unlock()
     }
-    
+
     func getAllContacts() -> [Contact] {
+        contactsLock.lock()
+        defer { contactsLock.unlock() }
         return Array(contacts.values).sorted { $0.displayName < $1.displayName }
     }
-    
+
     func hasContact(whisperId: String) -> Bool {
+        contactsLock.lock()
+        defer { contactsLock.unlock() }
         return contacts[whisperId] != nil
     }
-    
+
     func hasValidPublicKey(for whisperId: String) -> Bool {
+        contactsLock.lock()
+        defer { contactsLock.unlock() }
         guard let contact = contacts[whisperId] else { return false }
         return contact.encPublicKey != Data(repeating: 0, count: 32)
     }
 
     func updateNickname(for whisperId: String, nickname: String?) {
+        contactsLock.lock()
+        defer { contactsLock.unlock() }
+
         guard var contact = contacts[whisperId] else { return }
         contact = Contact(
             id: contact.id,
@@ -114,6 +139,9 @@ final class ContactsService: ObservableObject {
     }
 
     func blockContact(whisperId: String) {
+        contactsLock.lock()
+        defer { contactsLock.unlock() }
+
         guard var contact = contacts[whisperId] else { return }
         contact = Contact(
             id: contact.id,
@@ -131,6 +159,9 @@ final class ContactsService: ObservableObject {
     }
 
     func unblockContact(whisperId: String) {
+        contactsLock.lock()
+        defer { contactsLock.unlock() }
+
         guard var contact = contacts[whisperId] else { return }
         contact = Contact(
             id: contact.id,
