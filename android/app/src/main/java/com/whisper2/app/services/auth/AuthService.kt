@@ -21,8 +21,11 @@ import com.whisper2.app.data.network.ws.WsConnectionState
 import com.whisper2.app.data.network.ws.WsFrame
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.tasks.await
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.resume
@@ -49,6 +52,10 @@ class AuthService @Inject constructor(
     val authState: StateFlow<AuthState> = _authState
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    // Mutex to prevent multiple simultaneous auth flows
+    private val authMutex = Mutex()
+    private val isAuthenticating = AtomicBoolean(false)
 
     // Pending continuations for auth flow
     private var challengeContinuation: CancellableContinuation<RegisterChallengePayload>? = null
@@ -162,42 +169,72 @@ class AuthService @Inject constructor(
 
     /**
      * Reconnect with existing session.
+     * Uses mutex to prevent multiple simultaneous auth flows.
      */
     suspend fun reconnect(): Result<Unit> {
+        // Fast path: if already authenticated and connected, skip
+        if (_authState.value is AuthState.Authenticated &&
+            wsClient.connectionState.value == WsConnectionState.CONNECTED) {
+            Logger.d("[AuthService] Already authenticated and connected, skipping reconnect")
+            return Result.success(Unit)
+        }
+
+        // Prevent multiple simultaneous auth flows
+        if (!isAuthenticating.compareAndSet(false, true)) {
+            Logger.d("[AuthService] Auth already in progress, waiting...")
+            // Wait for current auth to complete
+            return try {
+                authMutex.withLock {
+                    if (_authState.value is AuthState.Authenticated) {
+                        Result.success(Unit)
+                    } else {
+                        Result.failure(AuthException("Auth failed"))
+                    }
+                }
+            } finally {
+                // Don't reset flag here - the original caller will do it
+            }
+        }
+
         val encPub = secureStorage.encPublicKey
         val signPub = secureStorage.signPublicKey
         val signPriv = secureStorage.signPrivateKey
         val savedWhisperId = secureStorage.whisperId
 
         if (encPub == null || signPub == null || signPriv == null || savedWhisperId == null) {
+            isAuthenticating.set(false)
             return Result.failure(AuthException("Not authenticated - missing keys"))
         }
 
-        return try {
-            _authState.value = AuthState.Authenticating
+        return authMutex.withLock {
+            try {
+                _authState.value = AuthState.Authenticating
 
-            wsClient.connect()
-            waitForConnection()
+                wsClient.connect()
+                waitForConnection()
 
-            val ack = performAuth(
-                whisperId = savedWhisperId,  // Existing session
-                encPublicKey = encPub,
-                signPublicKey = signPub,
-                signPrivateKey = signPriv
-            )
+                val ack = performAuth(
+                    whisperId = savedWhisperId,  // Existing session
+                    encPublicKey = encPub,
+                    signPublicKey = signPub,
+                    signPrivateKey = signPriv
+                )
 
-            secureStorage.sessionToken = ack.sessionToken
-            secureStorage.sessionExpiresAt = ack.sessionExpiresAt
+                secureStorage.sessionToken = ack.sessionToken
+                secureStorage.sessionExpiresAt = ack.sessionExpiresAt
 
-            Logger.auth("Reconnect successful")
+                Logger.auth("Reconnect successful")
 
-            _authState.value = AuthState.Authenticated(ack.whisperId)
+                _authState.value = AuthState.Authenticated(ack.whisperId)
 
-            Result.success(Unit)
-        } catch (e: Exception) {
-            Logger.e("Reconnect failed", e)
-            _authState.value = AuthState.Error(e.message ?: "Reconnect failed")
-            Result.failure(e)
+                Result.success(Unit)
+            } catch (e: Exception) {
+                Logger.e("Reconnect failed", e)
+                _authState.value = AuthState.Error(e.message ?: "Reconnect failed")
+                Result.failure(e)
+            } finally {
+                isAuthenticating.set(false)
+            }
         }
     }
 
@@ -278,33 +315,6 @@ class AuthService @Inject constructor(
         }
     }
 
-    /**
-     * Sync FCM token with server after successful authentication.
-     * This ensures the server has the latest token even after reinstall.
-     */
-    private fun syncFcmTokenAfterAuth() {
-        scope.launch {
-            try {
-                // Force get fresh token from Firebase
-                val token = FirebaseMessaging.getInstance().token.await()
-                val sessionToken = secureStorage.sessionToken ?: return@launch
-
-                // Update local cache
-                secureStorage.fcmToken = token
-
-                // Send to server
-                val payload = UpdateTokensPayload(
-                    sessionToken = sessionToken,
-                    pushToken = token
-                )
-                wsClient.send(WsFrame(Constants.MsgType.UPDATE_TOKENS, payload = payload))
-                Logger.auth("FCM token synced after auth: ${token.take(20)}...")
-            } catch (e: Exception) {
-                Logger.e("Failed to sync FCM token after auth", e)
-            }
-        }
-    }
-
     private suspend fun waitForConnection() {
         var attempts = 0
         while (wsClient.connectionState.value != WsConnectionState.CONNECTED && attempts < 100) {
@@ -336,8 +346,7 @@ class AuthService @Inject constructor(
                     val payload = gson.fromJson(frame.payload, RegisterAckPayload::class.java)
                     Logger.auth("Received ack: ${payload.whisperId}, success=${payload.success}")
                     if (payload.success) {
-                        // Sync FCM token after successful auth
-                        syncFcmTokenAfterAuth()
+                        // FCM token already sent in register_proof - no need to sync again
                         ackContinuation?.resume(payload)
                     } else {
                         ackContinuation?.resumeWithException(AuthException("Registration rejected"))

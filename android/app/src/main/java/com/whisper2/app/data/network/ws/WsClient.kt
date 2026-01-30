@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -34,13 +36,23 @@ class WsClientImpl @Inject constructor(
     private val _connectionState = MutableStateFlow(WsConnectionState.DISCONNECTED)
     val connectionState: StateFlow<WsConnectionState> = _connectionState.asStateFlow()
 
+    // Mutex to prevent multiple simultaneous connect attempts
+    private val connectMutex = Mutex()
+
     private val _messages = MutableSharedFlow<WsFrame<JsonElement>>(extraBufferCapacity = 100)
     val messages = _messages.asSharedFlow()
 
     private val reconnectPolicy = WsReconnectPolicy()
 
     fun connect() {
-        if (_connectionState.value == WsConnectionState.CONNECTED) return
+        // Prevent multiple simultaneous connect attempts
+        val currentState = _connectionState.value
+        if (currentState == WsConnectionState.CONNECTED ||
+            currentState == WsConnectionState.CONNECTING ||
+            currentState == WsConnectionState.RECONNECTING) {
+            Logger.ws("Skipping connect - already $currentState")
+            return
+        }
 
         _connectionState.value = WsConnectionState.CONNECTING
         Logger.ws("Connecting to ${Constants.WS_URL}")

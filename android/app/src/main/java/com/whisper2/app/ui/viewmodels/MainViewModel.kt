@@ -12,6 +12,7 @@ import com.whisper2.app.services.calls.ActiveCall
 import com.whisper2.app.services.calls.CallService
 import com.whisper2.app.services.calls.CallState
 import com.whisper2.app.services.messaging.MessageHandler
+import com.whisper2.app.services.messaging.MessagingService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -23,6 +24,7 @@ class MainViewModel @Inject constructor(
     private val authService: AuthService,
     private val wsClient: WsClientImpl,
     private val messageHandler: MessageHandler,
+    private val messagingService: MessagingService,
     private val callService: CallService  // Inject to ensure it's created early for incoming calls
 ) : ViewModel() {
     val authState: StateFlow<AuthState> = authService.authState
@@ -50,8 +52,9 @@ class MainViewModel @Inject constructor(
                 val result = authService.reconnect()
                 if (result.isSuccess && !hasFetchedPending) {
                     hasFetchedPending = true
-                    Logger.i("[MainViewModel] Reconnect success - fetching pending messages")
+                    Logger.i("[MainViewModel] Reconnect success - fetching pending and processing outbox")
                     fetchPendingMessages()
+                    messagingService.processOutbox()  // Send queued messages
                 }
             }
         }
@@ -61,8 +64,9 @@ class MainViewModel @Inject constructor(
             authState.collect { state ->
                 if (state is AuthState.Authenticated && connectionState.value == WsConnectionState.CONNECTED && !hasFetchedPending) {
                     hasFetchedPending = true
-                    Logger.i("[MainViewModel] Auth completed while connected - fetching pending messages")
+                    Logger.i("[MainViewModel] Auth completed while connected - fetching pending and processing outbox")
                     fetchPendingMessages()
+                    messagingService.processOutbox()  // Send queued messages
                 }
             }
         }

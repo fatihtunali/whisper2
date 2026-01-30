@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.*
 import org.json.JSONObject
 import org.webrtc.*
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -472,12 +473,11 @@ class CallService @Inject constructor(
     // MARK: - Answer Call
 
     suspend fun answerCall(): Result<Unit> {
-        // Prevent double-calling answerCall (UI + Telecom callback race)
-        if (answerCallTriggered && _callState.value == CallState.Connecting) {
+        // Prevent double-calling answerCall (UI + Telecom callback race) - atomic check-and-set
+        if (!answerCallTriggered.compareAndSet(false, true)) {
             Logger.i("[CallService] answerCall already in progress, ignoring duplicate call")
             return Result.success(Unit)
         }
-        answerCallTriggered = true
 
         val incomingPayload = pendingIncomingCall ?: return Result.failure(Exception("No incoming call"))
         Logger.i("[CallService] *** answerCall - pendingIncomingCall.isVideo=${incomingPayload.isVideo} ***")
@@ -1654,7 +1654,7 @@ class CallService @Inject constructor(
         connectionFallbackJob?.cancel()
         connectionFallbackJob = null
         _callDuration.value = 0
-        answerCallTriggered = false  // Reset for next call
+        answerCallTriggered.set(false)  // Reset for next call
 
         // Stop and dispose video capturer with proper exception handling
         try {
@@ -1737,9 +1737,9 @@ class CallService @Inject constructor(
      * Set up callbacks on the WhisperConnection for external device events.
      * NOTE: onAnswerCallback is for wearable/Bluetooth headset answering ONLY.
      * When user answers via IncomingCallActivity UI, the UI calls answerCall() directly.
-     * We use a flag to prevent double-calling answerCall().
+     * We use an atomic flag to prevent double-calling answerCall() (thread-safe).
      */
-    private var answerCallTriggered = false
+    private val answerCallTriggered = AtomicBoolean(false)
 
     private fun setupConnectionCallbacks() {
         WhisperConnectionService.activeConnection?.let { connection ->
@@ -1750,8 +1750,8 @@ class CallService @Inject constructor(
             // The UI flow calls answerCall() directly, so we prevent double-calling
             connection.onAnswerCallback = { isVideo ->
                 Logger.i("[CallService] WhisperConnection onAnswerCallback from external device")
-                if (!answerCallTriggered) {
-                    answerCallTriggered = true
+                // Use atomic compareAndSet - answerCall() also checks this, but we skip the launch if already triggered
+                if (answerCallTriggered.compareAndSet(false, true)) {
                     scope.launch { answerCall() }
                 } else {
                     Logger.i("[CallService] onAnswerCallback ignored - answerCall already triggered")
