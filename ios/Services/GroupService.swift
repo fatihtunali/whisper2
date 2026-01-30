@@ -291,7 +291,13 @@ final class GroupService: ObservableObject {
             if groupMessages[groupId] == nil {
                 groupMessages[groupId] = []
             }
-            groupMessages[groupId]?.append(message)
+
+            // Check for duplicate message ID to prevent ForEach crashes
+            if groupMessages[groupId]?.contains(where: { $0.id == messageId }) == true {
+                print("Duplicate group message ID detected, skipping: \(messageId)")
+            } else {
+                groupMessages[groupId]?.append(message)
+            }
 
             // Update group's last message
             if var group = groups[groupId] {

@@ -336,10 +336,15 @@ final class MessagingService: ObservableObject {
             if self.messages[recipientId] == nil {
                 self.messages[recipientId] = []
             }
-            self.messages[recipientId]?.append(message)
-            self.updateConversation(for: recipientId, lastMessage: content)
-            self.saveMessagesToStorage()
-            self.saveConversationsToStorage()
+            // Check for duplicate message ID to prevent ForEach crashes
+            if self.messages[recipientId]?.contains(where: { $0.id == messageId }) == true {
+                print("Duplicate outgoing message ID detected, skipping: \(messageId)")
+            } else {
+                self.messages[recipientId]?.append(message)
+                self.updateConversation(for: recipientId, lastMessage: content)
+                self.saveMessagesToStorage()
+                self.saveConversationsToStorage()
+            }
         }
 
         return message
@@ -443,10 +448,15 @@ final class MessagingService: ObservableObject {
             if self.messages[recipientId] == nil {
                 self.messages[recipientId] = []
             }
-            self.messages[recipientId]?.append(message)
-            self.updateConversation(for: recipientId, lastMessage: displayContent)
-            self.saveMessagesToStorage()
-            self.saveConversationsToStorage()
+            // Check for duplicate message ID to prevent ForEach crashes
+            if self.messages[recipientId]?.contains(where: { $0.id == messageId }) == true {
+                print("Duplicate outgoing message ID detected, skipping: \(messageId)")
+            } else {
+                self.messages[recipientId]?.append(message)
+                self.updateConversation(for: recipientId, lastMessage: displayContent)
+                self.saveMessagesToStorage()
+                self.saveConversationsToStorage()
+            }
         }
 
         return message
@@ -678,6 +688,13 @@ final class MessagingService: ObservableObject {
             if self.messages[payload.from] == nil {
                 self.messages[payload.from] = []
             }
+
+            // Check for duplicate message ID to prevent ForEach crashes
+            if self.messages[payload.from]?.contains(where: { $0.id == message.id }) == true {
+                print("Duplicate message ID detected, skipping: \(message.id)")
+                return
+            }
+
             self.messages[payload.from]?.append(message)
 
             // Generate preview based on content type
@@ -893,6 +910,13 @@ final class MessagingService: ObservableObject {
         DispatchQueue.main.async {
             // Create new array with appended message to trigger @Published update
             var conversationMessages = self.messages[message.conversationId] ?? []
+
+            // Check for duplicate message ID to prevent ForEach crashes
+            if conversationMessages.contains(where: { $0.id == message.id }) {
+                print("Duplicate local message ID detected, skipping: \(message.id)")
+                return
+            }
+
             conversationMessages.append(message)
             self.messages[message.conversationId] = conversationMessages
 
