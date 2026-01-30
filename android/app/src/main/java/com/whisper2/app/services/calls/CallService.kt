@@ -472,6 +472,13 @@ class CallService @Inject constructor(
     // MARK: - Answer Call
 
     suspend fun answerCall(): Result<Unit> {
+        // Prevent double-calling answerCall (UI + Telecom callback race)
+        if (answerCallTriggered && _callState.value == CallState.Connecting) {
+            Logger.i("[CallService] answerCall already in progress, ignoring duplicate call")
+            return Result.success(Unit)
+        }
+        answerCallTriggered = true
+
         val incomingPayload = pendingIncomingCall ?: return Result.failure(Exception("No incoming call"))
         Logger.i("[CallService] *** answerCall - pendingIncomingCall.isVideo=${incomingPayload.isVideo} ***")
 
@@ -1647,6 +1654,7 @@ class CallService @Inject constructor(
         connectionFallbackJob?.cancel()
         connectionFallbackJob = null
         _callDuration.value = 0
+        answerCallTriggered = false  // Reset for next call
 
         // Stop and dispose video capturer with proper exception handling
         try {
@@ -1725,15 +1733,29 @@ class CallService @Inject constructor(
         _callState.value = CallState.Idle
     }
 
-    // Set up callbacks on the WhisperConnection (after it's created by ConnectionService)
+    /**
+     * Set up callbacks on the WhisperConnection for external device events.
+     * NOTE: onAnswerCallback is for wearable/Bluetooth headset answering ONLY.
+     * When user answers via IncomingCallActivity UI, the UI calls answerCall() directly.
+     * We use a flag to prevent double-calling answerCall().
+     */
+    private var answerCallTriggered = false
+
     private fun setupConnectionCallbacks() {
         WhisperConnectionService.activeConnection?.let { connection ->
             Logger.i("[CallService] Setting up WhisperConnection callbacks")
 
             // Handle answer from wearable/external device (Telecom triggers this)
+            // NOTE: This should only trigger for external devices (Bluetooth, wearable)
+            // The UI flow calls answerCall() directly, so we prevent double-calling
             connection.onAnswerCallback = { isVideo ->
                 Logger.i("[CallService] WhisperConnection onAnswerCallback from external device")
-                scope.launch { answerCall() }
+                if (!answerCallTriggered) {
+                    answerCallTriggered = true
+                    scope.launch { answerCall() }
+                } else {
+                    Logger.i("[CallService] onAnswerCallback ignored - answerCall already triggered")
+                }
             }
 
             // Handle reject from wearable/external device

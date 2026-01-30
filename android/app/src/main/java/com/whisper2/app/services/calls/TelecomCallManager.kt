@@ -3,7 +3,6 @@ package com.whisper2.app.services.calls
 import android.content.ComponentName
 import android.content.Context
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.telecom.DisconnectCause
 import android.telecom.PhoneAccount
@@ -34,9 +33,8 @@ class TelecomCallManager @Inject constructor(
     private val _isRegistered = MutableStateFlow(false)
     val isRegistered: StateFlow<Boolean> = _isRegistered
 
-    // Callbacks for call events (set by CallService)
-    var onAnswerCall: ((Boolean) -> Unit)? = null
-    var onRejectCall: (() -> Unit)? = null
+    // Callback for when user ends call via Telecom (Bluetooth headset, wearable, etc.)
+    // Set by CallService to handle external end-call events
     var onEndCall: (() -> Unit)? = null
 
     fun initialize() {
@@ -134,8 +132,8 @@ class TelecomCallManager @Inject constructor(
 
             Logger.i("[TelecomCallManager] addNewIncomingCall called successfully")
 
-            // Set up connection callbacks when connection is created
-            setupConnectionCallbacks()
+            // NOTE: Connection callbacks are set up by CallService.setupConnectionCallbacks()
+            // to avoid duplicate callback handling
 
             true
         } catch (e: SecurityException) {
@@ -183,7 +181,7 @@ class TelecomCallManager @Inject constructor(
             tm.placeCall(uri, extras)
             Logger.i("[TelecomCallManager] placeCall called successfully")
 
-            setupConnectionCallbacks()
+            // NOTE: Connection callbacks are set up by CallService
             true
         } catch (e: SecurityException) {
             Logger.e("[TelecomCallManager] SecurityException: ${e.message}", e)
@@ -191,25 +189,6 @@ class TelecomCallManager @Inject constructor(
         } catch (e: Exception) {
             Logger.e("[TelecomCallManager] Failed to report outgoing call: ${e.message}", e)
             false
-        }
-    }
-
-    private fun setupConnectionCallbacks() {
-        // Wait for connection to be created by ConnectionService
-        // Then set up callbacks
-        WhisperConnectionService.activeConnection?.let { connection ->
-            connection.onAnswerCallback = { isVideo ->
-                Logger.i("[TelecomCallManager] Connection answered callback, isVideo: $isVideo")
-                onAnswerCall?.invoke(isVideo)
-            }
-            connection.onRejectCallback = {
-                Logger.i("[TelecomCallManager] Connection rejected callback")
-                onRejectCall?.invoke()
-            }
-            connection.onDisconnectCallback = {
-                Logger.i("[TelecomCallManager] Connection disconnected callback")
-                onEndCall?.invoke()
-            }
         }
     }
 

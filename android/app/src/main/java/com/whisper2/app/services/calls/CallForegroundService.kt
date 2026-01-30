@@ -8,6 +8,8 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.graphics.drawable.Icon
+import android.media.AudioAttributes
+import android.media.Ringtone
 import android.media.RingtoneManager
 import android.os.Build
 import android.os.IBinder
@@ -78,6 +80,7 @@ class CallForegroundService : Service() {
     }
 
     private var vibrator: Vibrator? = null
+    private var ringtone: Ringtone? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -103,6 +106,7 @@ class CallForegroundService : Service() {
                 Logger.i("[CallForegroundService] isVideo=$isVideo")
 
                 showIncomingCallNotification(callId, callerId, callerName, isVideo)
+                startRingtone()
                 startVibration()
             }
             ACTION_CALL_ACTIVE -> {
@@ -111,10 +115,12 @@ class CallForegroundService : Service() {
                 val isVideo = intent.getBooleanExtra(EXTRA_IS_VIDEO, false)
 
                 Logger.i("[CallForegroundService] *** CALL ACTIVE *** callerName=$callerName, isVideo=$isVideo")
+                stopRingtone()
                 stopVibration()
                 showOngoingCallNotification(callerName, isVideo)
             }
             ACTION_CALL_ANSWERED, ACTION_CALL_DECLINED, ACTION_CALL_ENDED -> {
+                stopRingtone()
                 stopVibration()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -126,6 +132,7 @@ class CallForegroundService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        stopRingtone()
         stopVibration()
         Logger.d("[CallForegroundService] onDestroy")
     }
@@ -185,6 +192,7 @@ class CallForegroundService : Service() {
         val callType = if (isVideo) "Video Call" else "Voice Call"
 
         // Use modern CallStyle notification for Android 12+ (API 31+)
+        // Sound is handled by notification channel
         val notification = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             // Create Person for the caller
             val caller = Person.Builder()
@@ -300,5 +308,38 @@ class CallForegroundService : Service() {
     private fun stopVibration() {
         vibrator?.cancel()
         vibrator = null
+    }
+
+    private fun startRingtone() {
+        try {
+            val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+            ringtone = RingtoneManager.getRingtone(this, uri)?.apply {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    isLooping = true
+                }
+                audioAttributes = AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+                play()
+            }
+            Logger.i("[CallForegroundService] Ringtone started")
+        } catch (e: Exception) {
+            Logger.e("[CallForegroundService] Failed to start ringtone: ${e.message}")
+        }
+    }
+
+    private fun stopRingtone() {
+        try {
+            ringtone?.let {
+                if (it.isPlaying) {
+                    it.stop()
+                }
+            }
+            ringtone = null
+            Logger.i("[CallForegroundService] Ringtone stopped")
+        } catch (e: Exception) {
+            Logger.e("[CallForegroundService] Failed to stop ringtone: ${e.message}")
+        }
     }
 }

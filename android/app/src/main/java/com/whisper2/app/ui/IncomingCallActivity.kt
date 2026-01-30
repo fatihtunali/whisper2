@@ -4,11 +4,14 @@ import android.app.KeyguardManager
 import android.content.Context
 import android.os.Build
 import android.os.Bundle
+import android.view.View
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.LaunchedEffect
@@ -52,9 +55,10 @@ class IncomingCallActivity : ComponentActivity() {
 
         Logger.i("[IncomingCallActivity] onCreate: callId=$callId, caller=$callerName, isVideo=$isVideo")
 
-        // Enable edge-to-edge display
+        // Enable edge-to-edge display and hide system bars
         enableEdgeToEdge()
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        hideSystemBars()
 
         // Allow activity to show over lock screen
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
@@ -153,5 +157,15 @@ class IncomingCallActivity : ComponentActivity() {
     override fun onBackPressed() {
         // Don't allow back press during incoming call
         // User must answer or decline
+    }
+
+    private fun hideSystemBars() {
+        val windowInsetsController = WindowCompat.getInsetsController(window, window.decorView)
+        windowInsetsController.apply {
+            // Hide both status bar and navigation bar
+            hide(WindowInsetsCompat.Type.systemBars())
+            // Allow swipe to temporarily show system bars
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
     }
 }

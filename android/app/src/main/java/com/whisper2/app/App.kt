@@ -38,22 +38,11 @@ class App : Application(), DefaultLifecycleObserver {
     }
 
     override fun onStop(owner: LifecycleOwner) {
-        // App going to background - end any active calls
-        Logger.i("[App] App going to background, checking for active calls")
-        try {
-            val service = callService.get()
-            val currentState = service.callState.value
-            val activeCall = service.activeCall.value
-
-            if (currentState != CallState.Idle && activeCall != null) {
-                Logger.i("[App] Active call detected, ending call on app background")
-                appScope.launch {
-                    service.endCall()
-                }
-            }
-        } catch (e: Exception) {
-            Logger.w("[App] Error checking call state on background: ${e.message}")
-        }
+        // App going to background
+        // NOTE: We do NOT end calls when app goes to background!
+        // Calls should continue with the foreground service notification.
+        // Only end calls on actual app destruction (onDestroy).
+        Logger.i("[App] App going to background - calls continue via foreground service")
     }
 
     override fun onDestroy(owner: LifecycleOwner) {
@@ -79,6 +68,10 @@ class App : Application(), DefaultLifecycleObserver {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val nm = getSystemService(NotificationManager::class.java)
 
+            // Delete and recreate calls channel to apply new settings (silent)
+            // This ensures existing users get the updated channel without reinstall
+            nm.deleteNotificationChannel("calls")
+
             // Messages channel
             val messagesChannel = NotificationChannel(
                 "messages",
@@ -100,25 +93,18 @@ class App : Application(), DefaultLifecycleObserver {
             }
             nm.createNotificationChannel(messagesChannel)
 
-            // Calls channel
+            // Calls channel - SILENT! Ringtone handled manually by CallForegroundService
             val callsChannel = NotificationChannel(
                 "calls",
                 "Calls",
-                NotificationManager.IMPORTANCE_MAX
+                NotificationManager.IMPORTANCE_HIGH
             ).apply {
                 description = "Whisper2 incoming call notifications"
-                enableVibration(true)
-                vibrationPattern = longArrayOf(0, 1000, 500, 1000)
+                enableVibration(false) // Vibration handled by CallForegroundService
                 setShowBadge(true)
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
                 setBypassDnd(true) // Allow calls to bypass Do Not Disturb
-                setSound(
-                    Settings.System.DEFAULT_RINGTONE_URI,
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                        .build()
-                )
+                setSound(null, null) // SILENT - ringtone played manually so we can stop it
             }
             nm.createNotificationChannel(callsChannel)
         }
