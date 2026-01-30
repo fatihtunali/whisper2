@@ -16,7 +16,9 @@ import com.whisper2.app.data.network.ws.WsClientImpl
 import com.whisper2.app.data.network.ws.WsConnectionState
 import com.whisper2.app.data.network.ws.WsFrame
 import com.whisper2.app.services.auth.AuthService
+import com.whisper2.app.services.calls.CallForegroundService
 import com.whisper2.app.ui.MainActivity
+import android.os.SystemClock
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -35,9 +37,8 @@ class FcmService : FirebaseMessagingService() {
 
     companion object {
         private const val CHANNEL_ID_MESSAGES = "messages"
-        private const val CHANNEL_ID_CALLS = "calls"
         private const val NOTIFICATION_ID_MESSAGE = 1001
-        private const val NOTIFICATION_ID_CALL = 2001
+        // NOTE: Call notifications are handled by CallForegroundService, not FcmService
     }
 
     override fun onCreate() {
@@ -71,7 +72,7 @@ class FcmService : FirebaseMessagingService() {
         if (pushType == "wake") {
             when (pushReason) {
                 "message" -> handleWakeMessage()
-                "call" -> handleWakeCall()
+                "call" -> handleWakeCall(data)  // Pass data for call details
                 "system" -> handleWakeSystem()
                 else -> {
                     Logger.d("[FcmService] Unknown wake reason: $pushReason")
@@ -86,11 +87,19 @@ class FcmService : FirebaseMessagingService() {
                 "group" -> handleGroupPush(data)
                 "wakeup" -> handleWakeupPush()
                 else -> {
+                    // GUARD: Never show notification for call-related pushes
+                    // CallForegroundService handles all call UI
+                    if (pushType == "call" || pushReason == "call" || data["callId"] != null) {
+                        Logger.i("[FcmService] Call-related push in else branch - only waking connection, no notification")
+                        wakeUpConnection()
+                        return
+                    }
+
                     Logger.d("[FcmService] Unknown push type, checking for notification payload")
                     // Generic notification from RemoteMessage.notification
                     message.notification?.let { notification ->
                         Logger.d("[FcmService] Showing generic notification")
-                        showNotification(
+                        showMessageNotification(
                             title = notification.title ?: "Whisper2",
                             body = notification.body ?: "New message"
                         )
@@ -98,7 +107,7 @@ class FcmService : FirebaseMessagingService() {
                         // If no notification payload but has data, show data as notification
                         if (data.isNotEmpty()) {
                             Logger.d("[FcmService] Showing notification from data payload")
-                            showNotification(
+                            showMessageNotification(
                                 title = data["title"] ?: "Whisper2",
                                 body = data["body"] ?: data["message"] ?: "New notification"
                             )
@@ -116,10 +125,11 @@ class FcmService : FirebaseMessagingService() {
     private fun handleWakeMessage() {
         Logger.i("[FcmService] Wake push for message - showing notification and connecting")
 
-        // Show notification
-        showNotification(
+        // Show message notification with stable ID (updates instead of stacking)
+        showMessageNotification(
             title = "Whisper2",
-            body = "You have new messages"
+            body = "You have new messages",
+            useStableId = true  // Generic wake - don't spam multiple notifications
         )
 
         // Wake up WebSocket to fetch pending messages
@@ -128,15 +138,43 @@ class FcmService : FirebaseMessagingService() {
 
     /**
      * Handle wake push for incoming call.
-     * NOTE: We do NOT show a notification here. The WebSocket will receive
-     * the call_incoming message and the Telecom/CallForegroundService will
-     * show the proper incoming call UI with answer/decline buttons.
+     *
+     * WhatsApp-like behavior: If FCM payload includes call details (callId, from, isVideo),
+     * we start CallForegroundService IMMEDIATELY without waiting for WebSocket.
+     * This ensures instant call UI even when app is killed.
+     *
+     * WebSocket is still woken for signaling (SDP offer/answer, ICE candidates).
      */
-    private fun handleWakeCall() {
-        Logger.i("[FcmService] Wake push for call - waking connection (no notification, Telecom handles UI)")
+    private fun handleWakeCall(data: Map<String, String>) {
+        val callId = data["callId"]
+        val from = data["from"]
+        val callerName = data["callerName"] ?: from
+        val isVideo = data["isVideo"]?.toBoolean() ?: false
 
-        // Only wake up WebSocket for call signaling
-        // The call_incoming handler will show proper UI via CallForegroundService
+        Logger.i("[FcmService] Wake push for call - callId=$callId, from=$from, isVideo=$isVideo")
+
+        // INSTANT UI: If FCM includes call details, show call UI immediately
+        // Don't wait for WebSocket - it may take 1-3 seconds to reconnect
+        if (callId != null && from != null) {
+            Logger.i("[FcmService] Starting CallForegroundService immediately (WhatsApp-like)")
+            try {
+                CallForegroundService.startIncomingCall(
+                    context = this,
+                    callId = callId,
+                    callerId = from,
+                    callerName = callerName,
+                    isVideo = isVideo
+                )
+            } catch (e: Exception) {
+                // Android 12+ may throw ForegroundServiceStartNotAllowedException
+                // Fallback: just wake WebSocket and rely on WS + app UI
+                Logger.e("[FcmService] Failed to start CallForegroundService from FCM (Android 12+ restriction?)", e)
+            }
+        } else {
+            Logger.i("[FcmService] No call details in FCM, waiting for WebSocket")
+        }
+
+        // Also wake WebSocket for signaling (SDP offer/answer, ICE)
         wakeUpConnection()
     }
 
@@ -154,8 +192,8 @@ class FcmService : FirebaseMessagingService() {
 
         Logger.d("[FcmService] Message push from: $fromId")
 
-        // Show notification
-        showNotification(
+        // Show message notification (no sound/vibration - channel handles it)
+        showMessageNotification(
             title = "New message",
             body = preview,
             conversationId = fromId
@@ -168,17 +206,27 @@ class FcmService : FirebaseMessagingService() {
     private fun handleCallPush(data: Map<String, String>) {
         val callId = data["callId"] ?: return
         val fromId = data["from"] ?: return
+        val callerName = data["callerName"] ?: fromId
         val isVideo = data["isVideo"]?.toBoolean() ?: false
 
         Logger.i("[FcmService] Call push (legacy) - callId: $callId, from: $fromId, isVideo: $isVideo")
-        Logger.i("[FcmService] NOT showing notification - CallForegroundService will handle UI")
 
-        // DO NOT show notification here!
-        // CallForegroundService will show the proper incoming call UI
-        // with answer/decline buttons and route to IncomingCallActivity
-        // (unified activity handles both audio and video calls)
+        // INSTANT UI: Start CallForegroundService immediately (WhatsApp-like)
+        Logger.i("[FcmService] Starting CallForegroundService immediately")
+        try {
+            CallForegroundService.startIncomingCall(
+                context = this,
+                callId = callId,
+                callerId = fromId,
+                callerName = callerName,
+                isVideo = isVideo
+            )
+        } catch (e: Exception) {
+            // Android 12+ may throw ForegroundServiceStartNotAllowedException
+            Logger.e("[FcmService] Failed to start CallForegroundService (legacy path)", e)
+        }
 
-        // Only wake up WebSocket for call signaling
+        // Also wake WebSocket for signaling (SDP offer/answer, ICE)
         wakeUpConnection()
     }
 
@@ -189,7 +237,8 @@ class FcmService : FirebaseMessagingService() {
 
         Logger.d("[FcmService] Group push - groupId: $groupId")
 
-        showNotification(
+        // Show message notification (no sound/vibration - channel handles it)
+        showMessageNotification(
             title = groupName,
             body = preview,
             conversationId = groupId
@@ -244,22 +293,28 @@ class FcmService : FirebaseMessagingService() {
         }
     }
 
-    private fun showNotification(
+    /**
+     * Show a MESSAGE notification only.
+     * - NO setDefaults(DEFAULT_ALL) - let channel handle sound/vibration
+     * - NO fullScreenIntent - messages don't need to wake screen like calls
+     * - NEVER use this for calls - CallForegroundService handles call UI
+     *
+     * @param useStableId If true, uses NOTIFICATION_ID_MESSAGE (updates instead of stacking).
+     *                    Use for generic "wake" notifications. False for per-conversation messages.
+     */
+    private fun showMessageNotification(
         title: String,
         body: String,
         conversationId: String? = null,
-        isCall: Boolean = false,
-        callId: String? = null
+        useStableId: Boolean = false
     ) {
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             conversationId?.let { putExtra("conversationId", it) }
-            callId?.let { putExtra("callId", it) }
-            if (isCall) putExtra("isIncomingCall", true)
         }
 
-        // Use unique request code for each notification to avoid PendingIntent reuse
-        val requestCode = System.currentTimeMillis().toInt()
+        // Use elapsedRealtime to avoid negative values and reduce collisions
+        val requestCode = (SystemClock.elapsedRealtime() % Int.MAX_VALUE).toInt()
 
         val pendingIntent = PendingIntent.getActivity(
             this,
@@ -268,32 +323,29 @@ class FcmService : FirebaseMessagingService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val channelId = if (isCall) CHANNEL_ID_CALLS else CHANNEL_ID_MESSAGES
-        // Use unique notification ID for messages so they don't replace each other
-        val notificationId = if (isCall) NOTIFICATION_ID_CALL else (NOTIFICATION_ID_MESSAGE + requestCode % 1000)
+        // Stable ID for generic wakes (updates instead of spamming)
+        // Unique ID for per-conversation messages (they stack)
+        val notificationId = if (useStableId) {
+            NOTIFICATION_ID_MESSAGE
+        } else {
+            NOTIFICATION_ID_MESSAGE + (requestCode % 1000)
+        }
 
-        val builder = NotificationCompat.Builder(this, channelId)
+        // Message notification - let channel configuration handle sound/vibration
+        // DO NOT use setDefaults(DEFAULT_ALL) - causes duplicate sounds
+        // DO NOT use setFullScreenIntent - messages don't need to interrupt like calls
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID_MESSAGES)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
             .setContentText(body)
-            .setPriority(if (isCall) NotificationCompat.PRIORITY_MAX else NotificationCompat.PRIORITY_HIGH)
-            .setCategory(if (isCall) NotificationCompat.CATEGORY_CALL else NotificationCompat.CATEGORY_MESSAGE)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC) // Show on lock screen
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
-            .setDefaults(NotificationCompat.DEFAULT_ALL) // Sound, vibration, lights
-
-        // Add full screen intent for lock screen / heads-up display
-        val fullScreenIntent = PendingIntent.getActivity(
-            this,
-            requestCode + 1,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        builder.setFullScreenIntent(fullScreenIntent, true)
 
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(notificationId, builder.build())
-        Logger.i("[FcmService] Notification posted - id: $notificationId, title: $title, channel: $channelId")
+        Logger.i("[FcmService] Message notification posted - id: $notificationId, title: $title, stable=$useStableId")
     }
 }

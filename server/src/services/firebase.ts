@@ -90,7 +90,6 @@ export async function sendFcmMessage(
   data: Record<string, string>,
   options: {
     priority?: 'high' | 'normal';
-    channelId?: string;
     ttl?: number;
   } = {}
 ): Promise<{ success: boolean; messageId?: string; error?: string; shouldInvalidateToken?: boolean }> {
@@ -100,22 +99,18 @@ export async function sendFcmMessage(
   }
 
   try {
+    // Pure data-only message - NO notification field
+    // Client (CallForegroundService) handles all notification UI for calls
+    // Setting android.notification would cause FCM to try to display something
     const message: admin.messaging.Message = {
       token,
       data,
       android: {
         priority: options.priority || 'high',
         ttl: (options.ttl || 60) * 1000, // Convert to milliseconds
-        notification: undefined, // Data-only message for wake
+        // NO notification field - this is a data-only wake message
       },
     };
-
-    // Add channel ID for Android notification channels
-    if (options.channelId) {
-      message.android!.notification = {
-        channelId: options.channelId,
-      };
-    }
 
     const messageId = await messaging.send(message);
     logger.debug({ messageId, token: token.substring(0, 20) + '...' }, 'FCM message sent');

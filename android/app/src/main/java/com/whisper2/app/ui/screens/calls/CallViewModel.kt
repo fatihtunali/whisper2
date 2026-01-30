@@ -42,10 +42,6 @@ class CallViewModel @Inject constructor(
         }
     }
 
-    fun setConnectionActive() {
-        callService.setConnectionActive()
-    }
-
     fun endCall() {
         viewModelScope.launch {
             callService.endCall()

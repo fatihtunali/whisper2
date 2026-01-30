@@ -2,6 +2,7 @@ package com.whisper2.app.data.local.prefs
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.SystemClock
 import androidx.security.crypto.EncryptedSharedPreferences
 
 import com.whisper2.app.core.Constants
@@ -106,6 +107,53 @@ class SecureStorage(private val context: Context, private val keystoreManager: K
         prefs.edit()
             .remove("active_call_id")
             .remove("active_call_peer_id")
+            .apply()
+    }
+
+    // Ringing call tracking for dedupe across process death
+    // Survives OEM battery killer restarts
+    var ringingCallId: String?
+        get() = prefs.getString("ringing_call_id", null)
+        set(value) = prefs.edit().putString("ringing_call_id", value).apply()
+
+    var ringingStartedAt: Long
+        get() = prefs.getLong("ringing_started_at", 0L)
+        set(value) = prefs.edit().putLong("ringing_started_at", value).apply()
+
+    /**
+     * Check if a call is already ringing (within timeout window).
+     * Used to dedupe FCM+WS race even across process restarts.
+     * Uses elapsedRealtime for monotonic safety (immune to wall-clock changes).
+     */
+    fun isCallAlreadyRinging(callId: String, timeoutMs: Long = 60_000): Boolean {
+        val storedCallId = ringingCallId ?: return false
+        val startedAt = ringingStartedAt
+        val now = SystemClock.elapsedRealtime()
+
+        // Same callId and within timeout window
+        // Note: elapsedRealtime resets on reboot, but that's fine -
+        // if device rebooted, the call is dead anyway
+        return storedCallId == callId && (now - startedAt) < timeoutMs
+    }
+
+    /**
+     * Mark a call as ringing (persist for dedupe across process death).
+     * Uses elapsedRealtime for monotonic safety.
+     */
+    fun setCallRinging(callId: String) {
+        prefs.edit()
+            .putString("ringing_call_id", callId)
+            .putLong("ringing_started_at", SystemClock.elapsedRealtime())
+            .apply()
+    }
+
+    /**
+     * Clear ringing state (on answer/decline/end).
+     */
+    fun clearRingingCall() {
+        prefs.edit()
+            .remove("ringing_call_id")
+            .remove("ringing_started_at")
             .apply()
     }
 

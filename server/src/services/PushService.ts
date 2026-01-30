@@ -210,10 +210,12 @@ export class PushService {
 
   /**
    * Send wake-up push for a call (uses VoIP push on iOS if available).
+   * For Android: includes call details so client can show UI immediately (WhatsApp-like).
    */
   async sendCallWake(whisperId: string, callData?: {
     callId: string;
     from: string;
+    callerName?: string;
     isVideo: boolean;
     timestamp: number;
     nonce: string;
@@ -258,7 +260,8 @@ export class PushService {
     if (device.platform === 'ios') {
       return this.sendApns(device, payload, 'call');
     } else {
-      return this.sendFcm(device, payload, 'call');
+      // Android: include call details for instant UI (WhatsApp-like)
+      return this.sendFcmCall(device, payload, callData);
     }
   }
 
@@ -538,6 +541,74 @@ export class PushService {
   }
 
   /**
+   * Send FCM push for calls (Android) - includes call details for instant UI.
+   * WhatsApp-like: client can show incoming call UI immediately without waiting for WebSocket.
+   */
+  private async sendFcmCall(
+    device: DeviceInfo,
+    payload: PushPayload,
+    callData?: { callId: string; from: string; callerName?: string; isVideo: boolean; timestamp: number; nonce: string; ciphertext: string; sig: string }
+  ): Promise<PushResult> {
+    if (!device.pushToken) {
+      return { sent: false, skipped: true, reason: 'no_token' };
+    }
+
+    if (!isFirebaseReady()) {
+      logger.debug({ deviceId: device.deviceId }, 'FCM call push skipped: Firebase not configured');
+      return { sent: false, skipped: true, reason: 'firebase_not_configured' };
+    }
+
+    // Build data payload with call details for instant UI
+    const data: Record<string, string> = {
+      type: payload.type,
+      reason: payload.reason,
+      whisperId: payload.whisperId,
+    };
+
+    // Include call details so Android can show call UI immediately
+    if (callData) {
+      data.callId = callData.callId;
+      data.from = callData.from;
+      if (callData.callerName) {
+        data.callerName = callData.callerName;
+      }
+      data.isVideo = String(callData.isVideo);
+    }
+
+    // Send via Firebase with high priority for calls
+    // NO channelId - client handles notification display via CallForegroundService
+    const result = await sendFcmMessage(device.pushToken, data, {
+      priority: 'high',
+      ttl: 30, // Calls need fast delivery
+    });
+
+    if (result.success) {
+      logger.info(
+        { deviceId: device.deviceId, callId: callData?.callId },
+        'FCM call push sent (WhatsApp-like)'
+      );
+      return {
+        sent: true,
+        skipped: false,
+        provider: 'fcm',
+        ticketId: result.messageId,
+      };
+    }
+
+    // Handle invalid token
+    if (result.shouldInvalidateToken) {
+      await this.handleInvalidToken(payload.whisperId, device.deviceId, 'push');
+    }
+
+    return {
+      sent: false,
+      skipped: false,
+      reason: result.error || 'fcm_error',
+      provider: 'fcm',
+    };
+  }
+
+  /**
    * Send FCM push (Android).
    * Uses firebase-admin SDK for real push delivery.
    */
@@ -560,11 +631,11 @@ export class PushService {
       return { sent: false, skipped: true, reason: 'firebase_not_configured' };
     }
 
-    // Determine channel and priority based on reason
-    const channelId = reason === 'call' ? 'whisper2_calls' : 'whisper2_messages';
+    // Determine priority based on reason (calls need high priority)
     const priority = reason === 'call' ? 'high' : 'normal';
 
     // Build data payload (wake-only, no content)
+    // NO channelId - client handles notification display
     const data: Record<string, string> = {
       type: payload.type,
       reason: payload.reason,
@@ -574,10 +645,9 @@ export class PushService {
       data.hint = payload.hint;
     }
 
-    // Send via Firebase
+    // Send via Firebase - pure data-only message
     const result = await sendFcmMessage(device.pushToken, data, {
       priority,
-      channelId,
       ttl: reason === 'call' ? 30 : 60, // Calls need faster delivery
     });
 
@@ -673,7 +743,7 @@ export class PushService {
       }
     }
 
-    // Android: send high-priority FCM with call_end data
+    // Android: send high-priority FCM with call_end data (pure data-only)
     if (device.platform === 'android' && device.pushToken && isFirebaseReady()) {
       const data: Record<string, string> = {
         type: 'call_end',
@@ -683,7 +753,6 @@ export class PushService {
 
       const result = await sendFcmMessage(device.pushToken, data, {
         priority: 'high',
-        channelId: 'whisper2_calls',
         ttl: 30,
       });
 

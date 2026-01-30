@@ -24,6 +24,16 @@ import javax.inject.Inject
 @HiltAndroidApp
 class App : Application(), DefaultLifecycleObserver {
 
+    companion object {
+        const val CALLS_CHANNEL_ID = "calls"
+        const val CALLS_CHANNEL_ID_V2 = "calls_v2"  // Silent version for existing noisy channels
+
+        // Cached channel ID for use by CallForegroundService
+        @Volatile
+        var currentCallsChannelId: String = CALLS_CHANNEL_ID
+            private set
+    }
+
     @Inject
     lateinit var callService: dagger.Lazy<CallService>
 
@@ -64,13 +74,48 @@ class App : Application(), DefaultLifecycleObserver {
         }
     }
 
+    /**
+     * Get the calls channel ID, migrating from "calls" to "calls_v2" if the old channel is noisy.
+     *
+     * IMPORTANT: We do NOT delete the old channel - Android punishes that.
+     * Instead, we just create calls_v2 and switch to it, leaving the old channel alone.
+     * User can manage or delete it themselves if they want.
+     */
+    private fun getCallsChannelId(nm: NotificationManager): String {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return CALLS_CHANNEL_ID
+        }
+
+        val oldChannel = nm.getNotificationChannel(CALLS_CHANNEL_ID)
+        if (oldChannel == null) {
+            // No old channel exists, use default
+            currentCallsChannelId = CALLS_CHANNEL_ID
+            return CALLS_CHANNEL_ID
+        }
+
+        // Check if old channel has sound or vibration enabled (noisy)
+        val hasSound = oldChannel.sound != null
+        val hasVibration = oldChannel.vibrationPattern != null || oldChannel.shouldVibrate()
+
+        if (hasSound || hasVibration) {
+            // Old channel is noisy - switch to v2 but DO NOT delete old channel
+            // User explicitly enabled those settings, respect that by leaving channel alone
+            Logger.i("[App] Old 'calls' channel is noisy (sound=$hasSound, vibration=$hasVibration), switching to 'calls_v2'")
+            currentCallsChannelId = CALLS_CHANNEL_ID_V2
+            return CALLS_CHANNEL_ID_V2
+        }
+
+        // Old channel is already silent, keep using it
+        currentCallsChannelId = CALLS_CHANNEL_ID
+        return CALLS_CHANNEL_ID
+    }
+
     private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val nm = getSystemService(NotificationManager::class.java)
 
-            // Delete and recreate calls channel to apply new settings (silent)
-            // This ensures existing users get the updated channel without reinstall
-            nm.deleteNotificationChannel("calls")
+            // NOTE: Do NOT delete/recreate channels - it can break user settings
+            // Channel IDs should be stable. If behavior must change, use a new ID (e.g. "calls_v2")
 
             // Messages channel
             val messagesChannel = NotificationChannel(
@@ -93,9 +138,16 @@ class App : Application(), DefaultLifecycleObserver {
             }
             nm.createNotificationChannel(messagesChannel)
 
-            // Calls channel - SILENT! Ringtone handled manually by CallForegroundService
+            // Calls channel - SILENT! Ringtone/vibration handled manually by CallForegroundService
+            // Without Telecom, bypassing DND is a policy/UX landmine - respect user settings
+            //
+            // MIGRATION: If user had old "calls" channel with sound/vibration enabled,
+            // Android won't let us change it programmatically. So we check and migrate to "calls_v2"
+            // if the old channel is noisy.
+            val callsChannelId = getCallsChannelId(nm)
+
             val callsChannel = NotificationChannel(
-                "calls",
+                callsChannelId,
                 "Calls",
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
@@ -103,7 +155,7 @@ class App : Application(), DefaultLifecycleObserver {
                 enableVibration(false) // Vibration handled by CallForegroundService
                 setShowBadge(true)
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-                setBypassDnd(true) // Allow calls to bypass Do Not Disturb
+                setBypassDnd(false) // Respect user's DND settings (no Telecom = no clean bypass)
                 setSound(null, null) // SILENT - ringtone played manually so we can stop it
             }
             nm.createNotificationChannel(callsChannel)

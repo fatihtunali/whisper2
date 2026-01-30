@@ -18,11 +18,28 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.content.pm.ServiceInfo
 import androidx.core.app.NotificationCompat
+import com.whisper2.app.App
 import com.whisper2.app.R
 import com.whisper2.app.core.Logger
+import com.whisper2.app.data.local.prefs.SecureStorage
 import com.whisper2.app.ui.IncomingCallActivity
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import javax.inject.Inject
 
+/**
+ * CallForegroundService is the SINGLE AUTHORITY for:
+ * - Starting/stopping ringtone
+ * - Starting/stopping vibration
+ * - Showing call notifications
+ * - Coordinating answer/decline actions
+ *
+ * All Answer/Decline actions from notifications go through this service,
+ * which then calls CallService for signaling and launches the UI.
+ */
 @AndroidEntryPoint
 class CallForegroundService : Service() {
 
@@ -39,7 +56,8 @@ class CallForegroundService : Service() {
         const val EXTRA_IS_VIDEO = "EXTRA_IS_VIDEO"
 
         private const val NOTIFICATION_ID = 2001
-        private const val CHANNEL_ID = "calls"
+        // Channel ID is dynamic - may be "calls" or "calls_v2" if migrated
+        // Use getCallsChannelId() which handles cold-start race conditions
 
         fun startIncomingCall(
             context: Context,
@@ -79,8 +97,101 @@ class CallForegroundService : Service() {
         }
     }
 
+    @Inject
+    lateinit var callService: dagger.Lazy<CallService>
+
+    @Inject
+    lateinit var secureStorage: SecureStorage
+
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
     private var vibrator: Vibrator? = null
     private var ringtone: Ringtone? = null
+
+    // Track per-callId to prevent FCM+WS double-ring (RAM copy for fast access)
+    private var ringingCallId: String? = null
+
+    /**
+     * Get the correct calls channel ID, handling cold-start race conditions.
+     * FCM can wake the app and start service before App.onCreate() completes.
+     * Query NotificationManager directly as fallback.
+     * Also ensures the channel exists before returning.
+     */
+    private fun getCallsChannelId(): String {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return App.CALLS_CHANNEL_ID
+        }
+
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        // Fast path: App already set to v2
+        val cached = App.currentCallsChannelId
+        if (cached == App.CALLS_CHANNEL_ID_V2) {
+            ensureChannelExists(nm, App.CALLS_CHANNEL_ID_V2)
+            return App.CALLS_CHANNEL_ID_V2
+        }
+
+        // Check if old channel is noisy (cold-start safety)
+        val oldChannel = nm.getNotificationChannel(App.CALLS_CHANNEL_ID)
+        if (oldChannel != null) {
+            val hasSound = oldChannel.sound != null
+            val hasVibration = oldChannel.vibrationPattern != null || oldChannel.shouldVibrate()
+            if (hasSound || hasVibration) {
+                Logger.d("[CallForegroundService] Cold-start detected noisy channel, using calls_v2")
+                ensureChannelExists(nm, App.CALLS_CHANNEL_ID_V2)
+                return App.CALLS_CHANNEL_ID_V2
+            }
+        }
+
+        // Use default channel, ensure it exists
+        ensureChannelExists(nm, App.CALLS_CHANNEL_ID)
+        return App.CALLS_CHANNEL_ID
+    }
+
+    /**
+     * Ensure the notification channel exists (cold-start safety).
+     * FCM can wake the service before App.onCreate() creates channels.
+     */
+    private fun ensureChannelExists(nm: NotificationManager, channelId: String) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+
+        if (nm.getNotificationChannel(channelId) == null) {
+            Logger.i("[CallForegroundService] Creating channel $channelId (cold-start)")
+            val channel = NotificationChannel(
+                channelId,
+                "Calls",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Whisper2 incoming call notifications"
+                enableVibration(false)
+                setShowBadge(true)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                setBypassDnd(false)
+                setSound(null, null)
+            }
+            nm.createNotificationChannel(channel)
+        }
+    }
+
+    /**
+     * Check if user has disabled the calls notification channel.
+     * If disabled, we should respect that and not ring manually either.
+     */
+    private fun isCallChannelEnabled(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return true
+
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val channelId = getCallsChannelId()
+        val channel = nm.getNotificationChannel(channelId) ?: return true
+
+        // IMPORTANCE_NONE means user disabled the channel
+        return channel.importance != NotificationManager.IMPORTANCE_NONE
+    }
+
+    // Store call info for answer/decline actions
+    private var pendingCallerId: String? = null
+    private var pendingCallerName: String? = null
+    private var pendingIsVideo: Boolean = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -100,28 +211,145 @@ class CallForegroundService : Service() {
                 val isVideo = intent.getBooleanExtra(EXTRA_IS_VIDEO, false)
 
                 Logger.i("[CallForegroundService] *** INCOMING CALL ***")
-                Logger.i("[CallForegroundService] callId=$callId")
-                Logger.i("[CallForegroundService] callerId=$callerId")
-                Logger.i("[CallForegroundService] callerName=$callerName")
-                Logger.i("[CallForegroundService] isVideo=$isVideo")
+                Logger.i("[CallForegroundService] callId=$callId, ringingCallId=$ringingCallId")
+                Logger.i("[CallForegroundService] callerId=$callerId, callerName=$callerName, isVideo=$isVideo")
+
+                // Prevent double-ringing from FCM + WebSocket race
+                // Check both RAM (fast) and persistent storage (survives process death)
+                if (callId == ringingCallId) {
+                    Logger.i("[CallForegroundService] Same call already ringing (RAM), ignoring duplicate")
+                    return START_NOT_STICKY
+                }
+
+                // Check persistent storage for dedupe across process restarts (OEM battery killer)
+                if (secureStorage.isCallAlreadyRinging(callId)) {
+                    Logger.i("[CallForegroundService] Same call already ringing (persistent), ignoring duplicate")
+                    return START_NOT_STICKY
+                }
+
+                // New call - stop old ringing if different callId
+                if (ringingCallId != null && ringingCallId != callId) {
+                    Logger.i("[CallForegroundService] Different call arriving, stopping old ring")
+                    stopRingtone()
+                    stopVibration()
+                }
+
+                // Store call info for answer/decline (RAM + persistent)
+                ringingCallId = callId
+                secureStorage.setCallRinging(callId)
+                pendingCallerId = callerId
+                pendingCallerName = callerName
+                pendingIsVideo = isVideo
 
                 showIncomingCallNotification(callId, callerId, callerName, isVideo)
-                startRingtone()
-                startVibration()
+
+                // Respect user's channel settings - if channel disabled, don't ring manually either
+                if (isCallChannelEnabled()) {
+                    startRingtone()
+                    startVibration()
+                } else {
+                    Logger.i("[CallForegroundService] Call channel disabled by user, skipping manual ring/vibration")
+                }
             }
+
+            ACTION_CALL_ANSWERED -> {
+                val callId = intent.getStringExtra(EXTRA_CALL_ID) ?: ringingCallId ?: ""
+                val callerId = intent.getStringExtra(EXTRA_CALLER_ID) ?: pendingCallerId ?: ""
+                val callerName = intent.getStringExtra(EXTRA_CALLER_NAME) ?: pendingCallerName ?: "Unknown"
+                val isVideo = intent.getBooleanExtra(EXTRA_IS_VIDEO, pendingIsVideo)
+
+                Logger.i("[CallForegroundService] *** ANSWER from notification *** callId=$callId")
+
+                // 1. Stop ringtone/vibration FIRST (service is single authority)
+                stopRingtone()
+                stopVibration()
+
+                // 2. Call signaling layer to answer
+                serviceScope.launch {
+                    try {
+                        callService.get().answerCall()
+                    } catch (e: Exception) {
+                        Logger.e("[CallForegroundService] Failed to answer call", e)
+                    }
+                }
+
+                // 3. Transition to active call notification
+                showOngoingCallNotification(callerName, isVideo)
+                ringingCallId = null
+                secureStorage.clearRingingCall()
+
+                // 4. Launch the call UI activity
+                val activityIntent = Intent(this, IncomingCallActivity::class.java).apply {
+                    putExtra(EXTRA_CALL_ID, callId)
+                    putExtra(EXTRA_CALLER_ID, callerId)
+                    putExtra(EXTRA_CALLER_NAME, callerName)
+                    putExtra(EXTRA_IS_VIDEO, isVideo)
+                    putExtra("already_answered", true)  // Skip answer UI, go straight to call
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                }
+                startActivity(activityIntent)
+            }
+
+            ACTION_CALL_DECLINED -> {
+                val callId = intent.getStringExtra(EXTRA_CALL_ID) ?: ringingCallId ?: ""
+                Logger.i("[CallForegroundService] *** DECLINE from notification *** callId=$callId")
+
+                // 1. Stop ringtone/vibration FIRST
+                stopRingtone()
+                stopVibration()
+
+                // 2. Call signaling layer to decline
+                serviceScope.launch {
+                    try {
+                        callService.get().declineCall()
+                    } catch (e: Exception) {
+                        Logger.e("[CallForegroundService] Failed to decline call", e)
+                    }
+                }
+
+                // 3. Cleanup and stop service
+                ringingCallId = null
+                secureStorage.clearRingingCall()
+                pendingCallerId = null
+                pendingCallerName = null
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
+
             ACTION_CALL_ACTIVE -> {
                 // Transition from ringing to active call - keep service alive!
-                val callerName = intent.getStringExtra(EXTRA_CALLER_NAME) ?: "Unknown"
-                val isVideo = intent.getBooleanExtra(EXTRA_IS_VIDEO, false)
+                val callerName = intent.getStringExtra(EXTRA_CALLER_NAME) ?: pendingCallerName ?: "Unknown"
+                val isVideo = intent.getBooleanExtra(EXTRA_IS_VIDEO, pendingIsVideo)
 
                 Logger.i("[CallForegroundService] *** CALL ACTIVE *** callerName=$callerName, isVideo=$isVideo")
                 stopRingtone()
                 stopVibration()
+                ringingCallId = null
+                secureStorage.clearRingingCall()
                 showOngoingCallNotification(callerName, isVideo)
             }
-            ACTION_CALL_ANSWERED, ACTION_CALL_DECLINED, ACTION_CALL_ENDED -> {
+
+            ACTION_CALL_ENDED -> {
+                Logger.i("[CallForegroundService] *** CALL ENDED ***")
+
+                // Stop ringtone/vibration
                 stopRingtone()
                 stopVibration()
+
+                // Call signaling layer to end call
+                serviceScope.launch {
+                    try {
+                        callService.get().endCall()
+                    } catch (e: Exception) {
+                        Logger.e("[CallForegroundService] Failed to end call", e)
+                    }
+                }
+
+                // Cleanup (RAM + persistent)
+                ringingCallId = null
+                secureStorage.clearRingingCall()
+                pendingCallerId = null
+                pendingCallerName = null
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
@@ -134,6 +362,11 @@ class CallForegroundService : Service() {
         super.onDestroy()
         stopRingtone()
         stopVibration()
+        ringingCallId = null
+        // Note: Don't clear persistent storage here - service may be killed by system
+        // while call is still ringing. Persistent state has its own timeout (60s).
+        pendingCallerId = null
+        pendingCallerName = null
         Logger.d("[CallForegroundService] onDestroy")
     }
 
@@ -143,14 +376,8 @@ class CallForegroundService : Service() {
         callerName: String,
         isVideo: Boolean
     ) {
-        // Use unified IncomingCallActivity for both audio and video calls
-        val activityClass = IncomingCallActivity::class.java
-
-        Logger.i("[CallForegroundService] Routing to IncomingCallActivity (isVideo=$isVideo)")
-
-        // Full screen intent - opens the appropriate activity
-        // Use SINGLE_TOP to reuse existing activity instead of creating new one
-        val fullScreenIntent = Intent(this, activityClass).apply {
+        // Full screen intent - opens IncomingCallActivity when notification is tapped
+        val fullScreenIntent = Intent(this, IncomingCallActivity::class.java).apply {
             putExtra(EXTRA_CALL_ID, callId)
             putExtra(EXTRA_CALLER_ID, callerId)
             putExtra(EXTRA_CALLER_NAME, callerName)
@@ -164,22 +391,20 @@ class CallForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Answer action - launch the appropriate activity with answer flag
-        // Use SINGLE_TOP to reuse existing activity
-        val answerIntent = Intent(this, activityClass).apply {
+        // Answer action - goes to SERVICE (single authority for ringtone control)
+        val answerIntent = Intent(this, CallForegroundService::class.java).apply {
+            action = ACTION_CALL_ANSWERED
             putExtra(EXTRA_CALL_ID, callId)
             putExtra(EXTRA_CALLER_ID, callerId)
             putExtra(EXTRA_CALLER_NAME, callerName)
             putExtra(EXTRA_IS_VIDEO, isVideo)
-            putExtra("auto_answer", true)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
-        val answerPendingIntent = PendingIntent.getActivity(
+        val answerPendingIntent = PendingIntent.getService(
             this, 1, answerIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Decline action
+        // Decline action - goes to SERVICE (single authority)
         val declineIntent = Intent(this, CallForegroundService::class.java).apply {
             action = ACTION_CALL_DECLINED
             putExtra(EXTRA_CALL_ID, callId)
@@ -192,15 +417,14 @@ class CallForegroundService : Service() {
         val callType = if (isVideo) "Video Call" else "Voice Call"
 
         // Use modern CallStyle notification for Android 12+ (API 31+)
-        // Sound is handled by notification channel
+        // Channel is SILENT - ringtone/vibration handled manually
         val notification = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            // Create Person for the caller
             val caller = Person.Builder()
                 .setName(callerName)
                 .setImportant(true)
                 .build()
 
-            Notification.Builder(this, CHANNEL_ID)
+            Notification.Builder(this, getCallsChannelId())
                 .setSmallIcon(Icon.createWithResource(this, R.drawable.ic_notification))
                 .setContentIntent(fullScreenPendingIntent)
                 .setFullScreenIntent(fullScreenPendingIntent, true)
@@ -214,7 +438,7 @@ class CallForegroundService : Service() {
                 .build()
         } else {
             // Fallback for older Android versions
-            NotificationCompat.Builder(this, CHANNEL_ID)
+            NotificationCompat.Builder(this, getCallsChannelId())
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle(callerName)
                 .setContentText("Incoming $callType")
@@ -229,9 +453,17 @@ class CallForegroundService : Service() {
                 .build()
         }
 
-        // Android 10+ (API 29+) requires foregroundServiceType to match manifest declaration
-        // Android 14+ (API 34+) strictly enforces this - missing type causes SecurityException crash
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        // Use MICROPHONE foreground service type for VoIP (not PHONE_CALL which is for telephony)
+        // PHONE_CALL type has stricter Play Store policy requirements
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            // Android 14+ - use microphone type
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            )
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // Android 10-13 - phoneCall type is more permissive here
             startForeground(
                 NOTIFICATION_ID,
                 notification,
@@ -240,6 +472,7 @@ class CallForegroundService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
+
         Logger.i("[CallForegroundService] Showing incoming call notification for $callerName (CallStyle=${Build.VERSION.SDK_INT >= Build.VERSION_CODES.S})")
     }
 
@@ -253,7 +486,7 @@ class CallForegroundService : Service() {
                 .setImportant(true)
                 .build()
 
-            // End call action
+            // End call action - goes to service
             val endCallIntent = Intent(this, CallForegroundService::class.java).apply {
                 action = ACTION_CALL_ENDED
             }
@@ -262,14 +495,14 @@ class CallForegroundService : Service() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
-            Notification.Builder(this, CHANNEL_ID)
+            Notification.Builder(this, getCallsChannelId())
                 .setSmallIcon(Icon.createWithResource(this, R.drawable.ic_notification))
                 .setStyle(Notification.CallStyle.forOngoingCall(caller, endCallPendingIntent))
                 .setOngoing(true)
                 .setCategory(Notification.CATEGORY_CALL)
                 .build()
         } else {
-            NotificationCompat.Builder(this, CHANNEL_ID)
+            NotificationCompat.Builder(this, getCallsChannelId())
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle(callerName)
                 .setContentText("$callType in progress")
@@ -303,15 +536,27 @@ class CallForegroundService : Service() {
             @Suppress("DEPRECATION")
             vibrator?.vibrate(pattern, 0)
         }
+        Logger.i("[CallForegroundService] Vibration started")
     }
 
     private fun stopVibration() {
         vibrator?.cancel()
         vibrator = null
+        Logger.d("[CallForegroundService] Vibration stopped")
     }
 
     private fun startRingtone() {
+        // Prevent duplicate ringtones - check ringingCallId
+        if (ringtone?.isPlaying == true) {
+            Logger.i("[CallForegroundService] Ringtone already playing, skipping")
+            return
+        }
+
         try {
+            // Stop any existing ringtone first (safety net)
+            ringtone?.stop()
+            ringtone = null
+
             val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
             ringtone = RingtoneManager.getRingtone(this, uri)?.apply {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -337,7 +582,7 @@ class CallForegroundService : Service() {
                 }
             }
             ringtone = null
-            Logger.i("[CallForegroundService] Ringtone stopped")
+            Logger.d("[CallForegroundService] Ringtone stopped")
         } catch (e: Exception) {
             Logger.e("[CallForegroundService] Failed to stop ringtone: ${e.message}")
         }

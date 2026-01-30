@@ -78,8 +78,10 @@ class IncomingCallActivity : ComponentActivity() {
         // Keep screen on during call
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        // Check if this was launched from notification answer button
+        // Check if this was launched from notification answer/decline button or service
         val autoAnswer = intent.getBooleanExtra("auto_answer", false)
+        val autoDecline = intent.getBooleanExtra("auto_decline", false)
+        val alreadyAnswered = intent.getBooleanExtra("already_answered", false)
 
         setContent {
             Whisper2Theme {
@@ -89,20 +91,36 @@ class IncomingCallActivity : ComponentActivity() {
                 ) {
                     val viewModel: CallViewModel = hiltViewModel()
                     val callState by viewModel.callState.collectAsState()
-                    var answered by remember { mutableStateOf(autoAnswer) }
+                    // alreadyAnswered = service already called answerCall, just show UI
+                    // autoAnswer = notification answer button, need to call answerCall
+                    var answered by remember { mutableStateOf(alreadyAnswered || autoAnswer) }
 
-                    // Auto-answer if launched from notification Answer button
-                    LaunchedEffect(autoAnswer) {
-                        if (autoAnswer) {
-                            Logger.i("[IncomingCallActivity] Auto-answering call (isVideo=$isVideo)")
+                    // Auto-answer if launched from notification Answer button (NOT from service)
+                    // If alreadyAnswered, the service already called answerCall - just show UI
+                    LaunchedEffect(autoAnswer, alreadyAnswered) {
+                        if (autoAnswer && !alreadyAnswered) {
+                            Logger.i("[IncomingCallActivity] Auto-answering call from notification (isVideo=$isVideo)")
                             try {
-                                viewModel.setConnectionActive()
+                                viewModel.answerCall()
                                 // Transition to ongoing call notification (keeps foreground service alive!)
                                 CallForegroundService.setCallActive(this@IncomingCallActivity, callerName, isVideo)
-                                answered = true
                             } catch (e: Exception) {
                                 Logger.e("[IncomingCallActivity] Error auto-answering: ${e.message}")
                             }
+                        } else if (alreadyAnswered) {
+                            Logger.i("[IncomingCallActivity] Already answered by service, showing call UI")
+                        }
+                    }
+
+                    // Auto-decline if launched from notification Decline button
+                    // NOTE: This path is now only used if activity-based decline is triggered
+                    // The service handles notification decline directly
+                    LaunchedEffect(autoDecline) {
+                        if (autoDecline) {
+                            Logger.i("[IncomingCallActivity] Auto-declining call from activity")
+                            viewModel.declineCall()
+                            CallForegroundService.stopService(this@IncomingCallActivity)
+                            finish()
                         }
                     }
 
@@ -123,7 +141,7 @@ class IncomingCallActivity : ComponentActivity() {
                             isVideo = isVideo,
                             onAnswer = {
                                 Logger.i("[IncomingCallActivity] Answer clicked (isVideo=$isVideo)")
-                                viewModel.setConnectionActive()
+                                viewModel.answerCall()
                                 // Transition to ongoing call notification (keeps foreground service alive!)
                                 CallForegroundService.setCallActive(this@IncomingCallActivity, callerName, isVideo)
                                 answered = true

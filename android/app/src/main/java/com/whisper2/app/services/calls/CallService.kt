@@ -80,7 +80,6 @@ class CallService @Inject constructor(
     private val contactDao: ContactDao,
     private val callRecordDao: CallRecordDao,
     private val gson: Gson,
-    private val telecomCallManager: TelecomCallManager,
     private val authService: dagger.Lazy<AuthService>,
     @ApplicationScope private val scope: CoroutineScope
 ) {
@@ -145,8 +144,6 @@ class CallService @Inject constructor(
         cleanupStaleState()
         setupWebRTC()
         setupMessageHandler()
-        // Initialize Telecom integration (Android's CallKit equivalent)
-        telecomCallManager.initialize()
     }
 
     /**
@@ -197,13 +194,6 @@ class CallService @Inject constructor(
             CallForegroundService.stopService(context)
         } catch (e: Exception) {
             Logger.w("[CallService] Error stopping foreground service during cleanup: ${e.message}")
-        }
-
-        // End any Telecom connections
-        try {
-            telecomCallManager.endCallSync()
-        } catch (e: Exception) {
-            Logger.w("[CallService] Error ending Telecom connection during cleanup: ${e.message}")
         }
 
         Logger.i("[CallService] Stale state cleanup complete")
@@ -449,16 +439,6 @@ class CallService @Inject constructor(
             secureStorage.activeCallId = callId
             secureStorage.activeCallPeerId = peerId
 
-            // Report outgoing call to Telecom system
-            Logger.i("[CallService] Reporting outgoing call to Telecom - isVideo: $isVideo")
-            telecomCallManager.reportOutgoingCall(
-                callId = callId,
-                calleeName = contact?.displayName ?: peerId,
-                calleeId = peerId,
-                isVideo = isVideo,
-                scope = scope
-            )
-
             // Configure audio
             configureAudioSession()
 
@@ -703,9 +683,6 @@ class CallService @Inject constructor(
 
         _callState.value = CallState.Ended(reason)
         recordCallToHistory(call, reason)
-
-        // End Telecom connection
-        telecomCallManager.endCallSync()
 
         // Stop foreground service
         CallForegroundService.stopService(context)
@@ -1370,32 +1347,18 @@ class CallService @Inject constructor(
                 _callState.value = CallState.Ringing
                 Logger.i("[CallService] ActiveCall created with isVideo=${correctedPayload.isVideo}")
 
-                // Set up onEndCall callback for when user hangs up during an active call
-                telecomCallManager.onEndCall = {
-                    Logger.i("[CallService] Telecom onEndCall callback")
-                    scope.launch {
-                        endCall(CallEndReason.ENDED)
-                    }
-                }
-
-                // Report incoming call to Telecom system
+                // Start foreground service to show incoming call notification with ringtone/vibration
                 try {
-                    Logger.i("[CallService] Passing isVideo=${correctedPayload.isVideo} to Telecom")
-                    val telecomSuccess = telecomCallManager.reportIncomingCall(
+                    Logger.i("[CallService] Starting CallForegroundService for incoming call")
+                    CallForegroundService.startIncomingCall(
+                        context = context,
                         callId = correctedPayload.callId,
-                        callerName = contact?.displayName ?: correctedPayload.from,
                         callerId = correctedPayload.from,
-                        isVideo = correctedPayload.isVideo,
-                        scope = scope
+                        callerName = contact?.displayName,
+                        isVideo = correctedPayload.isVideo
                     )
-                    Logger.i("[CallService] Telecom reportIncomingCall result: $telecomSuccess")
-
-                    if (telecomSuccess) {
-                        delay(100) // Small delay to allow ConnectionService to create connection
-                        setupConnectionCallbacks()
-                    }
                 } catch (e: Exception) {
-                    Logger.e("[CallService] Telecom reporting failed", e)
+                    Logger.e("[CallService] Failed to start CallForegroundService", e)
                 }
             }
         } catch (e: Exception) {
@@ -1515,8 +1478,7 @@ class CallService @Inject constructor(
 
                 _callState.value = CallState.Ended(reason)
 
-                // Remote ended - clean up Telecom and foreground service
-                telecomCallManager.remoteCallEnded()
+                // Remote ended - clean up foreground service
                 CallForegroundService.stopService(context)
 
                 cleanupResources()  // Don't reset state - let screen see Ended state
@@ -1734,53 +1696,10 @@ class CallService @Inject constructor(
     }
 
     /**
-     * Set up callbacks on the WhisperConnection for external device events.
-     * NOTE: onAnswerCallback is for wearable/Bluetooth headset answering ONLY.
-     * When user answers via IncomingCallActivity UI, the UI calls answerCall() directly.
-     * We use an atomic flag to prevent double-calling answerCall() (thread-safe).
+     * Atomic flag to prevent double-calling answerCall() (thread-safe).
+     * This can happen if UI and notification both trigger answer simultaneously.
      */
     private val answerCallTriggered = AtomicBoolean(false)
-
-    private fun setupConnectionCallbacks() {
-        WhisperConnectionService.activeConnection?.let { connection ->
-            Logger.i("[CallService] Setting up WhisperConnection callbacks")
-
-            // Handle answer from wearable/external device (Telecom triggers this)
-            // NOTE: This should only trigger for external devices (Bluetooth, wearable)
-            // The UI flow calls answerCall() directly, so we prevent double-calling
-            connection.onAnswerCallback = { isVideo ->
-                Logger.i("[CallService] WhisperConnection onAnswerCallback from external device")
-                // Use atomic compareAndSet - answerCall() also checks this, but we skip the launch if already triggered
-                if (answerCallTriggered.compareAndSet(false, true)) {
-                    scope.launch { answerCall() }
-                } else {
-                    Logger.i("[CallService] onAnswerCallback ignored - answerCall already triggered")
-                }
-            }
-
-            // Handle reject from wearable/external device
-            connection.onRejectCallback = {
-                Logger.i("[CallService] WhisperConnection onRejectCallback from external device")
-                scope.launch { declineCall() }
-            }
-
-            // Handle disconnect during active call
-            connection.onDisconnectCallback = {
-                Logger.i("[CallService] WhisperConnection onDisconnectCallback")
-                scope.launch { endCall(CallEndReason.ENDED) }
-            }
-        } ?: Logger.w("[CallService] No active connection yet to set callbacks on")
-    }
-
-    /**
-     * Set the Telecom connection to active state (call UI -> this should be called when user answers)
-     */
-    fun setConnectionActive() {
-        WhisperConnectionService.activeConnection?.let { connection ->
-            Logger.i("[CallService] Setting Telecom connection to ACTIVE")
-            connection.setActive()
-        } ?: Logger.w("[CallService] setConnectionActive: No active Telecom connection!")
-    }
 }
 
 // SDP Observer adapter
