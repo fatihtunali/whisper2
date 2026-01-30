@@ -44,11 +44,11 @@ export class ConnectionManager {
   /** Heartbeat interval handle */
   private heartbeatInterval: NodeJS.Timeout | null = null;
 
-  /** Ping interval in ms (10 seconds) */
-  private readonly PING_INTERVAL = 10_000;
+  /** Ping interval in ms (30 seconds) */
+  private readonly PING_INTERVAL = 30_000;
 
-  /** Connection timeout - if no pong received within this time, close connection (20 seconds) */
-  private readonly CONNECTION_TIMEOUT = 20_000;
+  /** Connection timeout - if no pong received within this time, close connection (90 seconds) */
+  private readonly CONNECTION_TIMEOUT = 90_000;
 
   /**
    * Register a new WebSocket connection.
