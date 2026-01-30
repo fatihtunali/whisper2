@@ -15,12 +15,16 @@ import android.provider.Settings
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
+import androidx.work.Configuration
 import com.whisper2.app.core.Logger
 import com.whisper2.app.data.local.prefs.SecureStorage
 import com.whisper2.app.data.network.ws.WsClientImpl
 import com.whisper2.app.services.auth.AuthService
 import com.whisper2.app.services.calls.CallService
 import com.whisper2.app.services.calls.CallState
+import com.whisper2.app.services.connection.ConnectionForegroundService
+import com.whisper2.app.services.sync.MessageSyncWorker
+import com.whisper2.app.utils.BatteryOptimizationHelper
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -75,6 +79,17 @@ class App : Application(), DefaultLifecycleObserver {
 
         // Setup network monitoring
         setupNetworkMonitoring()
+
+        // If user is already logged in, start background services
+        // This handles app restart and upgrade scenarios
+        try {
+            if (secureStorage.get().isLoggedIn()) {
+                Logger.i("[App] User already logged in on startup - starting background services")
+                onUserLoggedIn()
+            }
+        } catch (e: Exception) {
+            Logger.w("[App] Error checking login state on startup: ${e.message}")
+        }
     }
 
     /**
@@ -216,6 +231,54 @@ class App : Application(), DefaultLifecycleObserver {
         }
     }
 
+    /**
+     * Called when user logs in successfully.
+     * Starts background connection services.
+     */
+    fun onUserLoggedIn() {
+        Logger.i("[App] User logged in - starting background services")
+
+        // Start foreground service to maintain WebSocket connection
+        ConnectionForegroundService.startService(this)
+
+        // Schedule periodic message sync as fallback
+        MessageSyncWorker.schedule(this)
+
+        // Check battery optimization (show prompt later in UI)
+        if (!BatteryOptimizationHelper.isExemptFromBatteryOptimization(this)) {
+            Logger.i("[App] App is not exempt from battery optimization - recommend user enables it")
+        }
+    }
+
+    /**
+     * Called when user logs out.
+     * Stops background connection services.
+     */
+    fun onUserLoggedOut() {
+        Logger.i("[App] User logged out - stopping background services")
+
+        // Stop foreground service
+        ConnectionForegroundService.stopService(this)
+
+        // Cancel periodic message sync
+        MessageSyncWorker.cancel(this)
+    }
+
+    /**
+     * Request battery optimization exemption.
+     * Should be called from UI with appropriate context.
+     */
+    fun requestBatteryOptimizationExemption(): Boolean {
+        return BatteryOptimizationHelper.requestBatteryOptimizationExemption(this)
+    }
+
+    /**
+     * Check if battery optimization prompt should be shown.
+     */
+    fun shouldShowBatteryOptimizationPrompt(lastPromptTime: Long): Boolean {
+        return BatteryOptimizationHelper.shouldShowPrompt(this, lastPromptTime)
+    }
+
     override fun onDestroy(owner: LifecycleOwner) {
         // App being destroyed - cleanup
         Logger.i("[App] App being destroyed, cleaning up calls")
@@ -320,6 +383,20 @@ class App : Application(), DefaultLifecycleObserver {
                 setSound(null, null) // SILENT - ringtone played manually so we can stop it
             }
             nm.createNotificationChannel(callsChannel)
+
+            // Connection service channel - Low importance, minimized in notification shade
+            val connectionChannel = NotificationChannel(
+                "connection",
+                "Connection Service",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Keeps Whisper2 connected for instant messages"
+                setShowBadge(false)
+                lockscreenVisibility = Notification.VISIBILITY_SECRET
+                setSound(null, null)
+                enableVibration(false)
+            }
+            nm.createNotificationChannel(connectionChannel)
         }
     }
 }

@@ -1,9 +1,11 @@
 package com.whisper2.app.services.auth
 
+import android.content.Context
 import android.util.Base64
 import com.google.firebase.messaging.FirebaseMessaging
 import com.google.gson.Gson
 import com.google.gson.JsonElement
+import com.whisper2.app.App
 import com.whisper2.app.core.Constants
 import com.whisper2.app.core.Logger
 import com.whisper2.app.crypto.CryptoService
@@ -19,6 +21,7 @@ import com.whisper2.app.data.network.ws.UpdateTokensPayload
 import com.whisper2.app.data.network.ws.WsClientImpl
 import com.whisper2.app.data.network.ws.WsConnectionState
 import com.whisper2.app.data.network.ws.WsFrame
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
@@ -40,11 +43,13 @@ sealed class AuthState {
 
 @Singleton
 class AuthService @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val wsClient: WsClientImpl,
     private val secureStorage: SecureStorage,
     private val cryptoService: CryptoService,
     private val gson: Gson
 ) {
+    private val app: App get() = context.applicationContext as App
     private val _authState = MutableStateFlow<AuthState>(
         if (secureStorage.isLoggedIn()) AuthState.Authenticated(secureStorage.whisperId!!)
         else AuthState.Unauthenticated
@@ -111,6 +116,9 @@ class AuthService @Inject constructor(
             // 5. Update auth state
             _authState.value = AuthState.Authenticated(ack.whisperId)
 
+            // 6. Start background services
+            app.onUserLoggedIn()
+
             Result.success(Unit)
         } catch (e: Exception) {
             Logger.e("Registration failed", e)
@@ -158,6 +166,9 @@ class AuthService @Inject constructor(
             Logger.auth("Recovery successful. WhisperID: ${ack.whisperId}")
 
             _authState.value = AuthState.Authenticated(ack.whisperId)
+
+            // Start background services
+            app.onUserLoggedIn()
 
             Result.success(Unit)
         } catch (e: Exception) {
@@ -387,6 +398,9 @@ class AuthService @Inject constructor(
     }
 
     fun logout() {
+        // Stop background services first
+        app.onUserLoggedOut()
+
         scope.launch {
             try {
                 val token = secureStorage.sessionToken

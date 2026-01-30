@@ -1,5 +1,7 @@
 package com.whisper2.app.data.network.ws
 
+import android.content.Context
+import android.os.PowerManager
 import com.google.gson.Gson
 import com.google.gson.JsonElement
 import com.google.gson.reflect.TypeToken
@@ -7,6 +9,7 @@ import com.whisper2.app.core.Constants
 import com.whisper2.app.core.Logger
 import com.whisper2.app.di.ApplicationScope
 import com.whisper2.app.di.WsClient
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -30,7 +33,8 @@ import javax.inject.Singleton
 class WsClientImpl @Inject constructor(
     @WsClient private val okHttpClient: OkHttpClient,
     private val gson: Gson,
-    @ApplicationScope private val scope: CoroutineScope
+    @ApplicationScope private val scope: CoroutineScope,
+    @ApplicationContext private val context: Context
 ) {
     private var webSocket: WebSocket? = null
 
@@ -53,6 +57,11 @@ class WsClientImpl @Inject constructor(
     // Reconnect job - track so we can cancel on network restore
     private var reconnectJob: Job? = null
 
+    // Wake lock for keeping CPU awake during reconnection
+    private var wakeLock: PowerManager.WakeLock? = null
+    private val wakeLockTag = "Whisper2:WsClient"
+    private val wakeLockTimeout = 60_000L  // 1 minute max
+
     fun connect() {
         // Prevent multiple simultaneous connect attempts
         val currentState = _connectionState.value
@@ -62,6 +71,9 @@ class WsClientImpl @Inject constructor(
             Logger.ws("Skipping connect - already $currentState")
             return
         }
+
+        // Acquire wake lock to prevent system from killing process during connection
+        acquireWakeLock()
 
         _connectionState.value = WsConnectionState.CONNECTING
         Logger.ws("Connecting to ${Constants.WS_URL}")
@@ -75,6 +87,7 @@ class WsClientImpl @Inject constructor(
                 reconnectPolicy.reset()
                 lastPongTime = System.currentTimeMillis()
                 startHeartbeat()
+                releaseWakeLock()  // Connection established, release wake lock
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -107,6 +120,7 @@ class WsClientImpl @Inject constructor(
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Logger.e("WebSocket failure", t)
                 stopHeartbeat()
+                releaseWakeLock()  // Release wake lock on failure
                 _connectionState.value = WsConnectionState.DISCONNECTED
                 attemptReconnect()
             }
@@ -114,6 +128,7 @@ class WsClientImpl @Inject constructor(
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 Logger.ws("Closed: $code $reason")
                 stopHeartbeat()
+                releaseWakeLock()  // Release wake lock on close
                 _connectionState.value = WsConnectionState.DISCONNECTED
                 // Also attempt reconnect on normal close (server may have restarted)
                 if (code != 1000) {  // 1000 = normal closure by client
@@ -235,6 +250,44 @@ class WsClientImpl @Inject constructor(
     fun markAuthExpired() {
         reconnectPolicy.markAuthExpired()
         _connectionState.value = WsConnectionState.AUTH_EXPIRED
+    }
+
+    /**
+     * Acquire wake lock to keep CPU awake during connection/reconnection.
+     * This prevents the system from killing the process while connecting.
+     */
+    private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) {
+            return
+        }
+
+        try {
+            val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                wakeLockTag
+            ).apply {
+                acquire(wakeLockTimeout)
+            }
+            Logger.d("WsClient wake lock acquired")
+        } catch (e: Exception) {
+            Logger.e("Failed to acquire wake lock", e)
+        }
+    }
+
+    /**
+     * Release wake lock after connection is established or failed.
+     */
+    private fun releaseWakeLock() {
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+                Logger.d("WsClient wake lock released")
+            }
+        } catch (e: Exception) {
+            Logger.e("Failed to release wake lock", e)
+        }
+        wakeLock = null
     }
 
     /**

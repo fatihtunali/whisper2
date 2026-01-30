@@ -4,6 +4,8 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.PowerManager
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
@@ -18,11 +20,11 @@ import com.whisper2.app.data.network.ws.WsFrame
 import com.whisper2.app.services.auth.AuthService
 import com.whisper2.app.services.calls.CallForegroundService
 import com.whisper2.app.ui.MainActivity
-import android.os.SystemClock
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -38,6 +40,8 @@ class FcmService : FirebaseMessagingService() {
     companion object {
         private const val CHANNEL_ID_MESSAGES = "messages"
         private const val NOTIFICATION_ID_MESSAGE = 1001
+        private const val WAKE_LOCK_TAG = "Whisper2:FcmService"
+        private const val WAKE_LOCK_TIMEOUT_MS = 30_000L  // 30 seconds max
         // NOTE: Call notifications are handled by CallForegroundService, not FcmService
     }
 
@@ -254,16 +258,50 @@ class FcmService : FirebaseMessagingService() {
 
     private fun wakeUpConnection() {
         scope.launch {
+            var wakeLock: PowerManager.WakeLock? = null
             try {
+                // Acquire wake lock to ensure reconnection completes
+                val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+                wakeLock = powerManager.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK,
+                    WAKE_LOCK_TAG
+                ).apply {
+                    acquire(WAKE_LOCK_TIMEOUT_MS)
+                }
+                Logger.d("[FcmService] Wake lock acquired for reconnection")
+
                 if (wsClient.connectionState.value != WsConnectionState.CONNECTED) {
                     Logger.d("[FcmService] Reconnecting and authenticating WebSocket...")
                     // Use authService.reconnect() instead of wsClient.connect()
                     // This ensures proper authentication after connection
                     authService.reconnect()
+
+                    // Wait a bit for connection to establish
+                    var waitTime = 0L
+                    while (waitTime < 10_000 && wsClient.connectionState.value != WsConnectionState.CONNECTED) {
+                        delay(500)
+                        waitTime += 500
+                    }
+
+                    if (wsClient.connectionState.value == WsConnectionState.CONNECTED) {
+                        Logger.i("[FcmService] Successfully reconnected WebSocket")
+                    } else {
+                        Logger.w("[FcmService] WebSocket reconnection timeout, state: ${wsClient.connectionState.value}")
+                    }
                 }
                 // MessageHandler will automatically fetch pending messages on connect
             } catch (e: Exception) {
                 Logger.e("[FcmService] Failed to wake up connection", e)
+            } finally {
+                // Release wake lock
+                try {
+                    if (wakeLock?.isHeld == true) {
+                        wakeLock.release()
+                        Logger.d("[FcmService] Wake lock released")
+                    }
+                } catch (e: Exception) {
+                    Logger.e("[FcmService] Failed to release wake lock", e)
+                }
             }
         }
     }
