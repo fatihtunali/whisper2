@@ -367,7 +367,7 @@ export interface CallEndPayload extends VersionedPayload {
   nonce: string;
   ciphertext: string;
   sig: string;
-  reason: 'ended' | 'declined' | 'busy' | 'timeout' | 'failed';
+  reason: 'ended' | 'declined' | 'busy' | 'timeout' | 'failed' | 'cancelled';
 }
 
 // call_ringing (callee → server, server → caller)

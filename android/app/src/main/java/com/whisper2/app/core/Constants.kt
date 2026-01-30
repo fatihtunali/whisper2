@@ -98,9 +98,11 @@ object Constants {
         const val TEXT = "text"
         const val IMAGE = "image"
         const val VIDEO = "video"
-        const val VOICE = "voice"  // iOS uses "voice" not "audio"
+        const val VOICE = "voice"
+        const val AUDIO = "audio"
         const val FILE = "file"
         const val LOCATION = "location"
+        const val SYSTEM = "system"
     }
 
     object MessageStatus {

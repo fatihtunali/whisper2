@@ -35,7 +35,8 @@ data class RegisterProofPayload(
     val encPublicKey: String,
     val signPublicKey: String,
     val signature: String,
-    val pushToken: String? = null
+    val pushToken: String? = null,
+    val voipToken: String? = null  // iOS only, null for Android
 )
 
 data class RegisterAckPayload(
@@ -299,7 +300,8 @@ data class UpdateTokensPayload(
     val protocolVersion: Int = Constants.PROTOCOL_VERSION,
     val cryptoVersion: Int = Constants.CRYPTO_VERSION,
     val sessionToken: String,
-    val pushToken: String
+    val pushToken: String? = null,
+    val voipToken: String? = null  // iOS only, null for Android
 )
 
 // Session
