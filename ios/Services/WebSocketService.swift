@@ -99,7 +99,7 @@ final class WebSocketService: NSObject, ObservableObject {
 
             DispatchQueue.main.async {
                 if path.status == .satisfied {
-                    print("[WebSocket] Network became available (interface: \(path.availableInterfaces.first?.type.rawValue ?? 0))")
+                    print("[WebSocket] Network became available (interface: \(path.availableInterfaces.first?.type ?? .other))")
                     if !wasAvailable {
                         // Network just came back - reconnect
                         self?.ensureConnected()
