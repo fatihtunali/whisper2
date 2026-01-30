@@ -432,8 +432,8 @@ final class AuthService: ObservableObject {
         case Constants.MessageType.sessionRefreshAck:
             if let frame = try? JSONDecoder().decode(WsFrame<SessionRefreshAckPayload>.self, from: data) {
                 // Update stored session token and expiry
-                keychain.setString(frame.payload.sessionToken, for: Constants.StorageKey.sessionToken)
-                Logger.auth("Session refreshed: expires at \(frame.payload.sessionExpiresAt)")
+                keychain.setString(frame.payload.sessionToken, forKey: Constants.StorageKey.sessionToken)
+                print("[AuthService] Session refreshed: expires at \(frame.payload.sessionExpiresAt)")
             }
 
         default:
