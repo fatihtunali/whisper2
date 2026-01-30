@@ -73,6 +73,12 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
         ksp { arg("room.schemaLocation", "${'$'}projectDir/schemas") }
+
+        // Only include ABIs that WebRTC supports
+        // This prevents Play Store from creating APKs for unsupported architectures
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+        }
     }
 
     buildTypes {
@@ -96,6 +102,20 @@ android {
     packaging {
         resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" }
         jniLibs { useLegacyPackaging = true }
+    }
+
+    // Ensure AAB includes all native libraries without splitting by ABI
+    // This prevents WebRTC native library mismatch issues
+    bundle {
+        abi {
+            enableSplit = true  // Still split for size, but only for supported ABIs
+        }
+        language {
+            enableSplit = false  // Don't split by language
+        }
+        density {
+            enableSplit = true
+        }
     }
 }
 

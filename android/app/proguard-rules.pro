@@ -13,8 +13,32 @@
 -keep class com.whisper2.app.data.network.** { *; }
 -keep class com.whisper2.app.domain.model.** { *; }
 
-# WebRTC
+# WebRTC - comprehensive rules to prevent R8 from stripping JNI methods
 -keep class org.webrtc.** { *; }
+-keep class io.getstream.webrtc.** { *; }
+-keepclassmembers class org.webrtc.** { *; }
+-dontwarn org.webrtc.**
+
+# WebRTC native library loading - critical for AAB
+-keep class org.webrtc.NativeLibrary { *; }
+-keep class org.webrtc.JniCommon { *; }
+-keep class org.webrtc.JniHelper { *; }
+-keep class org.webrtc.WebRtcClassLoader { *; }
+
+# WebRTC video encoder/decoder factories - must not be stripped
+-keep class org.webrtc.DefaultVideoEncoderFactory { *; }
+-keep class org.webrtc.DefaultVideoDecoderFactory { *; }
+-keep class org.webrtc.HardwareVideoEncoderFactory { *; }
+-keep class org.webrtc.SoftwareVideoEncoderFactory { *; }
+-keep class org.webrtc.HardwareVideoDecoderFactory { *; }
+-keep class org.webrtc.SoftwareVideoDecoderFactory { *; }
+-keep class org.webrtc.MediaCodecVideoEncoder { *; }
+-keep class org.webrtc.MediaCodecVideoDecoder { *; }
+-keep class org.webrtc.VideoCodecInfo { *; }
+
+# WebRTC EGL context - required for video rendering
+-keep class org.webrtc.EglBase** { *; }
+-keep class org.webrtc.GlUtil { *; }
 
 # Gson
 -keepattributes Signature
