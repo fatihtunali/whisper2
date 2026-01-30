@@ -52,18 +52,21 @@ enum MessageTypes {
     static let error = "error"
 }
 
-/// Message content types
+/// Message content types - must match server schema msgType enum
 enum MessageContentType: String, Codable {
     case text
     case image
     case voice
+    case audio    // For audio messages (distinct from voice notes)
+    case video    // For video messages
     case file
+    case location // For location sharing
     case system
 }
 
-/// Delivery status
+/// Delivery status for delivery receipts - server only accepts 'delivered' or 'read'
+/// Note: 'sent' status comes from message_accepted, not delivery_receipt
 enum DeliveryStatus: String, Codable {
-    case sent
     case delivered
     case read
 }
