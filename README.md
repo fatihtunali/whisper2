@@ -360,3 +360,18 @@ Proprietary - All rights reserved
 - Added wake locks throughout connection lifecycle
 - Added `BootReceiver` for service restart after reboot
 - Added `BatteryOptimizationHelper` for exemption requests
+
+---
+
+## Keywords (for searchability)
+
+**Tags:** `webrtc` `turn-server` `coturn` `encrypted-messaging` `e2e-encryption` `voip` `video-call` `android` `ios` `swift` `kotlin` `jetpack-compose` `swiftui` `websocket` `push-notifications` `fcm` `apns` `nacl` `x25519` `end-to-end-encryption`
+
+WebRTC TURN server setup, coturn configuration 2025 2026, Android app disconnects in background fix,
+Android foreground service WebSocket, wake lock Android background, battery optimization exemption Android,
+WebRTC relay only mode, iceTransportPolicy relay, WebRTC ICE configuration, TURN server not working fix,
+Android WorkManager background sync, TURN over TLS TURNS configuration, WebRTC NAT traversal,
+encrypted voice call app, encrypted video call app, secure messaging app, private messenger,
+Android notification not working background, iOS VoIP push notifications, WebSocket keep alive Android,
+coturn authentication setup, TURN credential generation, WebRTC peer connection fails fix,
+Android Doze mode WebSocket, battery saver kills app fix, foreground service data sync Android 14
