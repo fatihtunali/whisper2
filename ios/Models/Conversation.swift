@@ -80,6 +80,34 @@ struct Conversation: Codable, Identifiable, Hashable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
+
+    // MARK: - Backward Compatible Decoding
+    // Custom decoder to handle missing fields from older app versions
+
+    enum CodingKeys: String, CodingKey {
+        case id, peerId, peerNickname, lastMessage, lastMessageTime
+        case unreadCount, isTyping, isPinned, isMuted
+        case chatThemeId, disappearingMessageTimer, createdAt, updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        id = try container.decode(String.self, forKey: .id)
+        peerId = try container.decode(String.self, forKey: .peerId)
+        peerNickname = try container.decodeIfPresent(String.self, forKey: .peerNickname)
+        lastMessage = try container.decodeIfPresent(String.self, forKey: .lastMessage)
+        lastMessageTime = try container.decodeIfPresent(Date.self, forKey: .lastMessageTime)
+        unreadCount = try container.decodeIfPresent(Int.self, forKey: .unreadCount) ?? 0
+        isTyping = try container.decodeIfPresent(Bool.self, forKey: .isTyping) ?? false
+        isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
+        isMuted = try container.decodeIfPresent(Bool.self, forKey: .isMuted) ?? false
+        chatThemeId = try container.decodeIfPresent(String.self, forKey: .chatThemeId)
+        // New field - provide default for old data
+        disappearingMessageTimer = try container.decodeIfPresent(DisappearingMessageTimer.self, forKey: .disappearingMessageTimer) ?? .off
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+    }
     
     /// Display name for the conversation
     var displayName: String {
