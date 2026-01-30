@@ -2,11 +2,13 @@ package com.whisper2.app.data.local.db.dao
 
 import androidx.room.*
 import com.whisper2.app.data.local.db.entities.GroupEntity
+import com.whisper2.app.data.local.db.entities.GroupInviteEntity
 import com.whisper2.app.data.local.db.entities.GroupMemberEntity
 import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface GroupDao {
+    // Groups
     @Query("SELECT * FROM groups ORDER BY updatedAt DESC")
     fun getAllGroupsFlow(): Flow<List<GroupEntity>>
 
@@ -54,4 +56,23 @@ interface GroupDao {
 
     @Query("DELETE FROM groups")
     suspend fun deleteAll()
+
+    // Group Invites
+    @Query("SELECT * FROM group_invites ORDER BY createdAt DESC")
+    fun getAllInvitesFlow(): Flow<List<GroupInviteEntity>>
+
+    @Query("SELECT * FROM group_invites ORDER BY createdAt DESC")
+    suspend fun getAllInvites(): List<GroupInviteEntity>
+
+    @Query("SELECT * FROM group_invites WHERE groupId = :groupId")
+    suspend fun getInviteById(groupId: String): GroupInviteEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertInvite(invite: GroupInviteEntity)
+
+    @Query("DELETE FROM group_invites WHERE groupId = :groupId")
+    suspend fun deleteInvite(groupId: String)
+
+    @Query("DELETE FROM group_invites")
+    suspend fun deleteAllInvites()
 }

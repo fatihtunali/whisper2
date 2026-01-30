@@ -6,11 +6,18 @@ struct ChatView: View {
     @StateObject private var viewModel: ChatViewModel
     @ObservedObject private var messagingService = MessagingService.shared
     @ObservedObject private var webSocket = WebSocketService.shared
+    @ObservedObject private var settingsManager = AppSettingsManager.shared
     @FocusState private var isInputFocused: Bool
     @State private var showAddKeyAlert = false
     @State private var showContactProfile = false
     @State private var showDisappearingSettings = false
     @State private var showChatTheme = false
+
+    // Search state
+    @State private var isSearching = false
+    @State private var searchText = ""
+    @State private var searchResultIndex = 0
+    @State private var scrollToMessageId: String?
 
     private var theme: ChatTheme {
         messagingService.getChatTheme(for: conversation.peerId)
@@ -18,6 +25,18 @@ struct ChatView: View {
 
     private var disappearingTimer: DisappearingMessageTimer {
         messagingService.getDisappearingMessageTimer(for: conversation.peerId)
+    }
+
+    private var isMuted: Bool {
+        messagingService.conversations.first { $0.peerId == conversation.peerId }?.isMuted ?? false
+    }
+
+    // Search results - filter messages containing search text
+    private var searchResults: [Message] {
+        guard !searchText.isEmpty else { return [] }
+        return viewModel.messages.filter { message in
+            message.content.containsIgnoringCase(searchText)
+        }
     }
 
     private var connectionStatusColor: Color {
@@ -47,6 +66,18 @@ struct ChatView: View {
             theme.backgroundColor.color.ignoresSafeArea()
 
             VStack(spacing: 0) {
+                // Search bar (when searching)
+                if isSearching {
+                    SearchMessagesBar(
+                        searchText: $searchText,
+                        isSearching: $isSearching,
+                        resultsCount: searchResults.count,
+                        currentIndex: searchResultIndex,
+                        onPrevious: navigateToPreviousResult,
+                        onNext: navigateToNextResult
+                    )
+                }
+
                 // Connection lost warning
                 if webSocket.connectionState == .disconnected {
                     HStack {
@@ -87,9 +118,15 @@ struct ChatView: View {
                     ScrollView {
                         LazyVStack(spacing: 8) {
                             ForEach(viewModel.messages) { message in
-                                MessageBubble(message: message, onDelete: { deleteForEveryone in
-                                    viewModel.deleteMessage(messageId: message.id, deleteForEveryone: deleteForEveryone)
-                                }, theme: theme)
+                                MessageBubbleWithSearch(
+                                    message: message,
+                                    searchText: isSearching ? searchText : "",
+                                    isHighlighted: isSearching && searchResults.indices.contains(searchResultIndex) && searchResults[searchResultIndex].id == message.id,
+                                    onDelete: { deleteForEveryone in
+                                        viewModel.deleteMessage(messageId: message.id, deleteForEveryone: deleteForEveryone)
+                                    },
+                                    theme: theme
+                                )
                                 .id(message.id)
                             }
                         }
@@ -98,10 +135,18 @@ struct ChatView: View {
                         .padding(.bottom, 10)
                     }
                     .onChange(of: viewModel.messages.count) { _, _ in
-                        if let lastMessage = viewModel.messages.last {
+                        if !isSearching, let lastMessage = viewModel.messages.last {
                             withAnimation {
                                 proxy.scrollTo(lastMessage.id, anchor: .bottom)
                             }
+                        }
+                    }
+                    .onChange(of: scrollToMessageId) { _, newId in
+                        if let id = newId {
+                            withAnimation {
+                                proxy.scrollTo(id, anchor: .center)
+                            }
+                            scrollToMessageId = nil
                         }
                     }
                     .onAppear {
@@ -150,6 +195,7 @@ struct ChatView: View {
                     text: $viewModel.messageText,
                     isFocused: $isInputFocused,
                     isEnabled: viewModel.canSendMessages,
+                    enterToSend: settingsManager.settings.enterToSend,
                     onSend: viewModel.sendMessage,
                     onTextChange: viewModel.textChanged,
                     onSendVoice: { url, duration in
@@ -168,30 +214,53 @@ struct ChatView: View {
         .toolbar {
             ToolbarItem(placement: .principal) {
                 Button(action: { showContactProfile = true }) {
-                    VStack(spacing: 2) {
-                        Text(viewModel.contactName)
-                            .font(.headline)
-                            .foregroundColor(.white)
-                        // Show connection status if not connected, otherwise show online status
-                        if webSocket.connectionState != .connected {
-                            HStack(spacing: 4) {
-                                Circle()
-                                    .fill(connectionStatusColor)
-                                    .frame(width: 6, height: 6)
-                                Text(connectionStatusText)
+                    HStack(spacing: 6) {
+                        VStack(spacing: 2) {
+                            Text(viewModel.contactName)
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            // Show connection status if not connected, otherwise show online status
+                            if webSocket.connectionState != .connected {
+                                HStack(spacing: 4) {
+                                    Circle()
+                                        .fill(connectionStatusColor)
+                                        .frame(width: 6, height: 6)
+                                    Text(connectionStatusText)
+                                        .font(.caption2)
+                                        .foregroundColor(connectionStatusColor)
+                                }
+                            } else if let contact = ContactsService.shared.getContact(whisperId: conversation.peerId) {
+                                Text(contact.isOnline ? "Online" : "Tap for info")
                                     .font(.caption2)
-                                    .foregroundColor(connectionStatusColor)
+                                    .foregroundColor(contact.isOnline ? .green : .gray)
                             }
-                        } else if let contact = ContactsService.shared.getContact(whisperId: conversation.peerId) {
-                            Text(contact.isOnline ? "Online" : "Tap for info")
-                                .font(.caption2)
-                                .foregroundColor(contact.isOnline ? .green : .gray)
+                        }
+
+                        // Muted indicator
+                        if isMuted {
+                            Image(systemName: "bell.slash.fill")
+                                .font(.caption)
+                                .foregroundColor(.gray)
                         }
                     }
                 }
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 16) {
+                    // Search button
+                    Button(action: {
+                        withAnimation {
+                            isSearching.toggle()
+                            if !isSearching {
+                                searchText = ""
+                                searchResultIndex = 0
+                            }
+                        }
+                    }) {
+                        Image(systemName: isSearching ? "xmark" : "magnifyingglass")
+                            .foregroundColor(isSearching ? .orange : .white)
+                    }
+
                     // Voice call button
                     Button(action: { viewModel.startVoiceCall() }) {
                         Image(systemName: "phone.fill")
@@ -206,27 +275,48 @@ struct ChatView: View {
                     .disabled(!viewModel.canSendMessages)
                     .opacity(viewModel.canSendMessages ? 1.0 : 0.4)
 
-                    // More options
+                    // More options menu
                     Menu {
+                        // View Profile
                         Button(action: { showContactProfile = true }) {
                             Label("View Profile", systemImage: "person.circle")
                         }
+
+                        // Search Messages
+                        Button(action: {
+                            withAnimation {
+                                isSearching = true
+                            }
+                        }) {
+                            Label("Search Messages", systemImage: "magnifyingglass")
+                        }
+
+                        // Mute/Unmute Notifications
+                        Button(action: toggleMute) {
+                            Label(
+                                isMuted ? "Unmute Notifications" : "Mute Notifications",
+                                systemImage: isMuted ? "bell.fill" : "bell.slash"
+                            )
+                        }
+
+                        Divider()
+
+                        // Disappearing Messages
                         Button(action: { showDisappearingSettings = true }) {
                             Label(
                                 disappearingTimer == .off ? "Disappearing Messages" : "Disappearing: \(disappearingTimer.displayName)",
                                 systemImage: disappearingTimer == .off ? "timer" : "timer.circle.fill"
                             )
                         }
+
+                        // Chat Theme
                         Button(action: { showChatTheme = true }) {
                             Label("Chat Theme", systemImage: "paintpalette")
                         }
-                        Button(action: {}) {
-                            Label("Search Messages", systemImage: "magnifyingglass")
-                        }
-                        Button(action: {}) {
-                            Label("Mute Notifications", systemImage: "bell.slash")
-                        }
+
                         Divider()
+
+                        // Clear Chat
                         Button(role: .destructive, action: { viewModel.clearChat() }) {
                             Label("Clear Chat", systemImage: "trash")
                         }
@@ -239,6 +329,11 @@ struct ChatView: View {
         .toolbar(.hidden, for: .tabBar)
         .onAppear {
             viewModel.markAsRead()
+        }
+        .onChange(of: searchText) { _, _ in
+            // Reset search index when search text changes
+            searchResultIndex = 0
+            navigateToCurrentResult()
         }
         .sheet(isPresented: $showAddKeyAlert) {
             QRScannerSheet(peerId: conversation.peerId)
@@ -279,6 +374,64 @@ struct ChatView: View {
                     }
             }
         }
+    }
+
+    // MARK: - Search Navigation
+
+    private func navigateToCurrentResult() {
+        guard !searchResults.isEmpty, searchResults.indices.contains(searchResultIndex) else { return }
+        scrollToMessageId = searchResults[searchResultIndex].id
+    }
+
+    private func navigateToPreviousResult() {
+        guard !searchResults.isEmpty else { return }
+        if searchResultIndex > 0 {
+            searchResultIndex -= 1
+        } else {
+            searchResultIndex = searchResults.count - 1
+        }
+        scrollToMessageId = searchResults[searchResultIndex].id
+    }
+
+    private func navigateToNextResult() {
+        guard !searchResults.isEmpty else { return }
+        if searchResultIndex < searchResults.count - 1 {
+            searchResultIndex += 1
+        } else {
+            searchResultIndex = 0
+        }
+        scrollToMessageId = searchResults[searchResultIndex].id
+    }
+
+    // MARK: - Mute Toggle
+
+    private func toggleMute() {
+        messagingService.toggleMute(for: conversation.peerId)
+    }
+}
+
+/// Message bubble wrapper that supports search highlighting
+struct MessageBubbleWithSearch: View {
+    let message: Message
+    let searchText: String
+    let isHighlighted: Bool
+    let onDelete: (Bool) -> Void
+    let theme: ChatTheme
+
+    var body: some View {
+        MessageBubble(
+            message: message,
+            searchText: searchText,
+            onDelete: onDelete,
+            theme: theme
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(Color.yellow, lineWidth: isHighlighted ? 2 : 0)
+                .animation(.easeInOut(duration: 0.3), value: isHighlighted)
+        )
+        .scaleEffect(isHighlighted ? 1.02 : 1.0)
+        .animation(.easeInOut(duration: 0.2), value: isHighlighted)
     }
 }
 

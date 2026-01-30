@@ -30,7 +30,20 @@ enum Constants {
     // MARK: - BIP39
     static let bip39Iterations = 2048
     static let bip39Salt = "mnemonic"
-    
+
+    // MARK: - Validation Limits (from server)
+    static let maxGroupMembers = 50
+    static let maxAttachmentSize = 100 * 1024 * 1024  // 100MB
+    static let maxBackupSize = 256 * 1024  // 256KB
+
+    // MARK: - Session & Timing (from server)
+    static let sessionTtlDays = 7
+    static let heartbeatIntervalMs: Int64 = 30_000
+    static let reconnectBaseDelayMs: Int64 = 1_000
+    static let reconnectMaxDelayMs: Int64 = 30_000
+    static let reconnectMaxAttempts = 5
+    static let callRingTimeoutMs: Int64 = 30_000
+
     // MARK: - WhisperID Format (from server protocol.ts)
     static let whisperIdRegex = "^WSP-[A-Z2-7]{4}-[A-Z2-7]{4}-[A-Z2-7]{4}$"
     

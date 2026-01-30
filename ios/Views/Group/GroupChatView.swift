@@ -5,6 +5,7 @@ import UIKit
 struct GroupChatView: View {
     let group: ChatGroup
     @StateObject private var viewModel: GroupChatViewModel
+    @ObservedObject private var settingsManager = AppSettingsManager.shared
     @Environment(\.dismiss) private var dismiss
     @State private var showGroupInfo = false
     @FocusState private var isInputFocused: Bool
@@ -49,6 +50,7 @@ struct GroupChatView: View {
                     text: $viewModel.messageText,
                     isFocused: $isInputFocused,
                     isEnabled: true,
+                    enterToSend: settingsManager.settings.enterToSend,
                     onSend: { viewModel.sendMessage() }
                 )
             }

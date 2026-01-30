@@ -6,11 +6,14 @@ struct ProfileView: View {
     @StateObject private var viewModel = SettingsViewModel()
     @ObservedObject private var avatarService = AvatarService.shared
     @State private var showCopiedAlert = false
+    @State private var showDeviceIdCopiedAlert = false
     @State private var qrCodeImage: UIImage?
     @State private var showImagePicker = false
     @State private var showImageSourcePicker = false
     @State private var selectedImage: UIImage?
     @State private var imagePickerSource: UIImagePickerController.SourceType = .photoLibrary
+    @State private var showFullScreenQR = false
+    @State private var encPublicKey: Data?
 
     private let context = CIContext()
     private let filter = CIFilter.qrCodeGenerator()
@@ -53,40 +56,53 @@ struct ProfileView: View {
                         .cornerRadius(12)
                     }
                     
-                    // QR Code
-                    VStack(spacing: 8) {
-                        Text("Share via QR Code")
-                            .font(.headline)
-                            .foregroundColor(.gray)
-                        
-                        Text("Others can scan this to add you")
-                            .font(.caption)
-                            .foregroundColor(.gray.opacity(0.7))
-                        
-                        if let qrImage = qrCodeImage {
-                            Image(uiImage: qrImage)
-                                .interpolation(.none)
-                                .resizable()
-                                .scaledToFit()
-                                .frame(width: 200, height: 200)
-                                .background(Color.white)
-                                .cornerRadius(12)
-                        } else {
-                            RoundedRectangle(cornerRadius: 12)
-                                .fill(Color.white)
-                                .frame(width: 200, height: 200)
-                                .overlay(
-                                    ProgressView()
-                                        .tint(.black)
-                                )
+                    // QR Code - Tappable to show full screen
+                    Button(action: { showFullScreenQR = true }) {
+                        VStack(spacing: 8) {
+                            Text("Share via QR Code")
+                                .font(.headline)
+                                .foregroundColor(.gray)
+
+                            Text("Others can scan this to add you")
+                                .font(.caption)
+                                .foregroundColor(.gray.opacity(0.7))
+
+                            if let qrImage = qrCodeImage {
+                                Image(uiImage: qrImage)
+                                    .interpolation(.none)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 200, height: 200)
+                                    .background(Color.white)
+                                    .cornerRadius(12)
+                            } else {
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(Color.white)
+                                    .frame(width: 200, height: 200)
+                                    .overlay(
+                                        ProgressView()
+                                            .tint(.black)
+                                    )
+                            }
+
+                            // Tap to enlarge hint
+                            HStack(spacing: 4) {
+                                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                    .font(.caption2)
+                                Text("Tap to enlarge")
+                                    .font(.caption)
+                            }
+                            .foregroundColor(.blue.opacity(0.8))
+                            .padding(.top, 4)
                         }
                     }
+                    .buttonStyle(.plain)
                     .padding(.top, 20)
                     
                     // Info
                     VStack(spacing: 12) {
                         InfoRow(title: "Registered", value: viewModel.registeredDate ?? "Unknown")
-                        InfoRow(title: "Device ID", value: String(viewModel.deviceId?.prefix(8) ?? "Unknown") + "...")
+                        DeviceIdRow(deviceId: viewModel.deviceId, onCopy: copyDeviceId)
                     }
                     .padding()
                     .background(Color.gray.opacity(0.15))
@@ -105,6 +121,11 @@ struct ProfileView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text("Whisper ID copied to clipboard")
+        }
+        .alert("Copied", isPresented: $showDeviceIdCopiedAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Device ID copied to clipboard")
         }
         .confirmationDialog("Change Profile Photo", isPresented: $showImageSourcePicker) {
             Button("Take Photo") {
@@ -131,32 +152,47 @@ struct ProfileView: View {
                 selectedImage = nil
             }
         }
+        .fullScreenCover(isPresented: $showFullScreenQR) {
+            if let whisperId = viewModel.whisperId, let pubKey = encPublicKey {
+                QRCodeFullScreenView(whisperId: whisperId, encPublicKey: pubKey)
+            }
+        }
     }
     
     private func copyWhisperId() {
         viewModel.copyWhisperId()
         showCopiedAlert = true
     }
+
+    private func copyDeviceId() {
+        if let deviceId = viewModel.deviceId {
+            UIPasteboard.general.string = deviceId
+            showDeviceIdCopiedAlert = true
+        }
+    }
     
     private func generateQRCode() {
         guard let whisperId = viewModel.whisperId else { return }
-        
+
         // Get user's public key for QR code
         let keychain = KeychainService.shared
-        guard let encPublicKey = keychain.getData(forKey: Constants.StorageKey.encPublicKey) else { return }
-        
+        guard let pubKey = keychain.getData(forKey: Constants.StorageKey.encPublicKey) else { return }
+
+        // Store for full screen view
+        encPublicKey = pubKey
+
         // QR data format: whisper2://add?id=WSP-XXXX-XXXX-XXXX&key=base64pubkey
-        let qrData = "whisper2://add?id=\(whisperId)&key=\(encPublicKey.base64EncodedString())"
-        
+        let qrData = "whisper2://add?id=\(whisperId)&key=\(pubKey.base64EncodedString())"
+
         filter.message = Data(qrData.utf8)
         filter.correctionLevel = "M"
-        
+
         guard let outputImage = filter.outputImage else { return }
-        
+
         // Scale up the QR code
         let scale = 200.0 / outputImage.extent.width
         let scaledImage = outputImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        
+
         if let cgImage = context.createCGImage(scaledImage, from: scaledImage.extent) {
             qrCodeImage = UIImage(cgImage: cgImage)
         }
@@ -166,7 +202,7 @@ struct ProfileView: View {
 struct InfoRow: View {
     let title: String
     let value: String
-    
+
     var body: some View {
         HStack {
             Text(title)
@@ -174,6 +210,34 @@ struct InfoRow: View {
             Spacer()
             Text(value)
                 .foregroundColor(.white)
+        }
+    }
+}
+
+struct DeviceIdRow: View {
+    let deviceId: String?
+    let onCopy: () -> Void
+
+    private var truncatedId: String {
+        guard let id = deviceId else { return "Unknown" }
+        let prefix = String(id.prefix(8))
+        return "\(prefix)..."
+    }
+
+    var body: some View {
+        HStack {
+            Text("Device ID")
+                .foregroundColor(.gray)
+            Spacer()
+            Text(truncatedId)
+                .foregroundColor(.white)
+                .font(.system(.body, design: .monospaced))
+            Button(action: onCopy) {
+                Image(systemName: "doc.on.doc")
+                    .foregroundColor(.blue)
+                    .font(.caption)
+            }
+            .disabled(deviceId == nil)
         }
     }
 }

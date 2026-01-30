@@ -6,6 +6,7 @@ struct MessageInputBar: View {
     @Binding var text: String
     var isFocused: FocusState<Bool>.Binding
     var isEnabled: Bool = true
+    var enterToSend: Bool = true
     let onSend: () -> Void
     var onTextChange: (() -> Void)? = nil
     var onSendVoice: ((URL, TimeInterval) -> Void)? = nil
@@ -18,6 +19,8 @@ struct MessageInputBar: View {
     @State private var showDocumentPicker = false
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var pendingVoiceMessage: (url: URL, duration: TimeInterval)?
+    @State private var pendingAttachment: PendingAttachment?
+    @State private var showFullPreview = false
 
     @StateObject private var audioService = AudioMessageService.shared
 
@@ -26,11 +29,30 @@ struct MessageInputBar: View {
     }
 
     private var showVoiceButton: Bool {
-        text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && pendingVoiceMessage == nil
+        text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && pendingVoiceMessage == nil && pendingAttachment == nil
     }
 
     var body: some View {
         VStack(spacing: 0) {
+            // Attachment preview (before send)
+            if let attachment = pendingAttachment {
+                AttachmentPreviewBar(
+                    attachment: attachment,
+                    onCancel: {
+                        // Clean up temp file
+                        try? FileManager.default.removeItem(at: attachment.url)
+                        pendingAttachment = nil
+                    },
+                    onSend: {
+                        onSendAttachment?(attachment.url)
+                        pendingAttachment = nil
+                    }
+                )
+                .onTapGesture {
+                    showFullPreview = true
+                }
+            }
+
             // Voice message preview
             if let voice = pendingVoiceMessage {
                 VoiceMessagePreview(
@@ -49,27 +71,14 @@ struct MessageInputBar: View {
                 .padding(.top, 8)
             }
 
-            // Recording indicator
+            // Enhanced recording indicator with waveform animation
             if audioService.isRecording {
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(Color.red)
-                        .frame(width: 8, height: 8)
-
-                    Text(audioService.formatDuration(audioService.recordingDuration))
-                        .font(.caption)
-                        .foregroundColor(.red)
-                        .monospacedDigit()
-
-                    Spacer()
-
-                    Text("Slide left to cancel")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                }
-                .padding(.horizontal)
-                .padding(.vertical, 8)
-                .background(Color.red.opacity(0.1))
+                VoiceRecordingOverlay(
+                    audioService: audioService,
+                    dragOffset: 0,
+                    cancelThreshold: -100
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
             // Main input bar
@@ -95,6 +104,12 @@ struct MessageInputBar: View {
                         .onChange(of: text) { _, _ in
                             onTextChange?()
                         }
+                        .onSubmit {
+                            if enterToSend && canSend {
+                                onSend()
+                            }
+                        }
+                        .submitLabel(enterToSend ? .send : .return)
                 }
                 .background(Color.gray.opacity(isEnabled ? 0.2 : 0.1))
                 .cornerRadius(20)
@@ -151,12 +166,13 @@ struct MessageInputBar: View {
         .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotoItem, matching: .any(of: [.images, .videos]))
         .onChange(of: selectedPhotoItem) { _, newItem in
             Task {
-                if let item = newItem,
-                   let data = try? await item.loadTransferable(type: Data.self) {
-                    // Save to temp file and send
-                    let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".jpg")
-                    try? data.write(to: tempURL)
-                    onSendAttachment?(tempURL)
+                if let item = newItem {
+                    // Create pending attachment with preview instead of sending directly
+                    if let attachment = await AttachmentHelper.createFromPhotosPickerItem(item) {
+                        await MainActor.run {
+                            pendingAttachment = attachment
+                        }
+                    }
                 }
                 selectedPhotoItem = nil
             }
@@ -168,7 +184,22 @@ struct MessageInputBar: View {
         }
         .sheet(isPresented: $showDocumentPicker) {
             DocumentPicker { url in
-                onSendAttachment?(url)
+                // Create pending attachment with preview instead of sending directly
+                if let attachment = AttachmentHelper.createFromDocumentURL(url) {
+                    pendingAttachment = attachment
+                }
+            }
+        }
+        .fullScreenCover(isPresented: $showFullPreview) {
+            if let attachment = pendingAttachment {
+                FullAttachmentPreview(
+                    attachment: attachment,
+                    isPresented: $showFullPreview,
+                    onSend: {
+                        onSendAttachment?(attachment.url)
+                        pendingAttachment = nil
+                    }
+                )
             }
         }
     }
@@ -217,6 +248,7 @@ struct DocumentPicker: UIViewControllerRepresentable {
             text: .constant("Hello"),
             isFocused: FocusState<Bool>().projectedValue,
             isEnabled: true,
+            enterToSend: true,
             onSend: {},
             onTextChange: {}
         )
@@ -224,6 +256,7 @@ struct DocumentPicker: UIViewControllerRepresentable {
             text: .constant(""),
             isFocused: FocusState<Bool>().projectedValue,
             isEnabled: true,
+            enterToSend: false,
             onSend: {},
             onTextChange: {}
         )

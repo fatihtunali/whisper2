@@ -6,6 +6,7 @@ import AVKit
 /// Message bubble component - supports text, audio, location, and attachments
 struct MessageBubble: View {
     let message: Message
+    var searchText: String = ""  // For search highlighting
     var onDelete: ((Bool) -> Void)? = nil  // Bool = deleteForEveryone
     var theme: ChatTheme? = nil  // Optional theme for custom colors
 
@@ -119,13 +120,25 @@ struct MessageBubble: View {
 
     // MARK: - Text Content
     private var textContent: some View {
-        Text(message.content)
-            .font(.body)
-            .foregroundColor(isOutgoing ? outgoingTextColor : incomingTextColor)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(bubbleBackground)
-            .clipShape(BubbleShape(isOutgoing: isOutgoing))
+        Group {
+            if searchText.isEmpty {
+                Text(message.content)
+                    .font(.body)
+                    .foregroundColor(isOutgoing ? outgoingTextColor : incomingTextColor)
+            } else {
+                HighlightedText(
+                    text: message.content,
+                    searchTerm: searchText,
+                    highlightColor: .yellow,
+                    textColor: isOutgoing ? outgoingTextColor : incomingTextColor
+                )
+                .font(.body)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(bubbleBackground)
+        .clipShape(BubbleShape(isOutgoing: isOutgoing))
     }
 
     @ViewBuilder

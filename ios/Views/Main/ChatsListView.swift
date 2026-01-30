@@ -57,13 +57,26 @@ struct ChatsListView: View {
     @State private var showNewChat = false
     @State private var showMessageRequests = false
     @State private var searchText = ""
+    @State private var showDeleteConfirmation = false
+    @State private var conversationToDelete: Conversation?
+    @State private var showArchiveConfirmation = false
+    @State private var conversationToArchive: Conversation?
 
     private var filteredConversations: [Conversation] {
+        let convos: [Conversation]
         if searchText.isEmpty {
-            return viewModel.conversations
+            convos = viewModel.conversations
+        } else {
+            convos = viewModel.conversations.filter {
+                $0.displayName.localizedCaseInsensitiveContains(searchText)
+            }
         }
-        return viewModel.conversations.filter {
-            $0.displayName.localizedCaseInsensitiveContains(searchText)
+        // Sort: pinned first, then by last message time
+        return convos.sorted { lhs, rhs in
+            if lhs.isPinned != rhs.isPinned {
+                return lhs.isPinned
+            }
+            return (lhs.lastMessageTime ?? .distantPast) > (rhs.lastMessageTime ?? .distantPast)
         }
     }
 
@@ -130,8 +143,51 @@ struct ChatsListView: View {
                                 }
                                 .listRowBackground(Color.black)
                                 .listRowSeparatorTint(Color.gray.opacity(0.3))
+                                // Swipe left actions: Delete, Archive
+                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                    Button(role: .destructive) {
+                                        conversationToDelete = conversation
+                                        showDeleteConfirmation = true
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+
+                                    Button {
+                                        viewModel.archiveConversation(conversation)
+                                    } label: {
+                                        Label("Archive", systemImage: "archivebox")
+                                    }
+                                    .tint(.orange)
+                                }
+                                // Swipe right actions: Pin, Mute
+                                .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                    Button {
+                                        viewModel.togglePin(conversation)
+                                        // Haptic feedback
+                                        let impact = UIImpactFeedbackGenerator(style: .medium)
+                                        impact.impactOccurred()
+                                    } label: {
+                                        Label(
+                                            conversation.isPinned ? "Unpin" : "Pin",
+                                            systemImage: conversation.isPinned ? "pin.slash" : "pin"
+                                        )
+                                    }
+                                    .tint(.blue)
+
+                                    Button {
+                                        viewModel.toggleMute(conversation)
+                                        // Haptic feedback
+                                        let impact = UIImpactFeedbackGenerator(style: .light)
+                                        impact.impactOccurred()
+                                    } label: {
+                                        Label(
+                                            conversation.isMuted ? "Unmute" : "Mute",
+                                            systemImage: conversation.isMuted ? "bell" : "bell.slash"
+                                        )
+                                    }
+                                    .tint(.purple)
+                                }
                             }
-                            .onDelete(perform: deleteConversation)
                         }
                         .listStyle(.plain)
                         .searchable(text: $searchText, prompt: "Search chats")
@@ -142,6 +198,19 @@ struct ChatsListView: View {
                 }
             }
             .navigationTitle("Chats")
+            .alert("Delete Conversation", isPresented: $showDeleteConfirmation) {
+                Button("Cancel", role: .cancel) {
+                    conversationToDelete = nil
+                }
+                Button("Delete", role: .destructive) {
+                    if let conversation = conversationToDelete {
+                        viewModel.deleteConversation(conversation)
+                    }
+                    conversationToDelete = nil
+                }
+            } message: {
+                Text("Are you sure you want to delete this conversation? This action cannot be undone.")
+            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     HStack(spacing: 12) {

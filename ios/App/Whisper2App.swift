@@ -28,11 +28,9 @@ struct Whisper2App: App {
         case .active:
             print("[App] Scene became active")
             // Reconnect WebSocket when app enters foreground
+            // NOTE: Do NOT call AuthService.reconnect() here - it causes duplicate auth attempts.
+            // Flow: handleAppDidBecomeActive() → connect() → AuthService observer handles auth
             WebSocketService.shared.handleAppDidBecomeActive()
-            // Also trigger auth reconnect if needed
-            Task {
-                try? await AuthService.shared.reconnect()
-            }
         case .inactive:
             print("[App] Scene became inactive")
         case .background:

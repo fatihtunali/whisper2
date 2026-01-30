@@ -38,7 +38,9 @@ fun MessageBubble(
     message: MessageEntity,
     onDelete: (Boolean) -> Unit,
     onDownload: (String) -> Unit = {},
-    isDownloading: Boolean = false
+    isDownloading: Boolean = false,
+    onImageClick: ((String) -> Unit)? = null,
+    onVideoClick: ((String) -> Unit)? = null
 ) {
     val isOutgoing = message.direction == "outgoing"
     var showMenu by remember { mutableStateOf(false) }
@@ -131,9 +133,10 @@ fun MessageBubble(
                     when (message.contentType) {
                         "voice", "audio" -> VoiceMessageContent(message, isOutgoing, onDownload, isDownloading)
                         "location" -> LocationMessageContent(message, isOutgoing)
-                        "image" -> ImageMessageContent(message, isOutgoing, onDownload, isDownloading)
-                        "video" -> VideoMessageContent(message, isOutgoing, onDownload, isDownloading)
+                        "image" -> ImageMessageContent(message, isOutgoing, onDownload, isDownloading, onImageClick)
+                        "video" -> VideoMessageContent(message, isOutgoing, onDownload, isDownloading, onVideoClick)
                         "file" -> FileMessageContent(message, isOutgoing, onDownload, isDownloading)
+                        "call" -> CallMessageContent(message, isOutgoing)
                         else -> TextMessageContent(message.content)
                     }
 
@@ -479,7 +482,8 @@ private fun ImageMessageContent(
     message: MessageEntity,
     isOutgoing: Boolean,
     onDownload: (String) -> Unit,
-    isDownloading: Boolean
+    isDownloading: Boolean,
+    onImageClick: ((String) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val localPath = message.attachmentLocalPath
@@ -512,8 +516,14 @@ private fun ImageMessageContent(
                 BorderDefault.copy(alpha = 0.3f),
                 RoundedCornerShape(12.dp)
             )
-            .clickable(enabled = imageUri == null && !isDownloading) {
-                onDownload(message.id)
+            .clickable(enabled = !isDownloading) {
+                if (imageUri != null && localPath != null) {
+                    // Image is downloaded, open viewer
+                    onImageClick?.invoke(localPath)
+                } else {
+                    // Need to download first
+                    onDownload(message.id)
+                }
             },
         contentAlignment = Alignment.Center
     ) {
@@ -566,7 +576,8 @@ private fun VideoMessageContent(
     message: MessageEntity,
     isOutgoing: Boolean,
     onDownload: (String) -> Unit,
-    isDownloading: Boolean
+    isDownloading: Boolean,
+    onVideoClick: ((String) -> Unit)? = null
 ) {
     val localPath = message.attachmentLocalPath
     val hasLocalFile = remember(localPath) {
@@ -590,8 +601,14 @@ private fun VideoMessageContent(
                 BorderDefault.copy(alpha = 0.3f),
                 RoundedCornerShape(12.dp)
             )
-            .clickable(enabled = !hasLocalFile && !isDownloading) {
-                onDownload(message.id)
+            .clickable(enabled = !isDownloading) {
+                if (hasLocalFile && localPath != null) {
+                    // Video is downloaded, open player
+                    onVideoClick?.invoke(localPath)
+                } else {
+                    // Need to download first
+                    onDownload(message.id)
+                }
             },
         contentAlignment = Alignment.Center
     ) {
@@ -722,4 +739,296 @@ private fun MessageStatusIcon(status: String) {
         modifier = Modifier.size(14.dp),
         tint = tint
     )
+}
+
+/**
+ * Call message content showing call history as a message bubble.
+ * Displays call type (voice/video), outcome, and duration.
+ */
+@Composable
+private fun CallMessageContent(message: MessageEntity, isOutgoing: Boolean) {
+    // Parse call metadata from content JSON
+    val callMetadata = remember(message.content) {
+        try {
+            val json = org.json.JSONObject(message.content)
+            CallMetadata(
+                type = json.optString("type", "voice"),
+                outcome = json.optString("outcome", "ended"),
+                duration = json.optInt("duration", 0)
+            )
+        } catch (e: Exception) {
+            CallMetadata("voice", "ended", 0)
+        }
+    }
+
+    val isVideo = callMetadata.type == "video"
+    val isMissedOrDeclined = callMetadata.outcome in listOf("missed", "declined", "no_answer", "cancelled")
+    val isSuccessful = callMetadata.outcome in listOf("completed", "ended", "answered")
+
+    // Color based on outcome
+    val iconColor = when {
+        isMissedOrDeclined -> StatusError
+        isSuccessful -> StatusSuccess
+        else -> TextSecondary
+    }
+
+    // Icon based on call type and direction
+    val callIcon = when {
+        isVideo && isOutgoing -> Icons.Default.VideoCall
+        isVideo && !isOutgoing -> Icons.Default.VideoCall
+        isOutgoing -> Icons.Default.Call
+        else -> Icons.Default.Call
+    }
+
+    // Direction indicator
+    val directionIcon = when {
+        isMissedOrDeclined && !isOutgoing -> Icons.Default.CallMissed
+        isOutgoing -> Icons.Default.CallMade
+        else -> Icons.Default.CallReceived
+    }
+
+    // Outcome text
+    val outcomeText = when (callMetadata.outcome) {
+        "completed", "ended", "answered" -> if (isVideo) "Video Call" else "Voice Call"
+        "missed" -> "Missed ${if (isVideo) "Video" else ""} Call"
+        "declined" -> "Declined"
+        "no_answer" -> "No Answer"
+        "cancelled" -> "Cancelled"
+        "busy" -> "Busy"
+        "failed" -> "Failed"
+        else -> if (isVideo) "Video Call" else "Voice Call"
+    }
+
+    // Duration text
+    val durationText = if (callMetadata.duration > 0) {
+        formatDuration(callMetadata.duration)
+    } else {
+        null
+    }
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier.padding(vertical = 4.dp)
+    ) {
+        // Call type icon with background
+        Box(
+            modifier = Modifier
+                .size(44.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(
+                    Brush.linearGradient(
+                        colors = if (isMissedOrDeclined) {
+                            listOf(StatusError.copy(alpha = 0.2f), StatusError.copy(alpha = 0.1f))
+                        } else {
+                            listOf(StatusSuccess.copy(alpha = 0.2f), StatusSuccess.copy(alpha = 0.1f))
+                        }
+                    )
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                callIcon,
+                contentDescription = null,
+                tint = iconColor,
+                modifier = Modifier.size(24.dp)
+            )
+        }
+
+        Column(modifier = Modifier.weight(1f)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                // Direction indicator
+                Icon(
+                    directionIcon,
+                    contentDescription = null,
+                    tint = iconColor,
+                    modifier = Modifier.size(16.dp)
+                )
+                Text(
+                    text = outcomeText,
+                    color = if (isMissedOrDeclined) StatusError else Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
+            // Duration if available
+            if (durationText != null) {
+                Text(
+                    text = durationText,
+                    fontSize = 12.sp,
+                    color = Color.White.copy(alpha = 0.6f)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Data class for call metadata stored in message content.
+ */
+private data class CallMetadata(
+    val type: String,    // "voice" or "video"
+    val outcome: String, // "completed", "missed", "declined", "no_answer", "cancelled", "busy", "failed"
+    val duration: Int    // Duration in seconds
+)
+
+/**
+ * Format duration in seconds to human-readable string.
+ */
+private fun formatDuration(seconds: Int): String {
+    val hours = seconds / 3600
+    val minutes = (seconds % 3600) / 60
+    val secs = seconds % 60
+
+    return when {
+        hours > 0 -> String.format("%d:%02d:%02d", hours, minutes, secs)
+        minutes > 0 -> String.format("%d:%02d", minutes, secs)
+        else -> String.format("0:%02d", secs)
+    }
+}
+
+/**
+ * Standalone Call Message Bubble for use in conversation list or dedicated displays.
+ * This provides a full-width call record display with all details.
+ */
+@Composable
+fun CallMessageBubble(
+    callType: String,        // "voice" or "video"
+    outcome: String,         // "completed", "missed", "declined", etc.
+    duration: Int?,          // Duration in seconds (null if not answered)
+    isOutgoing: Boolean,     // true if user initiated the call
+    timestamp: Long,         // When the call occurred
+    modifier: Modifier = Modifier
+) {
+    val isVideo = callType == "video"
+    val isMissedOrDeclined = outcome in listOf("missed", "declined", "no_answer", "cancelled")
+    val isSuccessful = outcome in listOf("completed", "ended", "answered")
+
+    // Color scheme based on outcome
+    val accentColor = when {
+        isMissedOrDeclined -> StatusError
+        isSuccessful -> StatusSuccess
+        else -> TextSecondary
+    }
+
+    val backgroundColor = when {
+        isMissedOrDeclined -> StatusError.copy(alpha = 0.1f)
+        isSuccessful -> StatusSuccess.copy(alpha = 0.1f)
+        else -> MetalSurface1
+    }
+
+    // Icons
+    val callIcon = if (isVideo) Icons.Default.VideoCall else Icons.Default.Call
+
+    val directionIcon = when {
+        isMissedOrDeclined && !isOutgoing -> Icons.Default.CallMissed
+        isOutgoing -> Icons.Default.CallMade
+        else -> Icons.Default.CallReceived
+    }
+
+    // Text descriptions
+    val typeText = if (isVideo) "Video Call" else "Voice Call"
+    val outcomeText = when (outcome) {
+        "completed", "ended", "answered" -> if (isOutgoing) "Outgoing" else "Incoming"
+        "missed" -> "Missed"
+        "declined" -> "Declined"
+        "no_answer" -> "No Answer"
+        "cancelled" -> "Cancelled"
+        "busy" -> "Busy"
+        "failed" -> "Call Failed"
+        else -> ""
+    }
+
+    val formattedTime = remember(timestamp) {
+        java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(timestamp))
+    }
+
+    val durationText = duration?.let { formatDuration(it) }
+
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = backgroundColor
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // Call type icon
+            Box(
+                modifier = Modifier
+                    .size(52.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(accentColor.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    callIcon,
+                    contentDescription = null,
+                    tint = accentColor,
+                    modifier = Modifier.size(28.dp)
+                )
+            }
+
+            // Call details
+            Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        directionIcon,
+                        contentDescription = null,
+                        tint = accentColor,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = typeText,
+                        color = TextPrimary,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = outcomeText,
+                        color = if (isMissedOrDeclined) accentColor else TextSecondary,
+                        fontSize = 13.sp
+                    )
+
+                    if (durationText != null) {
+                        Text(
+                            text = "~",
+                            color = TextTertiary,
+                            fontSize = 13.sp
+                        )
+                        Text(
+                            text = durationText,
+                            color = TextSecondary,
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+            }
+
+            // Timestamp
+            Text(
+                text = formattedTime,
+                color = TextTertiary,
+                fontSize = 12.sp
+            )
+        }
+    }
 }

@@ -48,12 +48,26 @@ class ChatViewModel @Inject constructor(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
 
+    val contactAvatarPath: StateFlow<String?> = _peerId
+        .filter { it.isNotEmpty() }
+        .flatMapLatest { peerId ->
+            contactDao.getContactByWhisperId(peerId).map { it?.avatarPath }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
     val canSendMessages: StateFlow<Boolean> = _peerId
         .filter { it.isNotEmpty() }
         .flatMapLatest { peerId ->
             contactDao.getContactByWhisperId(peerId).map { it?.encPublicKey != null }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    val chatThemeId: StateFlow<String> = _peerId
+        .filter { it.isNotEmpty() }
+        .flatMapLatest { peerId ->
+            conversationDao.getConversation(peerId).map { it?.chatThemeId ?: "default" }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "default")
 
     val peerIsTyping: StateFlow<Boolean> = _peerIsTyping.asStateFlow()
 
@@ -153,6 +167,15 @@ class ChatViewModel @Inject constructor(
 
     fun clearError() {
         _error.value = null
+    }
+
+    /**
+     * Update the chat theme for this conversation.
+     */
+    fun setChatTheme(themeId: String) {
+        viewModelScope.launch {
+            conversationDao.setChatTheme(_peerId.value, themeId)
+        }
     }
 
     // Track which messages are downloading

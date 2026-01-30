@@ -3,6 +3,8 @@ package com.whisper2.app.ui.viewmodels
 import android.util.Base64
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.whisper2.app.core.StorageHelper
+import com.whisper2.app.core.StorageUsage
 import com.whisper2.app.data.local.db.WhisperDatabase
 import com.whisper2.app.data.local.prefs.SecureStorage
 import com.whisper2.app.services.auth.AuthService
@@ -15,7 +17,8 @@ import javax.inject.Inject
 class SettingsViewModel @Inject constructor(
     private val secureStorage: SecureStorage,
     private val authService: AuthService,
-    private val database: WhisperDatabase
+    private val database: WhisperDatabase,
+    private val storageHelper: StorageHelper
 ) : ViewModel() {
 
     private val _whisperId = MutableStateFlow<String?>(null)
@@ -30,8 +33,76 @@ class SettingsViewModel @Inject constructor(
     private val _deviceId = MutableStateFlow<String?>(null)
     val deviceId: StateFlow<String?> = _deviceId.asStateFlow()
 
+    // ═══════════════════════════════════════════════════════════════════
+    // NOTIFICATION SETTINGS
+    // ═══════════════════════════════════════════════════════════════════
+
+    private val _notificationsEnabled = MutableStateFlow(true)
+    val notificationsEnabled: StateFlow<Boolean> = _notificationsEnabled.asStateFlow()
+
+    private val _messagePreview = MutableStateFlow(true)
+    val messagePreview: StateFlow<Boolean> = _messagePreview.asStateFlow()
+
+    private val _notificationSound = MutableStateFlow(true)
+    val notificationSound: StateFlow<Boolean> = _notificationSound.asStateFlow()
+
+    private val _notificationVibration = MutableStateFlow(true)
+    val notificationVibration: StateFlow<Boolean> = _notificationVibration.asStateFlow()
+
+    // ═══════════════════════════════════════════════════════════════════
+    // PRIVACY SETTINGS
+    // ═══════════════════════════════════════════════════════════════════
+
+    private val _sendReadReceipts = MutableStateFlow(true)
+    val sendReadReceipts: StateFlow<Boolean> = _sendReadReceipts.asStateFlow()
+
+    private val _showTypingIndicator = MutableStateFlow(true)
+    val showTypingIndicator: StateFlow<Boolean> = _showTypingIndicator.asStateFlow()
+
+    private val _showOnlineStatus = MutableStateFlow(true)
+    val showOnlineStatus: StateFlow<Boolean> = _showOnlineStatus.asStateFlow()
+
+    // ═══════════════════════════════════════════════════════════════════
+    // AUTO-DOWNLOAD SETTINGS
+    // ═══════════════════════════════════════════════════════════════════
+
+    private val _autoDownloadPhotos = MutableStateFlow(true)
+    val autoDownloadPhotos: StateFlow<Boolean> = _autoDownloadPhotos.asStateFlow()
+
+    private val _autoDownloadVideos = MutableStateFlow(false)
+    val autoDownloadVideos: StateFlow<Boolean> = _autoDownloadVideos.asStateFlow()
+
+    private val _autoDownloadAudio = MutableStateFlow(true)
+    val autoDownloadAudio: StateFlow<Boolean> = _autoDownloadAudio.asStateFlow()
+
+    // ═══════════════════════════════════════════════════════════════════
+    // BIOMETRIC LOCK SETTINGS
+    // ═══════════════════════════════════════════════════════════════════
+
+    private val _biometricLockEnabled = MutableStateFlow(false)
+    val biometricLockEnabled: StateFlow<Boolean> = _biometricLockEnabled.asStateFlow()
+
+    private val _lockTimeoutMinutes = MutableStateFlow(0) // 0 = Immediately
+    val lockTimeoutMinutes: StateFlow<Int> = _lockTimeoutMinutes.asStateFlow()
+
+    // ═══════════════════════════════════════════════════════════════════
+    // STORAGE
+    // ═══════════════════════════════════════════════════════════════════
+
+    private val _storageUsage = MutableStateFlow(StorageUsage.EMPTY)
+    val storageUsage: StateFlow<StorageUsage> = _storageUsage.asStateFlow()
+
+    private val _isLoadingStorage = MutableStateFlow(false)
+    val isLoadingStorage: StateFlow<Boolean> = _isLoadingStorage.asStateFlow()
+
+    private val _isClearingCache = MutableStateFlow(false)
+    val isClearingCache: StateFlow<Boolean> = _isClearingCache.asStateFlow()
+
     init {
         loadUserData()
+        loadSettings()
+        loadStorageUsage()
+        loadBiometricSettings()
     }
 
     private fun loadUserData() {
@@ -39,6 +110,192 @@ class SettingsViewModel @Inject constructor(
         _deviceId.value = secureStorage.deviceId
         secureStorage.encPublicKey?.let {
             _encPublicKeyBase64.value = Base64.encodeToString(it, Base64.NO_WRAP)
+        }
+    }
+
+    private fun loadSettings() {
+        // Load notification settings
+        _notificationsEnabled.value = secureStorage.notificationsEnabled
+        _messagePreview.value = secureStorage.messagePreview
+        _notificationSound.value = secureStorage.notificationSound
+        _notificationVibration.value = secureStorage.notificationVibration
+
+        // Load privacy settings
+        _sendReadReceipts.value = secureStorage.sendReadReceipts
+        _showTypingIndicator.value = secureStorage.showTypingIndicator
+        _showOnlineStatus.value = secureStorage.showOnlineStatus
+
+        // Load auto-download settings
+        _autoDownloadPhotos.value = secureStorage.autoDownloadPhotos
+        _autoDownloadVideos.value = secureStorage.autoDownloadVideos
+        _autoDownloadAudio.value = secureStorage.autoDownloadAudio
+    }
+
+    private fun loadStorageUsage() {
+        viewModelScope.launch {
+            _isLoadingStorage.value = true
+            try {
+                _storageUsage.value = storageHelper.calculateStorageUsage()
+            } finally {
+                _isLoadingStorage.value = false
+            }
+        }
+    }
+
+    fun refreshStorageUsage() {
+        loadStorageUsage()
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // NOTIFICATION SETTERS
+    // ═══════════════════════════════════════════════════════════════════
+
+    fun setNotificationsEnabled(enabled: Boolean) {
+        _notificationsEnabled.value = enabled
+        secureStorage.notificationsEnabled = enabled
+    }
+
+    fun setMessagePreview(enabled: Boolean) {
+        _messagePreview.value = enabled
+        secureStorage.messagePreview = enabled
+    }
+
+    fun setNotificationSound(enabled: Boolean) {
+        _notificationSound.value = enabled
+        secureStorage.notificationSound = enabled
+    }
+
+    fun setNotificationVibration(enabled: Boolean) {
+        _notificationVibration.value = enabled
+        secureStorage.notificationVibration = enabled
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // PRIVACY SETTERS
+    // ═══════════════════════════════════════════════════════════════════
+
+    fun setSendReadReceipts(enabled: Boolean) {
+        _sendReadReceipts.value = enabled
+        secureStorage.sendReadReceipts = enabled
+    }
+
+    fun setShowTypingIndicator(enabled: Boolean) {
+        _showTypingIndicator.value = enabled
+        secureStorage.showTypingIndicator = enabled
+    }
+
+    fun setShowOnlineStatus(enabled: Boolean) {
+        _showOnlineStatus.value = enabled
+        secureStorage.showOnlineStatus = enabled
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // AUTO-DOWNLOAD SETTERS
+    // ═══════════════════════════════════════════════════════════════════
+
+    fun setAutoDownloadPhotos(enabled: Boolean) {
+        _autoDownloadPhotos.value = enabled
+        secureStorage.autoDownloadPhotos = enabled
+    }
+
+    fun setAutoDownloadVideos(enabled: Boolean) {
+        _autoDownloadVideos.value = enabled
+        secureStorage.autoDownloadVideos = enabled
+    }
+
+    fun setAutoDownloadAudio(enabled: Boolean) {
+        _autoDownloadAudio.value = enabled
+        secureStorage.autoDownloadAudio = enabled
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // STORAGE MANAGEMENT
+    // ═══════════════════════════════════════════════════════════════════
+
+    fun clearCache() {
+        viewModelScope.launch {
+            _isClearingCache.value = true
+            try {
+                storageHelper.clearCache()
+                loadStorageUsage() // Refresh storage info
+            } finally {
+                _isClearingCache.value = false
+            }
+        }
+    }
+
+    fun clearMedia() {
+        viewModelScope.launch {
+            _isClearingCache.value = true
+            try {
+                storageHelper.clearMedia()
+                loadStorageUsage() // Refresh storage info
+            } finally {
+                _isClearingCache.value = false
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // BIOMETRIC LOCK SETTERS
+    // ═══════════════════════════════════════════════════════════════════
+
+    private fun loadBiometricSettings() {
+        _biometricLockEnabled.value = secureStorage.biometricLockEnabled
+        _lockTimeoutMinutes.value = secureStorage.lockTimeoutMinutes
+    }
+
+    fun setBiometricLockEnabled(enabled: Boolean) {
+        _biometricLockEnabled.value = enabled
+        secureStorage.biometricLockEnabled = enabled
+    }
+
+    fun setLockTimeoutMinutes(minutes: Int) {
+        _lockTimeoutMinutes.value = minutes
+        secureStorage.lockTimeoutMinutes = minutes
+    }
+
+    /**
+     * Get human-readable label for timeout value.
+     */
+    fun getLockTimeoutLabel(minutes: Int): String {
+        return when (minutes) {
+            -1 -> "Never"
+            0 -> "Immediately"
+            1 -> "1 minute"
+            5 -> "5 minutes"
+            15 -> "15 minutes"
+            60 -> "1 hour"
+            else -> "$minutes minutes"
+        }
+    }
+
+    /**
+     * Available timeout options.
+     */
+    val lockTimeoutOptions = listOf(
+        0 to "Immediately",
+        1 to "1 minute",
+        5 to "5 minutes",
+        15 to "15 minutes",
+        60 to "1 hour",
+        -1 to "Never"
+    )
+
+    // ═══════════════════════════════════════════════════════════════════
+    // RESET SETTINGS
+    // ═══════════════════════════════════════════════════════════════════
+
+    /**
+     * Reset all settings to their default values.
+     * This preserves account data (seed phrase, contacts, messages).
+     */
+    fun resetSettings() {
+        viewModelScope.launch {
+            secureStorage.resetSettings()
+            // Reload settings to reflect changes in UI
+            loadSettings()
+            loadBiometricSettings()
         }
     }
 

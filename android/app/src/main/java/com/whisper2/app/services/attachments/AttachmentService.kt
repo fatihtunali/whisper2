@@ -187,6 +187,80 @@ class AttachmentService @Inject constructor(
         file
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // AUTO-DOWNLOAD SETTINGS
+    // ═══════════════════════════════════════════════════════════════════
+
+    /**
+     * Attachment type enum for auto-download checking.
+     */
+    enum class AttachmentType {
+        PHOTO,
+        VIDEO,
+        AUDIO,
+        OTHER
+    }
+
+    /**
+     * Determine attachment type from content type string.
+     */
+    fun getAttachmentType(contentType: String?): AttachmentType {
+        if (contentType == null) return AttachmentType.OTHER
+
+        return when {
+            contentType.startsWith("image/") -> AttachmentType.PHOTO
+            contentType.startsWith("video/") -> AttachmentType.VIDEO
+            contentType.startsWith("audio/") -> AttachmentType.AUDIO
+            else -> AttachmentType.OTHER
+        }
+    }
+
+    /**
+     * Check if auto-download is enabled for the given attachment type.
+     *
+     * @param contentType MIME type of the attachment
+     * @return true if auto-download is enabled for this type
+     */
+    fun shouldAutoDownload(contentType: String?): Boolean {
+        return when (getAttachmentType(contentType)) {
+            AttachmentType.PHOTO -> secureStorage.autoDownloadPhotos
+            AttachmentType.VIDEO -> secureStorage.autoDownloadVideos
+            AttachmentType.AUDIO -> secureStorage.autoDownloadAudio
+            AttachmentType.OTHER -> false // Never auto-download unknown file types
+        }
+    }
+
+    /**
+     * Check if auto-download is enabled for a specific attachment type.
+     */
+    fun shouldAutoDownload(type: AttachmentType): Boolean {
+        return when (type) {
+            AttachmentType.PHOTO -> secureStorage.autoDownloadPhotos
+            AttachmentType.VIDEO -> secureStorage.autoDownloadVideos
+            AttachmentType.AUDIO -> secureStorage.autoDownloadAudio
+            AttachmentType.OTHER -> false
+        }
+    }
+
+    /**
+     * Download attachment if auto-download is enabled for its type.
+     * Returns null if auto-download is disabled.
+     *
+     * @param pointer AttachmentPointer from the message
+     * @param senderPublicKey Sender's X25519 public key
+     * @return Decrypted file content, or null if auto-download is disabled
+     */
+    suspend fun downloadAttachmentIfAutoEnabled(
+        pointer: AttachmentPointer,
+        senderPublicKey: ByteArray
+    ): ByteArray? {
+        if (!shouldAutoDownload(pointer.contentType)) {
+            Logger.d("[AttachmentService] Auto-download disabled for type: ${pointer.contentType}")
+            return null
+        }
+        return downloadAttachment(pointer, senderPublicKey)
+    }
+
     private fun readFile(uri: Uri): Triple<ByteArray, String, String> {
         val contentResolver = context.contentResolver
 

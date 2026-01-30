@@ -29,6 +29,10 @@ struct ContactProfileView: View {
         contactsService.hasValidPublicKey(for: peerId)
     }
 
+    private var isMuted: Bool {
+        messagingService.isMuted(for: peerId)
+    }
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
@@ -199,6 +203,25 @@ struct ContactProfileView: View {
                                 Image(systemName: "chevron.right")
                                     .font(.caption)
                                     .foregroundColor(.gray)
+                            }
+                            .foregroundColor(.white)
+                            .padding()
+                            .background(Color.gray.opacity(0.2))
+                            .cornerRadius(12)
+                        }
+
+                        // Mute notifications toggle
+                        Button(action: { messagingService.toggleMute(for: peerId) }) {
+                            HStack {
+                                Image(systemName: isMuted ? "bell.slash.fill" : "bell.fill")
+                                    .frame(width: 24)
+                                Text(isMuted ? "Unmute Notifications" : "Mute Notifications")
+                                Spacer()
+                                if isMuted {
+                                    Text("Muted")
+                                        .font(.caption)
+                                        .foregroundColor(.orange)
+                                }
                             }
                             .foregroundColor(.white)
                             .padding()

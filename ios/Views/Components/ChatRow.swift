@@ -31,21 +31,35 @@ struct ChatRow: View {
 
             // Content
             VStack(alignment: .leading, spacing: 4) {
-                HStack {
+                HStack(spacing: 4) {
+                    // Pinned indicator
+                    if conversation.isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.caption2)
+                            .foregroundColor(.blue)
+                    }
+
                     Text(displayName)
                         .font(.headline)
                         .foregroundColor(.white)
                         .lineLimit(1)
-                    
+
+                    // Muted indicator
+                    if conversation.isMuted {
+                        Image(systemName: "bell.slash.fill")
+                            .font(.caption2)
+                            .foregroundColor(.gray)
+                    }
+
                     Spacer()
-                    
+
                     if let timeString = conversation.lastMessageTimeString {
                         Text(timeString)
                             .font(.caption)
                             .foregroundColor(.gray)
                     }
                 }
-                
+
                 HStack {
                     if conversation.isTyping {
                         Text("typing...")
@@ -58,9 +72,9 @@ struct ChatRow: View {
                             .foregroundColor(.gray)
                             .lineLimit(1)
                     }
-                    
+
                     Spacer()
-                    
+
                     if conversation.hasUnread {
                         Text("\(conversation.unreadCount)")
                             .font(.caption)
@@ -68,7 +82,7 @@ struct ChatRow: View {
                             .foregroundColor(.white)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
-                            .background(Color.blue)
+                            .background(conversation.isMuted ? Color.gray : Color.blue)
                             .clipShape(Capsule())
                     }
                 }

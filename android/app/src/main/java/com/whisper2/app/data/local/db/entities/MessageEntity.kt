@@ -13,7 +13,7 @@ data class MessageEntity(
     val groupId: String? = null,
     val from: String,
     val to: String,
-    val contentType: String = "text", // text, audio, location, image, video, file
+    val contentType: String = "text", // text, audio, location, image, video, file, call
     val content: String,
     val timestamp: Long,
     val status: String = "pending", // pending, sent, delivered, read, failed

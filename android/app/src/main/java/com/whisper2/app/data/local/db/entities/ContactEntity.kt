@@ -11,6 +11,9 @@ data class ContactEntity(
     val signPublicKey: String? = null,
     val isBlocked: Boolean = false,
     val isMessageRequest: Boolean = false,
+    val isOnline: Boolean = false,
+    val lastSeen: Long? = null,
+    val avatarPath: String? = null,
     val addedAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )

@@ -28,6 +28,7 @@ fun GroupInfoScreen(
     groupId: String,
     onBack: () -> Unit,
     onAddMembers: () -> Unit,
+    onGroupLeft: () -> Unit = onBack,  // Navigate back to groups list after leaving
     viewModel: GroupInfoViewModel = hiltViewModel()
 ) {
     val group by viewModel.group.collectAsState()
@@ -233,7 +234,7 @@ fun GroupInfoScreen(
                     onClick = {
                         viewModel.leaveGroup()
                         showLeaveDialog = false
-                        onBack()
+                        onGroupLeft()
                     }
                 ) {
                     Text("Leave", color = Color(0xFFEF4444))

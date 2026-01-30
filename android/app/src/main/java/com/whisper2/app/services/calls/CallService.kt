@@ -14,7 +14,11 @@ import com.whisper2.app.services.auth.AuthService
 import com.whisper2.app.services.auth.AuthState
 import com.whisper2.app.data.local.db.dao.CallRecordDao
 import com.whisper2.app.data.local.db.dao.ContactDao
+import com.whisper2.app.data.local.db.dao.ConversationDao
+import com.whisper2.app.data.local.db.dao.MessageDao
 import com.whisper2.app.data.local.db.entities.CallRecordEntity
+import com.whisper2.app.data.local.db.entities.ConversationEntity
+import com.whisper2.app.data.local.db.entities.MessageEntity
 import com.whisper2.app.data.local.prefs.SecureStorage
 import com.whisper2.app.data.network.ws.CallAnswerNotificationPayload
 import com.whisper2.app.data.network.ws.CallAnswerPayload
@@ -79,6 +83,8 @@ class CallService @Inject constructor(
     private val cryptoService: CryptoService,
     private val contactDao: ContactDao,
     private val callRecordDao: CallRecordDao,
+    private val messageDao: MessageDao,
+    private val conversationDao: ConversationDao,
     private val gson: Gson,
     private val authService: dagger.Lazy<AuthService>,
     @ApplicationScope private val scope: CoroutineScope
@@ -1606,6 +1612,102 @@ class CallService @Inject constructor(
         )
 
         callRecordDao.insert(record)
+
+        // Save call as a message in the conversation for chat history
+        saveCallMessage(call, status, duration)
+    }
+
+    /**
+     * Save a call record as a message in the conversation.
+     * This allows call history to appear in the chat timeline.
+     */
+    private suspend fun saveCallMessage(call: ActiveCall, outcome: String, duration: Int?) {
+        val whisperId = secureStorage.whisperId ?: return
+        val timestamp = System.currentTimeMillis()
+
+        // Ensure conversation exists
+        val existingConversation = conversationDao.getConversationById(call.peerId)
+        if (existingConversation == null) {
+            // Create conversation if it doesn't exist
+            val contact = contactDao.getContactById(call.peerId)
+            val conversation = ConversationEntity(
+                peerId = call.peerId,
+                peerNickname = contact?.displayName ?: call.peerName,
+                lastMessagePreview = formatCallSummary(call.isVideo, outcome, duration),
+                lastMessageTimestamp = timestamp,
+                unreadCount = 0
+            )
+            conversationDao.insert(conversation)
+        } else {
+            // Update conversation's last message
+            conversationDao.updateLastMessage(
+                conversationId = call.peerId,
+                message = formatCallSummary(call.isVideo, outcome, duration),
+                timestamp = timestamp
+            )
+        }
+
+        // Create call metadata JSON
+        val callMetadata = JSONObject().apply {
+            put("type", if (call.isVideo) "video" else "voice")
+            put("outcome", outcome)
+            put("duration", duration ?: 0)
+        }.toString()
+
+        // Create message entity for the call
+        val messageId = "${call.callId}-msg"
+        val message = MessageEntity(
+            id = messageId,
+            conversationId = call.peerId,
+            from = if (call.isOutgoing) whisperId else call.peerId,
+            to = if (call.isOutgoing) call.peerId else whisperId,
+            contentType = "call",
+            content = callMetadata,
+            timestamp = timestamp,
+            status = "delivered",
+            direction = if (call.isOutgoing) "outgoing" else "incoming"
+        )
+
+        messageDao.insert(message)
+        Logger.i("[CallService] Saved call message to conversation: ${call.peerId}, outcome: $outcome")
+    }
+
+    /**
+     * Format a brief summary of the call for conversation preview.
+     */
+    private fun formatCallSummary(isVideo: Boolean, outcome: String, duration: Int?): String {
+        val callType = if (isVideo) "Video call" else "Voice call"
+        return when (outcome) {
+            "completed", "ended", "answered" -> {
+                if (duration != null && duration > 0) {
+                    "$callType (${formatDurationBrief(duration)})"
+                } else {
+                    callType
+                }
+            }
+            "missed" -> "Missed $callType"
+            "declined" -> "Declined $callType"
+            "no_answer" -> "$callType - No answer"
+            "cancelled" -> "Cancelled $callType"
+            "busy" -> "$callType - Busy"
+            "failed" -> "$callType - Failed"
+            else -> callType
+        }
+    }
+
+    /**
+     * Format duration in seconds to brief human-readable string.
+     */
+    private fun formatDurationBrief(seconds: Int): String {
+        val hours = seconds / 3600
+        val minutes = (seconds % 3600) / 60
+        val secs = seconds % 60
+
+        return when {
+            hours > 0 -> String.format("%d:%02d:%02d", hours, minutes, secs)
+            minutes > 0 -> String.format("%d:%02d", minutes, secs)
+            else -> String.format("0:%02d", secs)
+        }
     }
 
     // MARK: - Cleanup
@@ -1672,7 +1774,6 @@ class CallService @Inject constructor(
         remoteVideoSinkAdded = false
 
         // Reset audio
-        audioManager.mode = AudioManager.MODE_NORMAL
         audioManager.mode = AudioManager.MODE_NORMAL
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             audioManager.clearCommunicationDevice()

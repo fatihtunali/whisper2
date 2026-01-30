@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
     <cache-path name="attachments" path="attachments/" />
+    <cache-path name="temp_images" path="temp_images/" />
+    <cache-path name="voice_messages" path="voice_messages/" />
+    <cache-path name="cache" path="." />
     <files-path name="files" path="." />
+    <files-path name="avatars" path="avatars/" />
     <external-files-path name="external_files" path="." />
 </paths>

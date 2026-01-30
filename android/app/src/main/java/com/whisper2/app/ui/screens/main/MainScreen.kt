@@ -8,11 +8,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.whisper2.app.data.network.ws.WsConnectionState
 import com.whisper2.app.ui.theme.*
+import com.whisper2.app.ui.viewmodels.MainViewModel
 
 sealed class MainTab(val route: String, val title: String, val icon: ImageVector) {
     object Chats : MainTab("chats", "Chats", Icons.AutoMirrored.Filled.Chat)
@@ -28,10 +31,15 @@ fun MainScreen(
     onNavigateToProfile: () -> Unit,
     onNavigateToScanQr: () -> Unit,
     onNavigateToContactProfile: (String) -> Unit,
-    onLogout: () -> Unit
+    onNavigateToMessageRequests: () -> Unit,
+    onNavigateToBlockedUsers: () -> Unit,
+    onNavigateToFontSize: () -> Unit = {},
+    onLogout: () -> Unit,
+    mainViewModel: MainViewModel = hiltViewModel()
 ) {
     val navController = rememberNavController()
     val tabs = listOf(MainTab.Chats, MainTab.Groups, MainTab.Contacts, MainTab.Settings)
+    val connectionState by mainViewModel.connectionState.collectAsState()
 
     Scaffold(
         bottomBar = {
@@ -70,7 +78,11 @@ fun MainScreen(
             modifier = Modifier.padding(padding)
         ) {
             composable(MainTab.Chats.route) {
-                ChatsListScreen(onChatClick = onNavigateToChat)
+                ChatsListScreen(
+                    onChatClick = onNavigateToChat,
+                    onMessageRequestsClick = onNavigateToMessageRequests,
+                    connectionState = connectionState
+                )
             }
             composable(MainTab.Groups.route) {
                 GroupsListScreen(onGroupClick = onNavigateToGroup)
@@ -85,7 +97,9 @@ fun MainScreen(
             composable(MainTab.Settings.route) {
                 SettingsScreen(
                     onProfileClick = onNavigateToProfile,
-                    onLogout = onLogout
+                    onLogout = onLogout,
+                    onNavigateToBlockedUsers = onNavigateToBlockedUsers,
+                    onNavigateToFontSize = onNavigateToFontSize
                 )
             }
         }

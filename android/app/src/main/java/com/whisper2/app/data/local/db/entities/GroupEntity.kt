@@ -34,3 +34,16 @@ data class GroupMemberEntity(
     val role: String = "member", // admin, member
     val joinedAt: Long = System.currentTimeMillis()
 )
+
+/**
+ * Represents a pending group invitation that has not yet been accepted or declined.
+ */
+@Entity(tableName = "group_invites")
+data class GroupInviteEntity(
+    @PrimaryKey val groupId: String,
+    val groupName: String,
+    val inviterId: String,
+    val inviterName: String,
+    val memberCount: Int = 0,
+    val createdAt: Long = System.currentTimeMillis()
+)

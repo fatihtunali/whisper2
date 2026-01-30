@@ -397,6 +397,20 @@ extension PushNotificationService: UNUserNotificationCenterDelegate {
     }
 
     private func shouldShowNotification(_ userInfo: [AnyHashable: Any]) -> Bool {
+        // Check if the conversation is muted
+        if let senderId = userInfo["senderId"] as? String {
+            if MessagingService.shared.isMuted(for: senderId) {
+                return false
+            }
+        }
+
+        // Check if the group is muted
+        if let groupId = userInfo["groupId"] as? String {
+            if MessagingService.shared.isMuted(for: groupId) {
+                return false
+            }
+        }
+
         // TODO: Check if user is currently viewing the relevant chat/call
         return true
     }

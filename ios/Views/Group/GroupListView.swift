@@ -4,6 +4,8 @@ import SwiftUI
 struct GroupListView: View {
     @ObservedObject var groupService = GroupService.shared
     @State private var showCreateGroup = false
+    @State private var showLeaveConfirmation = false
+    @State private var groupToLeave: ChatGroup?
 
     private var pendingInvites: [GroupInvite] {
         groupService.getPendingInvites()
@@ -29,6 +31,30 @@ struct GroupListView: View {
                                     GroupInviteRow(invite: invite)
                                         .listRowBackground(Color.black)
                                         .listRowSeparatorTint(Color.gray.opacity(0.3))
+                                        // Swipe left to decline invite
+                                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                            Button(role: .destructive) {
+                                                Task {
+                                                    try? await groupService.declineInvite(invite.groupId)
+                                                }
+                                            } label: {
+                                                Label("Decline", systemImage: "xmark.circle")
+                                            }
+                                        }
+                                        // Swipe right to accept invite
+                                        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                            Button {
+                                                Task {
+                                                    try? await groupService.acceptInvite(invite.groupId)
+                                                    // Haptic feedback
+                                                    let notification = UINotificationFeedbackGenerator()
+                                                    notification.notificationOccurred(.success)
+                                                }
+                                            } label: {
+                                                Label("Accept", systemImage: "checkmark.circle")
+                                            }
+                                            .tint(.green)
+                                        }
                                 }
                             } header: {
                                 Text("Pending Invites")
@@ -46,6 +72,26 @@ struct GroupListView: View {
                                     }
                                     .listRowBackground(Color.black)
                                     .listRowSeparatorTint(Color.gray.opacity(0.3))
+                                    // Swipe left: Leave group
+                                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                        Button(role: .destructive) {
+                                            groupToLeave = group
+                                            showLeaveConfirmation = true
+                                        } label: {
+                                            Label("Leave", systemImage: "rectangle.portrait.and.arrow.right")
+                                        }
+                                    }
+                                    // Swipe right: Mute group (future feature)
+                                    .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                        Button {
+                                            // TODO: Implement group mute
+                                            let impact = UIImpactFeedbackGenerator(style: .medium)
+                                            impact.impactOccurred()
+                                        } label: {
+                                            Label("Mute", systemImage: "bell.slash")
+                                        }
+                                        .tint(.purple)
+                                    }
                                 }
                             } header: {
                                 if !pendingInvites.isEmpty {
@@ -69,6 +115,26 @@ struct GroupListView: View {
             }
             .sheet(isPresented: $showCreateGroup) {
                 CreateGroupView()
+            }
+            .alert("Leave Group", isPresented: $showLeaveConfirmation) {
+                Button("Cancel", role: .cancel) {
+                    groupToLeave = nil
+                }
+                Button("Leave", role: .destructive) {
+                    if let group = groupToLeave {
+                        Task {
+                            try? await groupService.leaveGroup(group.id)
+                            // Haptic feedback
+                            let notification = UINotificationFeedbackGenerator()
+                            notification.notificationOccurred(.warning)
+                        }
+                    }
+                    groupToLeave = nil
+                }
+            } message: {
+                if let group = groupToLeave {
+                    Text("Are you sure you want to leave \"\(group.title)\"? You will need to be invited again to rejoin.")
+                }
             }
         }
     }

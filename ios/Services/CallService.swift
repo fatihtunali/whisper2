@@ -84,6 +84,10 @@ final class CallService: NSObject, ObservableObject {
     // Audio session state - tracks if CallKit has activated before tracks are ready
     private var isAudioSessionActivated = false
 
+    // Camera capture state - prevent double startCapture calls
+    private var isCameraCapturing = false
+    private var currentCameraPosition: AVCaptureDevice.Position = .front
+
     // Storage
     private let callHistoryStorageKey = "whisper2.call.history"
     private var currentCallStartTime: Date?
@@ -659,11 +663,12 @@ final class CallService: NSObject, ObservableObject {
         let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
         print("Switching camera to \(newPosition == .front ? "front" : "back"): \(dimensions.width)x\(dimensions.height) @ \(selectedFps)fps")
 
-        capturer.startCapture(with: device, format: format, fps: selectedFps) { error in
+        capturer.startCapture(with: device, format: format, fps: selectedFps) { [weak self] error in
             if let error = error {
                 print("ERROR: Failed to switch camera: \(error.localizedDescription)")
             } else {
-                print("Camera switched successfully")
+                self?.currentCameraPosition = newPosition
+                print("Camera switched successfully to \(newPosition == .front ? "front" : "back")")
             }
         }
     }
@@ -790,6 +795,12 @@ final class CallService: NSObject, ObservableObject {
     private func startCameraCapture() {
         print("=== startCameraCapture BEGIN ===")
 
+        // Prevent double capture starts
+        guard !isCameraCapturing else {
+            print("=== startCameraCapture SKIPPED: Camera already capturing ===")
+            return
+        }
+
         guard let capturer = videoCapturer else {
             print("ERROR: No video capturer available")
             return
@@ -863,11 +874,13 @@ final class CallService: NSObject, ObservableObject {
         print("Starting camera capture: \(dimensions.width)x\(dimensions.height) @ \(selectedFps)fps")
 
         // Start capture with completion handler for error handling
-        capturer.startCapture(with: device, format: format, fps: selectedFps) { error in
+        capturer.startCapture(with: device, format: format, fps: selectedFps) { [weak self] error in
             if let error = error {
                 print("ERROR: Camera capture failed to start: \(error.localizedDescription)")
             } else {
-                print("Camera capture started successfully")
+                self?.isCameraCapturing = true
+                self?.currentCameraPosition = device.position
+                print("Camera capture started successfully - isCameraCapturing = true")
             }
         }
 
@@ -1103,6 +1116,13 @@ final class CallService: NSObject, ObservableObject {
             print("  from: \(payload.from)")
             print("  isVideo: \(payload.isVideo)")
 
+            // DEDUPLICATION: Check if this call is already being handled
+            // VoIP push may have already set this state and reported to CallKit
+            if activeCallId == payload.callId {
+                print("=== handleCallIncoming SKIPPED: Call \(payload.callId) already active (likely from VoIP push) ===")
+                return
+            }
+
             // Store pending incoming call for CallKit answer flow
             pendingIncomingCall = payload
 
@@ -1321,7 +1341,8 @@ final class CallService: NSObject, ObservableObject {
         // Stop video capture first
         if let capturer = videoCapturer {
             capturer.stopCapture()
-            print("Stopped previous video capture")
+            isCameraCapturing = false
+            print("Stopped previous video capture - isCameraCapturing = false")
         }
         videoCapturer = nil
 
@@ -1388,6 +1409,7 @@ final class CallService: NSObject, ObservableObject {
 
         // Stop video capture first
         videoCapturer?.stopCapture()
+        isCameraCapturing = false
         videoCapturer = nil
 
         // Capture tracks before cleanup
@@ -1567,6 +1589,7 @@ final class CallService: NSObject, ObservableObject {
 
         // Stop video capture
         videoCapturer?.stopCapture()
+        isCameraCapturing = false
 
         // Close peer connection
         peerConnection?.close()

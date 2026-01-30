@@ -28,8 +28,12 @@ import com.whisper2.app.ui.screens.main.MainScreen
 import com.whisper2.app.ui.screens.main.ChatScreen
 import com.whisper2.app.ui.screens.main.GroupChatScreen
 import com.whisper2.app.ui.screens.main.GroupInfoScreen
+import com.whisper2.app.ui.screens.main.MessageRequestsScreen
+import com.whisper2.app.ui.screens.media.ImageViewerScreen
+import com.whisper2.app.ui.screens.media.VideoPlayerScreen
 import com.whisper2.app.ui.screens.settings.BlockedUsersScreen
 import com.whisper2.app.ui.screens.settings.DisappearingMessageSettingsScreen
+import com.whisper2.app.ui.screens.settings.FontSizeSettingsScreen
 import com.whisper2.app.data.local.db.entities.DisappearingMessageTimer
 import com.whisper2.app.ui.screens.calls.CallScreen
 import com.whisper2.app.ui.NotificationData
@@ -78,6 +82,14 @@ sealed class Screen(val route: String) {
     object BlockedUsers : Screen("blocked_users")
     object DisappearingMessages : Screen("disappearing_messages/{conversationId}") {
         fun createRoute(conversationId: String) = "disappearing_messages/$conversationId"
+    }
+    object MessageRequests : Screen("message_requests")
+    object FontSize : Screen("font_size")
+    object ImageViewer : Screen("image_viewer/{imagePath}") {
+        fun createRoute(imagePath: String) = "image_viewer/${Uri.encode(imagePath)}"
+    }
+    object VideoPlayer : Screen("video_player/{videoPath}") {
+        fun createRoute(videoPath: String) = "video_player/${Uri.encode(videoPath)}"
     }
 }
 
@@ -199,6 +211,15 @@ fun MainNavigation(
                 onNavigateToContactProfile = { peerId ->
                     navController.navigate(Screen.ContactProfile.createRoute(peerId))
                 },
+                onNavigateToMessageRequests = {
+                    navController.navigate(Screen.MessageRequests.route)
+                },
+                onNavigateToBlockedUsers = {
+                    navController.navigate(Screen.BlockedUsers.route)
+                },
+                onNavigateToFontSize = {
+                    navController.navigate(Screen.FontSize.route)
+                },
                 onLogout = {
                     authViewModel.logout()
                 }
@@ -289,6 +310,12 @@ fun MainNavigation(
                 },
                 onNavigateToProfile = {
                     navController.navigate(Screen.ContactProfile.createRoute(peerId))
+                },
+                onImageClick = { imagePath ->
+                    navController.navigate(Screen.ImageViewer.createRoute(imagePath))
+                },
+                onVideoClick = { videoPath ->
+                    navController.navigate(Screen.VideoPlayer.createRoute(videoPath))
                 }
             )
         }
@@ -303,6 +330,10 @@ fun MainNavigation(
                 onBack = { navController.popBackStack() },
                 onNavigateToGroupInfo = {
                     navController.navigate(Screen.GroupInfo.createRoute(groupId))
+                },
+                onGroupLeft = {
+                    // Navigate back to groups list after leaving
+                    navController.popBackStack(Screen.Main.route, inclusive = false)
                 }
             )
         }
@@ -336,6 +367,10 @@ fun MainNavigation(
                 onBack = { navController.popBackStack() },
                 onAddMembers = {
                     navController.navigate(Screen.AddGroupMembers.createRoute(groupId))
+                },
+                onGroupLeft = {
+                    // Navigate back to groups list (pop both GroupInfo and GroupChat screens)
+                    navController.popBackStack(Screen.Main.route, inclusive = false)
                 }
             )
         }
@@ -356,6 +391,50 @@ fun MainNavigation(
             DisappearingMessageSettingsScreen(
                 conversationId = conversationId,
                 onBack = { navController.popBackStack() }
+            )
+        }
+
+        // Message Requests Screen
+        composable(Screen.MessageRequests.route) {
+            MessageRequestsScreen(
+                onBack = { navController.popBackStack() },
+                onRequestAccepted = { peerId ->
+                    // Navigate to chat after accepting
+                    navController.navigate(Screen.Chat.createRoute(peerId)) {
+                        popUpTo(Screen.MessageRequests.route) { inclusive = true }
+                    }
+                }
+            )
+        }
+
+        // Font Size Settings Screen
+        composable(Screen.FontSize.route) {
+            FontSizeSettingsScreen(
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        // Image Viewer Screen
+        composable(
+            route = Screen.ImageViewer.route,
+            arguments = listOf(navArgument("imagePath") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val imagePath = Uri.decode(backStackEntry.arguments?.getString("imagePath") ?: "")
+            ImageViewerScreen(
+                imagePath = imagePath,
+                onClose = { navController.popBackStack() }
+            )
+        }
+
+        // Video Player Screen
+        composable(
+            route = Screen.VideoPlayer.route,
+            arguments = listOf(navArgument("videoPath") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val videoPath = Uri.decode(backStackEntry.arguments?.getString("videoPath") ?: "")
+            VideoPlayerScreen(
+                videoPath = videoPath,
+                onClose = { navController.popBackStack() }
             )
         }
 

@@ -78,9 +78,8 @@ data class MessageReceivedPayload(
     val replyTo: String? = null,
     val reactions: Map<String, List<String>>? = null,  // emoji -> whisperId[]
     val attachment: AttachmentPointer? = null,
-    // Sender's public keys for message requests (allows adding contact without QR scan)
-    val senderEncPublicKey: String? = null,
-    val senderSignPublicKey: String? = null
+    // Sender's public key for message requests (allows adding contact without QR scan)
+    val senderEncPublicKey: String? = null
 )
 
 // Attachment structure matching server protocol.ts
@@ -143,6 +142,24 @@ data class TypingPayload(
 data class TypingNotificationPayload(
     val from: String,
     val isTyping: Boolean
+)
+
+// Presence
+data class PresenceUpdatePayload(
+    val whisperId: String,
+    val status: String,  // "online" | "offline"
+    val lastSeen: Long? = null
+)
+
+/**
+ * Payload to update presence settings (whether to share online status with others).
+ * When showOnlineStatus is false, the server should not broadcast presence updates for this user.
+ */
+data class PresenceSettingsPayload(
+    val protocolVersion: Int = Constants.PROTOCOL_VERSION,
+    val cryptoVersion: Int = Constants.CRYPTO_VERSION,
+    val sessionToken: String,
+    val showOnlineStatus: Boolean
 )
 
 // Delete message
@@ -283,17 +300,25 @@ data class CallIceCandidateNotificationPayload(
     val sig: String
 )
 
-// Incoming call_end notification from server (minimal payload)
+// Incoming call_end notification from server (matches iOS CallEndReceivedPayload)
 data class CallEndNotificationPayload(
     val callId: String,
     val from: String,
-    val reason: String
+    val reason: String,
+    val timestamp: Long? = null,
+    val nonce: String? = null,
+    val ciphertext: String? = null,
+    val sig: String? = null
 )
 
 // System
 data class PingPayload(val timestamp: Long)
 data class PongPayload(val timestamp: Long, val serverTime: Long)
-data class ErrorPayload(val code: String, val message: String)
+data class ErrorPayload(
+    val code: String,
+    val message: String,
+    val requestId: String? = null
+)
 
 // Tokens
 data class UpdateTokensPayload(

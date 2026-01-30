@@ -1098,6 +1098,58 @@ final class MessagingService: ObservableObject {
         return conversation?.disappearingMessageTimer ?? .off
     }
 
+    // MARK: - Mute Notifications
+
+    /// Toggle mute status for a conversation
+    func toggleMute(for conversationId: String) {
+        conversationsLock.lock()
+        defer { conversationsLock.unlock() }
+
+        objectWillChange.send()
+        if let index = conversations.firstIndex(where: { $0.peerId == conversationId }) {
+            conversations[index].isMuted.toggle()
+        } else {
+            // Create conversation if it doesn't exist
+            let contact = contactsService.getContact(whisperId: conversationId)
+            let conv = Conversation(
+                peerId: conversationId,
+                peerNickname: contact?.nickname,
+                isMuted: true
+            )
+            conversations.append(conv)
+        }
+        saveConversationsToStorage()
+    }
+
+    /// Set mute status for a conversation
+    func setMuted(_ muted: Bool, for conversationId: String) {
+        conversationsLock.lock()
+        defer { conversationsLock.unlock() }
+
+        objectWillChange.send()
+        if let index = conversations.firstIndex(where: { $0.peerId == conversationId }) {
+            conversations[index].isMuted = muted
+        } else {
+            // Create conversation if it doesn't exist
+            let contact = contactsService.getContact(whisperId: conversationId)
+            let conv = Conversation(
+                peerId: conversationId,
+                peerNickname: contact?.nickname,
+                isMuted: muted
+            )
+            conversations.append(conv)
+        }
+        saveConversationsToStorage()
+    }
+
+    /// Check if a conversation is muted
+    func isMuted(for conversationId: String) -> Bool {
+        conversationsLock.lock()
+        let conversation = conversations.first { $0.peerId == conversationId }
+        conversationsLock.unlock()
+        return conversation?.isMuted ?? false
+    }
+
     /// Start the background timer that checks for expired messages
     private func startDisappearingMessagesTimer() {
         // Check every 30 seconds for expired messages
@@ -1156,5 +1208,79 @@ final class MessagingService: ObservableObject {
 
         keychain.delete(key: messagesStorageKey)
         keychain.delete(key: conversationsStorageKey)
+    }
+
+    // MARK: - Pin/Unpin Conversations
+
+    /// Toggle pin status for a conversation
+    func togglePin(conversationId: String) {
+        conversationsLock.lock()
+        defer { conversationsLock.unlock() }
+
+        if let index = conversations.firstIndex(where: { $0.peerId == conversationId }) {
+            objectWillChange.send()
+            conversations[index].isPinned.toggle()
+            saveConversationsToStorage()
+        }
+    }
+
+    /// Set pin status for a conversation
+    func setPin(conversationId: String, isPinned: Bool) {
+        conversationsLock.lock()
+        defer { conversationsLock.unlock() }
+
+        if let index = conversations.firstIndex(where: { $0.peerId == conversationId }) {
+            if conversations[index].isPinned != isPinned {
+                objectWillChange.send()
+                conversations[index].isPinned = isPinned
+                saveConversationsToStorage()
+            }
+        }
+    }
+
+    // MARK: - Mute/Unmute Conversations
+
+    /// Toggle mute status for a conversation
+    func toggleMute(conversationId: String) {
+        conversationsLock.lock()
+        defer { conversationsLock.unlock() }
+
+        if let index = conversations.firstIndex(where: { $0.peerId == conversationId }) {
+            objectWillChange.send()
+            conversations[index].isMuted.toggle()
+            saveConversationsToStorage()
+        }
+    }
+
+    /// Set mute status for a conversation
+    func setMute(conversationId: String, isMuted: Bool) {
+        conversationsLock.lock()
+        defer { conversationsLock.unlock() }
+
+        if let index = conversations.firstIndex(where: { $0.peerId == conversationId }) {
+            if conversations[index].isMuted != isMuted {
+                objectWillChange.send()
+                conversations[index].isMuted = isMuted
+                saveConversationsToStorage()
+            }
+        }
+    }
+
+    // MARK: - Archive Conversations
+
+    /// Archive a conversation (removes from main list but keeps data)
+    /// For now, this is implemented as a delete since we don't have a separate archived list
+    /// In a full implementation, archived conversations would be stored separately
+    func archiveConversation(conversationId: String) {
+        // For now, archiving just deletes the conversation
+        // TODO: Implement proper archive storage when needed
+        deleteConversation(conversationId: conversationId)
+    }
+
+    /// Get conversation for a peer ID
+    func getConversation(for peerId: String) -> Conversation? {
+        conversationsLock.lock()
+        defer { conversationsLock.unlock() }
+        return conversations.first { $0.peerId == peerId }
     }
 }

@@ -5,7 +5,11 @@ struct ContactsListView: View {
     @StateObject private var viewModel = ContactsViewModel()
     @State private var showAddContact = false
     @State private var searchText = ""
-    
+    @State private var showDeleteConfirmation = false
+    @State private var contactToDelete: Contact?
+    @State private var showBlockConfirmation = false
+    @State private var contactToBlock: Contact?
+
     private var filteredContacts: [Contact] {
         if searchText.isEmpty {
             return viewModel.contacts
@@ -15,12 +19,12 @@ struct ContactsListView: View {
             $0.whisperId.localizedCaseInsensitiveContains(searchText)
         }
     }
-    
+
     var body: some View {
         NavigationStack {
             ZStack {
                 Color.black.ignoresSafeArea()
-                
+
                 if viewModel.contacts.isEmpty {
                     EmptyContactsView(showAddContact: $showAddContact)
                 } else {
@@ -29,8 +33,38 @@ struct ContactsListView: View {
                             ContactRow(contact: contact)
                                 .listRowBackground(Color.black)
                                 .listRowSeparatorTint(Color.gray.opacity(0.3))
+                                // Swipe left: Delete contact
+                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                    Button(role: .destructive) {
+                                        contactToDelete = contact
+                                        showDeleteConfirmation = true
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                }
+                                // Swipe right: Block/Unblock
+                                .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                    if contact.isBlocked {
+                                        Button {
+                                            viewModel.unblockContact(contact.whisperId)
+                                            // Haptic feedback
+                                            let notification = UINotificationFeedbackGenerator()
+                                            notification.notificationOccurred(.success)
+                                        } label: {
+                                            Label("Unblock", systemImage: "hand.raised.slash")
+                                        }
+                                        .tint(.green)
+                                    } else {
+                                        Button {
+                                            contactToBlock = contact
+                                            showBlockConfirmation = true
+                                        } label: {
+                                            Label("Block", systemImage: "hand.raised")
+                                        }
+                                        .tint(.red)
+                                    }
+                                }
                         }
-                        .onDelete(perform: deleteContact)
                     }
                     .listStyle(.plain)
                     .searchable(text: $searchText, prompt: "Search contacts")
@@ -47,11 +81,40 @@ struct ContactsListView: View {
             .sheet(isPresented: $showAddContact) {
                 AddContactView(viewModel: viewModel)
             }
+            .alert("Delete Contact", isPresented: $showDeleteConfirmation) {
+                Button("Cancel", role: .cancel) {
+                    contactToDelete = nil
+                }
+                Button("Delete", role: .destructive) {
+                    if let contact = contactToDelete {
+                        viewModel.deleteContact(contact)
+                    }
+                    contactToDelete = nil
+                }
+            } message: {
+                if let contact = contactToDelete {
+                    Text("Are you sure you want to delete \(contact.displayName)? All messages with this contact will also be deleted.")
+                }
+            }
+            .alert("Block Contact", isPresented: $showBlockConfirmation) {
+                Button("Cancel", role: .cancel) {
+                    contactToBlock = nil
+                }
+                Button("Block", role: .destructive) {
+                    if let contact = contactToBlock {
+                        viewModel.blockContact(contact.whisperId)
+                        // Haptic feedback
+                        let notification = UINotificationFeedbackGenerator()
+                        notification.notificationOccurred(.warning)
+                    }
+                    contactToBlock = nil
+                }
+            } message: {
+                if let contact = contactToBlock {
+                    Text("Block \(contact.displayName)? They won't be able to send you messages or calls.")
+                }
+            }
         }
-    }
-    
-    private func deleteContact(at offsets: IndexSet) {
-        viewModel.deleteContacts(at: offsets)
     }
 }
 

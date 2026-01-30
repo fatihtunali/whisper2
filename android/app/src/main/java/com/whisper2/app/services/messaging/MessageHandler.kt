@@ -96,6 +96,9 @@ class MessageHandler @Inject constructor(
             Constants.MsgType.MESSAGE_DELIVERED -> {
                 handleMessageDelivered(frame.payload)
             }
+            Constants.MsgType.PRESENCE_UPDATE -> {
+                handlePresenceUpdate(frame.payload)
+            }
         }
     }
 
@@ -270,9 +273,20 @@ class MessageHandler @Inject constructor(
         }
     }
 
+    /**
+     * Send delivery/read receipt to sender.
+     * Respects the sendReadReceipts privacy setting for "read" status.
+     * Always sends "delivered" status regardless of setting.
+     */
     private fun sendDeliveryReceipt(messageId: String, from: String, status: String) {
         scope.launch {
             try {
+                // For "read" status, check privacy setting
+                if (status == Constants.DeliveryStatus.READ && !secureStorage.sendReadReceipts) {
+                    Logger.d("[MessageHandler] Read receipts disabled in privacy settings")
+                    return@launch
+                }
+
                 val myId = secureStorage.whisperId ?: return@launch
                 val token = secureStorage.sessionToken ?: return@launch
 
@@ -285,11 +299,24 @@ class MessageHandler @Inject constructor(
                     timestamp = System.currentTimeMillis()
                 )
                 wsClient.send(WsFrame(Constants.MsgType.DELIVERY_RECEIPT, payload = payload))
-                Logger.d("[MessageHandler] Sent delivery receipt for $messageId")
+                Logger.d("[MessageHandler] Sent $status receipt for $messageId")
             } catch (e: Exception) {
                 Logger.e("[MessageHandler] Failed to send delivery receipt", e)
             }
         }
+    }
+
+    /**
+     * Send read receipt for a message.
+     * Public method for when user reads a message (e.g., opens chat).
+     * Respects the sendReadReceipts privacy setting.
+     */
+    fun sendReadReceipt(messageId: String, senderId: String) {
+        if (!secureStorage.sendReadReceipts) {
+            Logger.d("[MessageHandler] Read receipts disabled in privacy settings")
+            return
+        }
+        sendDeliveryReceipt(messageId, senderId, Constants.DeliveryStatus.READ)
     }
 
     /**
@@ -437,6 +464,23 @@ class MessageHandler @Inject constructor(
             messageDao.updateStatus(data.messageId, data.status)
         } catch (e: Exception) {
             Logger.e("[MessageHandler] Failed to handle message delivered", e)
+        }
+    }
+
+    /**
+     * Handle presence update notification from server.
+     * Updates contact's online status and last seen timestamp.
+     */
+    private suspend fun handlePresenceUpdate(payload: JsonElement) {
+        try {
+            val data = gson.fromJson(payload, PresenceUpdatePayload::class.java)
+            Logger.d("[MessageHandler] Presence update: ${data.whisperId} is ${data.status}")
+
+            // Update contact's presence status
+            val isOnline = data.status == Constants.PresenceStatus.ONLINE
+            contactDao.updatePresence(data.whisperId, isOnline, data.lastSeen)
+        } catch (e: Exception) {
+            Logger.e("[MessageHandler] Failed to handle presence update", e)
         }
     }
 

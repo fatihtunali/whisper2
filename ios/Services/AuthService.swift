@@ -428,7 +428,14 @@ final class AuthService: ObservableObject {
                 authLock.unlock()
                 cont?.resume(throwing: AuthError.registrationFailed(frame.payload.message))
             }
-            
+
+        case Constants.MessageType.sessionRefreshAck:
+            if let frame = try? JSONDecoder().decode(WsFrame<SessionRefreshAckPayload>.self, from: data) {
+                // Update stored session token and expiry
+                keychain.setString(frame.payload.sessionToken, for: Constants.StorageKey.sessionToken)
+                Logger.auth("Session refreshed: expires at \(frame.payload.sessionExpiresAt)")
+            }
+
         default:
             break
         }

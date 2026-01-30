@@ -155,6 +155,11 @@ export class ConnectionManager {
 
   /**
    * Remove a connection on disconnect or kick.
+   *
+   * NOTE: The in-memory maps are deleted first (synchronous), then Redis (async).
+   * This ordering is intentional - if a new connection arrives between these operations,
+   * the Redis check (redisConnId === connId) prevents deleting the NEW connection's entry.
+   * The in-memory map is the source of truth; Redis is for distributed access/presence.
    */
   async removeConnection(connId: string, reason?: string): Promise<void> {
     const conn = this.connections.get(connId);
@@ -162,7 +167,7 @@ export class ConnectionManager {
 
     const { whisperId, deviceId } = conn;
 
-    // Remove from maps
+    // Remove from in-memory maps first (synchronous, source of truth)
     this.connections.delete(connId);
     if (whisperId) {
       // Only remove user mapping if this is the current connection
@@ -172,10 +177,10 @@ export class ConnectionManager {
       }
     }
 
-    // Clean up Redis
+    // Clean up Redis (async, check prevents race with new connections)
     await redis.del(RedisKeys.connection(connId));
     if (whisperId) {
-      // Only remove if this was the active connection
+      // Only remove if this was the active connection (prevents deleting new connection's entry)
       const redisConnId = await redis.get(RedisKeys.userConnection(whisperId));
       if (redisConnId === connId) {
         await redis.del(RedisKeys.userConnection(whisperId));
@@ -348,12 +353,12 @@ export class ConnectionManager {
    */
   private pingAllConnections(): void {
     const now = Date.now();
-    const staleConnections: string[] = [];
+    const staleConnections: Array<{ connId: string; reason: 'timeout' | 'ping_failed' | 'not_open' }> = [];
 
     for (const [connId, conn] of this.connections) {
       // Check if connection is stale (no activity within timeout)
       if (now - conn.lastActivity > this.CONNECTION_TIMEOUT) {
-        staleConnections.push(connId);
+        staleConnections.push({ connId, reason: 'timeout' });
         continue;
       }
 
@@ -363,31 +368,31 @@ export class ConnectionManager {
           conn.ws.ping();
         } catch (err) {
           logger.error({ err, connId }, 'Failed to send ping');
-          staleConnections.push(connId);
+          staleConnections.push({ connId, reason: 'ping_failed' });
         }
       } else {
         // Connection not open, mark for removal
-        staleConnections.push(connId);
+        staleConnections.push({ connId, reason: 'not_open' });
       }
     }
 
     // Remove stale connections
-    for (const connId of staleConnections) {
+    for (const { connId, reason } of staleConnections) {
       const conn = this.connections.get(connId);
       logger.warn(
-        { connId, whisperId: conn?.whisperId, lastActivity: conn?.lastActivity },
+        { connId, whisperId: conn?.whisperId, lastActivity: conn?.lastActivity, reason },
         'Closing stale connection'
       );
 
       try {
         if (conn?.ws.readyState === WebSocket.OPEN) {
-          conn.ws.close(4000, 'Connection timeout');
+          conn.ws.close(4000, `Connection ${reason}`);
         }
       } catch {
         // Ignore close errors
       }
 
-      this.removeConnection(connId, 'timeout').catch((err) => {
+      this.removeConnection(connId, reason).catch((err) => {
         logger.error({ err, connId }, 'Error removing stale connection');
       });
     }

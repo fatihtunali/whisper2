@@ -2,12 +2,14 @@ package com.whisper2.app.ui.screens.main
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -33,6 +35,10 @@ import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.google.android.gms.location.LocationServices
 import com.whisper2.app.ui.components.AttachmentType
+import com.whisper2.app.ui.components.ChatTheme
+import com.whisper2.app.ui.components.ChatThemePickerSheet
+import com.whisper2.app.ui.components.ChatThemes
+import com.whisper2.app.ui.components.ContactAvatar
 import com.whisper2.app.ui.components.MessageBubble
 import com.whisper2.app.ui.components.MessageInputBar
 import com.whisper2.app.ui.theme.*
@@ -48,18 +54,26 @@ fun ChatScreen(
     onVoiceCall: () -> Unit,
     onVideoCall: () -> Unit,
     onNavigateToProfile: () -> Unit = {},
+    onImageClick: (String) -> Unit = {},
+    onVideoClick: (String) -> Unit = {},
     viewModel: ChatViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val messages by viewModel.messages.collectAsState()
     val contactName by viewModel.contactName.collectAsState()
+    val contactAvatarPath by viewModel.contactAvatarPath.collectAsState()
     val canSendMessages by viewModel.canSendMessages.collectAsState()
     val isTyping by viewModel.peerIsTyping.collectAsState()
     val error by viewModel.error.collectAsState()
     val downloadingMessages by viewModel.downloadingMessages.collectAsState()
+    val chatThemeId by viewModel.chatThemeId.collectAsState()
     var messageText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
+
+    // Chat theme
+    val chatTheme = remember(chatThemeId) { ChatThemes.getThemeById(chatThemeId) }
+    var showThemePicker by remember { mutableStateOf(false) }
 
     // Voice recording state
     var isRecording by remember { mutableStateOf(false) }
@@ -70,6 +84,12 @@ fun ChatScreen(
     // Pending attachment state (for preview before sending)
     var pendingAttachmentUri by remember { mutableStateOf<String?>(null) }
     var pendingAttachmentType by remember { mutableStateOf<String?>(null) }
+
+    // Pending voice message state (for preview before sending)
+    var pendingVoicePath by remember { mutableStateOf<String?>(null) }
+    var pendingVoiceDuration by remember { mutableStateOf(0L) }
+    var isPlayingPreview by remember { mutableStateOf(false) }
+    var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
 
     // Photo/Video picker - stores URI for preview instead of sending immediately
     val photoVideoPicker = rememberLauncherForActivityResult(
@@ -132,10 +152,11 @@ fun ChatScreen(
         }
     }
 
-    // Cleanup recorder on dispose
+    // Cleanup recorder and player on dispose
     DisposableEffect(Unit) {
         onDispose {
             mediaRecorder?.release()
+            mediaPlayer?.release()
         }
     }
 
@@ -153,10 +174,22 @@ fun ChatScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
-                        Text(contactName, color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
-                        if (isTyping) {
-                            Text("typing...", color = PrimaryBlue, fontSize = 12.sp)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.clickable(onClick = onNavigateToProfile)
+                    ) {
+                        ContactAvatar(
+                            displayName = contactName,
+                            avatarPath = contactAvatarPath,
+                            size = 36.dp,
+                            fontSize = 14.sp
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(contactName, color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                            if (isTyping) {
+                                Text("typing...", color = PrimaryBlue, fontSize = 12.sp)
+                            }
                         }
                     }
                 },
@@ -201,6 +234,14 @@ fun ChatScreen(
                                 onClick = { showMenu = false },
                                 leadingIcon = { Icon(Icons.Default.NotificationsOff, null, tint = TextSecondary) }
                             )
+                            DropdownMenuItem(
+                                text = { Text("Chat Theme", color = TextPrimary) },
+                                onClick = {
+                                    showMenu = false
+                                    showThemePicker = true
+                                },
+                                leadingIcon = { Icon(Icons.Default.Palette, null, tint = TextSecondary) }
+                            )
                             HorizontalDivider(color = BorderDefault)
                             DropdownMenuItem(
                                 text = { Text("Clear Chat", color = StatusError) },
@@ -213,12 +254,19 @@ fun ChatScreen(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MetalNavy)
             )
         },
-        containerColor = MetalDark
+        containerColor = chatTheme.backgroundColor
     ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .background(
+                    if (chatTheme.backgroundGradient != null) {
+                        Brush.verticalGradient(chatTheme.backgroundGradient)
+                    } else {
+                        Brush.verticalGradient(listOf(chatTheme.backgroundColor, chatTheme.backgroundColor))
+                    }
+                )
                 .imePadding()  // This makes the content adjust when keyboard appears
         ) {
             // Key missing warning
@@ -280,7 +328,9 @@ fun ChatScreen(
                         message = message,
                         onDelete = { forEveryone -> viewModel.deleteMessage(message.id, forEveryone) },
                         onDownload = { messageId -> viewModel.downloadAttachment(messageId) },
-                        isDownloading = message.id in downloadingMessages
+                        isDownloading = message.id in downloadingMessages,
+                        onImageClick = onImageClick,
+                        onVideoClick = onVideoClick
                     )
                 }
             }
@@ -393,7 +443,9 @@ fun ChatScreen(
                         TextButton(
                             onClick = {
                                 // Cancel recording
-                                mediaRecorder?.stop()
+                                try {
+                                    mediaRecorder?.stop()
+                                } catch (_: Exception) {}
                                 mediaRecorder?.release()
                                 mediaRecorder = null
                                 audioFilePath?.let { File(it).delete() }
@@ -404,16 +456,125 @@ fun ChatScreen(
                         }
                         TextButton(
                             onClick = {
-                                // Stop and send recording
-                                mediaRecorder?.stop()
+                                // Stop recording and show preview
+                                try {
+                                    mediaRecorder?.stop()
+                                } catch (_: Exception) {}
                                 mediaRecorder?.release()
                                 mediaRecorder = null
                                 isRecording = false
                                 val duration = System.currentTimeMillis() - recordingStartTime
                                 audioFilePath?.let { path ->
-                                    viewModel.sendVoiceMessage(path, duration)
-                                    Toast.makeText(context, "Sending voice message...", Toast.LENGTH_SHORT).show()
+                                    pendingVoicePath = path
+                                    pendingVoiceDuration = duration
                                 }
+                            }
+                        ) {
+                            Text("Done", color = PrimaryBlue, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+
+            // Voice message preview (after recording)
+            pendingVoicePath?.let { voicePath ->
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MetalSurface1.copy(alpha = 0.95f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Play/Pause button
+                        IconButton(
+                            onClick = {
+                                if (isPlayingPreview) {
+                                    // Stop playback
+                                    mediaPlayer?.stop()
+                                    mediaPlayer?.release()
+                                    mediaPlayer = null
+                                    isPlayingPreview = false
+                                } else {
+                                    // Start playback
+                                    try {
+                                        mediaPlayer?.release()
+                                        mediaPlayer = MediaPlayer().apply {
+                                            setDataSource(voicePath)
+                                            prepare()
+                                            setOnCompletionListener {
+                                                isPlayingPreview = false
+                                            }
+                                            start()
+                                        }
+                                        isPlayingPreview = true
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "Error playing preview", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(PrimaryBlue)
+                        ) {
+                            Icon(
+                                imageVector = if (isPlayingPreview) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                contentDescription = if (isPlayingPreview) "Stop" else "Play",
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(12.dp))
+
+                        // Voice message info
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Voice Message",
+                                color = TextPrimary,
+                                fontWeight = FontWeight.Medium,
+                                fontSize = 14.sp
+                            )
+                            Text(
+                                formatVoiceDuration(pendingVoiceDuration),
+                                color = TextSecondary,
+                                fontSize = 12.sp
+                            )
+                        }
+
+                        // Cancel button
+                        TextButton(
+                            onClick = {
+                                // Stop playback and delete
+                                mediaPlayer?.stop()
+                                mediaPlayer?.release()
+                                mediaPlayer = null
+                                isPlayingPreview = false
+                                File(voicePath).delete()
+                                pendingVoicePath = null
+                                pendingVoiceDuration = 0
+                            }
+                        ) {
+                            Text("Cancel", color = TextTertiary)
+                        }
+
+                        // Send button
+                        TextButton(
+                            onClick = {
+                                // Stop playback
+                                mediaPlayer?.stop()
+                                mediaPlayer?.release()
+                                mediaPlayer = null
+                                isPlayingPreview = false
+
+                                // Send voice message
+                                viewModel.sendVoiceMessage(voicePath, pendingVoiceDuration)
+                                Toast.makeText(context, "Sending voice message...", Toast.LENGTH_SHORT).show()
+
+                                // Clear preview state
+                                pendingVoicePath = null
+                                pendingVoiceDuration = 0
                             }
                         ) {
                             Text("Send", color = PrimaryBlue, fontWeight = FontWeight.Bold)
@@ -445,15 +606,17 @@ fun ChatScreen(
                 },
                 onVoiceMessage = {
                     if (isRecording) {
-                        // Stop and send recording
-                        mediaRecorder?.stop()
+                        // Stop recording and show preview (don't send immediately)
+                        try {
+                            mediaRecorder?.stop()
+                        } catch (_: Exception) {}
                         mediaRecorder?.release()
                         mediaRecorder = null
                         isRecording = false
                         val duration = System.currentTimeMillis() - recordingStartTime
                         audioFilePath?.let { path ->
-                            viewModel.sendVoiceMessage(path, duration)
-                            Toast.makeText(context, "Sending voice message...", Toast.LENGTH_SHORT).show()
+                            pendingVoicePath = path
+                            pendingVoiceDuration = duration
                         }
                     } else {
                         // Check permission and start recording
@@ -491,10 +654,32 @@ fun ChatScreen(
                         locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
                     }
                 },
-                isEnabled = canSendMessages && !isRecording
+                isEnabled = canSendMessages && !isRecording && pendingVoicePath == null
             )
         }
     }
+
+    // Theme picker sheet
+    if (showThemePicker) {
+        ChatThemePickerSheet(
+            currentThemeId = chatThemeId,
+            onThemeSelected = { theme ->
+                viewModel.setChatTheme(theme.id)
+                showThemePicker = false
+            },
+            onDismiss = { showThemePicker = false }
+        )
+    }
+}
+
+/**
+ * Format voice message duration for display.
+ */
+private fun formatVoiceDuration(durationMs: Long): String {
+    val totalSeconds = durationMs / 1000
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return String.format("%d:%02d", minutes, seconds)
 }
 
 @Composable

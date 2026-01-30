@@ -1,9 +1,15 @@
 package com.whisper2.app.ui.screens.contacts
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.pm.PackageManager
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -21,13 +27,20 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.hilt.navigation.compose.hiltViewModel
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import com.whisper2.app.core.AvatarHelper
 import com.whisper2.app.data.local.db.entities.ContactEntity
 import com.whisper2.app.ui.viewmodels.ContactProfileViewModel
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -39,11 +52,56 @@ fun ContactProfileScreen(
     onNavigateToChat: () -> Unit,
     viewModel: ContactProfileViewModel = hiltViewModel()
 ) {
+    val context = LocalContext.current
     val contact by viewModel.contact.collectAsState()
+    val avatarUpdateTrigger by viewModel.avatarUpdateTrigger.collectAsState()
     var showEditNickname by remember { mutableStateOf(false) }
     var showBlockConfirm by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showAvatarOptions by remember { mutableStateOf(false) }
     var newNickname by remember { mutableStateOf("") }
+
+    // Camera capture state
+    var tempPhotoFile by remember { mutableStateOf<File?>(null) }
+
+    // Photo picker launcher
+    val photoPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let {
+            viewModel.updateAvatarFromUri(peerId, it)
+            Toast.makeText(context, "Avatar updated", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // Camera launcher
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { success ->
+        if (success && tempPhotoFile != null) {
+            viewModel.updateAvatarFromFile(peerId, tempPhotoFile!!.absolutePath)
+            Toast.makeText(context, "Avatar updated", Toast.LENGTH_SHORT).show()
+        }
+        tempPhotoFile = null
+    }
+
+    // Camera permission launcher
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            // Create temp file and launch camera
+            tempPhotoFile = viewModel.createTempImageFile()
+            val uri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                tempPhotoFile!!
+            )
+            cameraLauncher.launch(uri)
+        } else {
+            Toast.makeText(context, "Camera permission required", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     LaunchedEffect(peerId) {
         viewModel.loadContact(peerId)
@@ -72,11 +130,15 @@ fun ContactProfileScreen(
         ) {
             Spacer(modifier = Modifier.height(20.dp))
 
-            // Avatar
+            // Avatar - clickable to edit
+            val hasCustomAvatar = contact?.avatarPath != null &&
+                viewModel.isAvatarValid(contact?.avatarPath)
+
             Box(
                 modifier = Modifier
                     .size(120.dp)
                     .clip(CircleShape)
+                    .clickable { showAvatarOptions = true }
                     .background(
                         Brush.linearGradient(
                             colors = listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6))
@@ -84,12 +146,42 @@ fun ContactProfileScreen(
                     ),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = (contact?.displayName?.firstOrNull() ?: '?').uppercase().toString(),
-                    fontSize = 50.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color.White
-                )
+                if (hasCustomAvatar) {
+                    // Use key to force recomposition when avatar updates
+                    key(avatarUpdateTrigger) {
+                        AsyncImage(
+                            model = ImageRequest.Builder(context)
+                                .data(File(contact!!.avatarPath!!))
+                                .crossfade(true)
+                                .build(),
+                            contentDescription = "Contact avatar",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                } else {
+                    Text(
+                        text = (contact?.displayName?.firstOrNull() ?: '?').uppercase().toString(),
+                        fontSize = 50.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White
+                    )
+                }
+
+                // Camera icon overlay
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.3f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.CameraAlt,
+                        contentDescription = "Edit avatar",
+                        tint = Color.White.copy(alpha = 0.8f),
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -303,6 +395,119 @@ fun ContactProfileScreen(
                 }
             }
         )
+    }
+
+    // Avatar options bottom sheet
+    if (showAvatarOptions) {
+        val hasAvatar = contact?.avatarPath != null && viewModel.isAvatarValid(contact?.avatarPath)
+
+        ModalBottomSheet(
+            onDismissRequest = { showAvatarOptions = false },
+            containerColor = Color(0xFF1A1A1A)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+            ) {
+                Text(
+                    "Edit Photo",
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    fontSize = 20.sp
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Take Photo option
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            showAvatarOptions = false
+                            // Check camera permission
+                            if (ContextCompat.checkSelfPermission(
+                                    context,
+                                    Manifest.permission.CAMERA
+                                ) == PackageManager.PERMISSION_GRANTED
+                            ) {
+                                tempPhotoFile = viewModel.createTempImageFile()
+                                val uri = FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.fileprovider",
+                                    tempPhotoFile!!
+                                )
+                                cameraLauncher.launch(uri)
+                            } else {
+                                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                            }
+                        }
+                        .padding(vertical = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.CameraAlt,
+                        contentDescription = null,
+                        tint = Color(0xFF3B82F6),
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Text("Take Photo", color = Color.White, fontSize = 16.sp)
+                }
+
+                HorizontalDivider(color = Color.Gray.copy(alpha = 0.3f))
+
+                // Choose from Gallery option
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            showAvatarOptions = false
+                            photoPicker.launch("image/*")
+                        }
+                        .padding(vertical = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.PhotoLibrary,
+                        contentDescription = null,
+                        tint = Color(0xFF8B5CF6),
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Text("Choose from Gallery", color = Color.White, fontSize = 16.sp)
+                }
+
+                // Remove Photo option (only if has avatar)
+                if (hasAvatar) {
+                    HorizontalDivider(color = Color.Gray.copy(alpha = 0.3f))
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                showAvatarOptions = false
+                                viewModel.removeAvatar(peerId)
+                                Toast
+                                    .makeText(context, "Avatar removed", Toast.LENGTH_SHORT)
+                                    .show()
+                            }
+                            .padding(vertical = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = null,
+                            tint = Color(0xFFEF4444),
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Text("Remove Photo", color = Color(0xFFEF4444), fontSize = 16.sp)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+            }
+        }
     }
 }
 

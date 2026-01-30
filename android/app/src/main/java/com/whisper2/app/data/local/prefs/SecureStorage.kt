@@ -157,6 +157,142 @@ class SecureStorage(private val context: Context, private val keystoreManager: K
             .apply()
     }
 
+    // Font size setting
+    var fontSize: String
+        get() = prefs.getString("font_size", "medium") ?: "medium"
+        set(value) = prefs.edit().putString("font_size", value).apply()
+
+    // ═══════════════════════════════════════════════════════════════════
+    // NOTIFICATION SETTINGS
+    // ═══════════════════════════════════════════════════════════════════
+
+    var notificationsEnabled: Boolean
+        get() = prefs.getBoolean("notifications_enabled", true)
+        set(value) = prefs.edit().putBoolean("notifications_enabled", value).apply()
+
+    var messagePreview: Boolean
+        get() = prefs.getBoolean("message_preview", true)
+        set(value) = prefs.edit().putBoolean("message_preview", value).apply()
+
+    var notificationSound: Boolean
+        get() = prefs.getBoolean("notification_sound", true)
+        set(value) = prefs.edit().putBoolean("notification_sound", value).apply()
+
+    var notificationVibration: Boolean
+        get() = prefs.getBoolean("notification_vibration", true)
+        set(value) = prefs.edit().putBoolean("notification_vibration", value).apply()
+
+    // ═══════════════════════════════════════════════════════════════════
+    // PRIVACY SETTINGS
+    // ═══════════════════════════════════════════════════════════════════
+
+    var sendReadReceipts: Boolean
+        get() = prefs.getBoolean("send_read_receipts", true)
+        set(value) = prefs.edit().putBoolean("send_read_receipts", value).apply()
+
+    var showTypingIndicator: Boolean
+        get() = prefs.getBoolean("show_typing_indicator", true)
+        set(value) = prefs.edit().putBoolean("show_typing_indicator", value).apply()
+
+    var showOnlineStatus: Boolean
+        get() = prefs.getBoolean("show_online_status", true)
+        set(value) = prefs.edit().putBoolean("show_online_status", value).apply()
+
+    // ═══════════════════════════════════════════════════════════════════
+    // BIOMETRIC LOCK SETTINGS
+    // ═══════════════════════════════════════════════════════════════════
+
+    var biometricLockEnabled: Boolean
+        get() = prefs.getBoolean("biometric_lock_enabled", false)
+        set(value) = prefs.edit().putBoolean("biometric_lock_enabled", value).apply()
+
+    /**
+     * Lock timeout in minutes.
+     * -1 = Never lock
+     *  0 = Immediately (default)
+     *  1 = 1 minute
+     *  5 = 5 minutes
+     * 15 = 15 minutes
+     * 60 = 1 hour
+     */
+    var lockTimeoutMinutes: Int
+        get() = prefs.getInt("lock_timeout_minutes", 0) // 0 = Immediately
+        set(value) = prefs.edit().putInt("lock_timeout_minutes", value).apply()
+
+    var lastBackgroundTime: Long
+        get() = prefs.getLong("last_background_time", 0L)
+        set(value) = prefs.edit().putLong("last_background_time", value).apply()
+
+    /**
+     * Check if lock screen should be shown based on timeout.
+     * Returns true if biometric lock is enabled and timeout has elapsed.
+     */
+    fun shouldShowLockScreen(): Boolean {
+        if (!biometricLockEnabled) return false
+
+        val timeout = lockTimeoutMinutes
+        if (timeout == -1) return false // Never lock
+
+        val now = System.currentTimeMillis()
+        val elapsed = now - lastBackgroundTime
+        val timeoutMs = timeout * 60 * 1000L
+
+        return elapsed >= timeoutMs
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // AUTO-DOWNLOAD SETTINGS
+    // ═══════════════════════════════════════════════════════════════════
+
+    var autoDownloadPhotos: Boolean
+        get() = prefs.getBoolean("auto_download_photos", true)
+        set(value) = prefs.edit().putBoolean("auto_download_photos", value).apply()
+
+    var autoDownloadVideos: Boolean
+        get() = prefs.getBoolean("auto_download_videos", false)
+        set(value) = prefs.edit().putBoolean("auto_download_videos", value).apply()
+
+    var autoDownloadAudio: Boolean
+        get() = prefs.getBoolean("auto_download_audio", true)
+        set(value) = prefs.edit().putBoolean("auto_download_audio", value).apply()
+
+    // ═══════════════════════════════════════════════════════════════════
+    // SETTINGS RESET
+    // ═══════════════════════════════════════════════════════════════════
+
+    /**
+     * Reset all settings to their default values.
+     * This preserves account data (seed phrase, keys, contacts, messages).
+     */
+    fun resetSettings() {
+        prefs.edit()
+            // Auto-download settings - reset to defaults
+            .putBoolean("auto_download_photos", true)
+            .putBoolean("auto_download_videos", false)
+            .putBoolean("auto_download_audio", true)
+            // Notification settings - reset to defaults
+            .putBoolean("notifications_enabled", true)
+            .putBoolean("message_preview", true)
+            .putBoolean("notification_sound", true)
+            .putBoolean("notification_vibration", true)
+            // Privacy settings - reset to defaults
+            .putBoolean("send_read_receipts", true)
+            .putBoolean("show_typing_indicator", true)
+            .putBoolean("show_online_status", true)
+            // Font size - reset to default
+            .putString("font_size", "medium")
+            // Biometric lock - reset to defaults
+            .putBoolean("biometric_lock_enabled", false)
+            .putInt("lock_timeout_minutes", 0)
+            // Clear temporary state
+            .remove("active_call_id")
+            .remove("active_call_peer_id")
+            .remove("ringing_call_id")
+            .remove("ringing_started_at")
+            .remove("last_background_time")
+            .apply()
+    }
+
     fun clearAll() {
         prefs.edit().clear().apply()
         keystoreManager.deleteKey()

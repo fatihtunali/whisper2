@@ -161,6 +161,7 @@ dependencies {
     // Security
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("androidx.biometric:biometric:1.1.0")
 
     // WebRTC - Stream WebRTC (latest stable v1.3.9 with m125 patches)
     implementation("io.getstream:stream-webrtc-android:1.3.9")
@@ -181,6 +182,12 @@ dependencies {
 
     // Image
     implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
+
+    // Video Player (Media3 ExoPlayer)
+    implementation("androidx.media3:media3-exoplayer:1.5.1")
+    implementation("androidx.media3:media3-ui:1.5.1")
+    implementation("androidx.media3:media3-common:1.5.1")
 
     // QR & Camera
     implementation("com.google.zxing:core:3.5.3")

@@ -50,6 +50,9 @@ class WsClientImpl @Inject constructor(
     private var lastPongTime: Long = System.currentTimeMillis()
     private val pongTimeout: Long = 60_000  // 60 seconds timeout for pong
 
+    // Reconnect job - track so we can cancel on network restore
+    private var reconnectJob: Job? = null
+
     fun connect() {
         // Prevent multiple simultaneous connect attempts
         val currentState = _connectionState.value
@@ -183,10 +186,12 @@ class WsClientImpl @Inject constructor(
     private fun attemptReconnect() {
         if (reconnectPolicy.shouldRetry()) {
             _connectionState.value = WsConnectionState.RECONNECTING
-            scope.launch {
+            reconnectJob?.cancel()
+            reconnectJob = scope.launch {
                 val delayMs = reconnectPolicy.getDelayMs()
                 Logger.ws("Reconnecting in ${delayMs}ms (attempt ${reconnectPolicy.attemptCount})")
                 delay(delayMs)
+                reconnectJob = null
                 connect()
             }
         } else {
@@ -220,6 +225,8 @@ class WsClientImpl @Inject constructor(
 
     fun disconnect() {
         stopHeartbeat()
+        reconnectJob?.cancel()
+        reconnectJob = null
         webSocket?.close(1000, "Client disconnect")
         webSocket = null
         _connectionState.value = WsConnectionState.DISCONNECTED
@@ -235,5 +242,51 @@ class WsClientImpl @Inject constructor(
      */
     fun resetReconnectPolicy() {
         reconnectPolicy.reset()
+    }
+
+    /**
+     * Update network availability status.
+     * Called by App when network connectivity changes.
+     *
+     * IMPORTANT:
+     * - Only triggers reconnect on false→true transition
+     * - This prevents reconnect storms from frequent onCapabilitiesChanged callbacks
+     * - If we're in backoff (RECONNECTING), cancel the delay and reconnect immediately
+     * - Backoff counter is reset when network becomes available (done in reconnectPolicy)
+     */
+    fun setNetworkAvailable(available: Boolean) {
+        val wasAvailable = reconnectPolicy.isNetworkAvailable()
+
+        // No change - ignore to prevent storms
+        if (available == wasAvailable) {
+            return
+        }
+
+        // Update policy (this also resets backoff counter if becoming available)
+        reconnectPolicy.setNetworkAvailable(available)
+
+        // Only act on false→true transition
+        if (available && !wasAvailable) {
+            val currentState = _connectionState.value
+
+            when (currentState) {
+                WsConnectionState.DISCONNECTED -> {
+                    Logger.ws("Network restored (was unavailable) - triggering immediate reconnect")
+                    scope.launch { connect() }
+                }
+                WsConnectionState.RECONNECTING -> {
+                    // Cancel pending backoff delay and reconnect immediately
+                    Logger.ws("Network restored during backoff - canceling delay, reconnecting now")
+                    reconnectJob?.cancel()
+                    reconnectJob = null
+                    _connectionState.value = WsConnectionState.DISCONNECTED
+                    scope.launch { connect() }
+                }
+                else -> {
+                    // CONNECTED, CONNECTING, AUTH_EXPIRED - no action needed
+                    Logger.d("Network restored but state is $currentState - no reconnect needed")
+                }
+            }
+        }
     }
 }

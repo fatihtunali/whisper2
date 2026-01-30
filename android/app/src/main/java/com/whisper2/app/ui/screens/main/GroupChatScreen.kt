@@ -29,12 +29,15 @@ fun GroupChatScreen(
     groupId: String,
     onBack: () -> Unit,
     onNavigateToGroupInfo: () -> Unit = {},
+    onGroupLeft: () -> Unit = onBack,  // Navigate back to groups list after leaving
     viewModel: GroupChatViewModel = hiltViewModel()
 ) {
     val group by viewModel.group.collectAsState()
     val messages by viewModel.messages.collectAsState()
     var messageText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
+    var showMenu by remember { mutableStateOf(false) }
+    var showLeaveDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(groupId) {
         viewModel.loadGroup(groupId)
@@ -83,6 +86,38 @@ fun GroupChatScreen(
                 actions = {
                     IconButton(onClick = onNavigateToGroupInfo) {
                         Icon(Icons.Default.Info, "Group Info", tint = Color.White)
+                    }
+                    Box {
+                        IconButton(onClick = { showMenu = true }) {
+                            Icon(Icons.Default.MoreVert, "More options", tint = Color.White)
+                        }
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false },
+                            containerColor = Color(0xFF1A1A1A)
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Group Info", color = Color.White) },
+                                onClick = {
+                                    showMenu = false
+                                    onNavigateToGroupInfo()
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Info, null, tint = Color.Gray)
+                                }
+                            )
+                            HorizontalDivider(color = Color.Gray.copy(alpha = 0.2f))
+                            DropdownMenuItem(
+                                text = { Text("Leave Group", color = Color(0xFFEF4444)) },
+                                onClick = {
+                                    showMenu = false
+                                    showLeaveDialog = true
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Default.ExitToApp, null, tint = Color(0xFFEF4444))
+                                }
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Black)
@@ -203,5 +238,38 @@ fun GroupChatScreen(
                 }
             }
         }
+    }
+
+    // Leave Group Confirmation Dialog
+    if (showLeaveDialog) {
+        AlertDialog(
+            onDismissRequest = { showLeaveDialog = false },
+            title = { Text("Leave Group?", color = Color.White) },
+            text = {
+                Text(
+                    "Are you sure you want to leave \"${group?.name ?: "this group"}\"? You won't receive any new messages.",
+                    color = Color.Gray
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showLeaveDialog = false
+                        viewModel.leaveGroup {
+                            onGroupLeft()
+                        }
+                    }
+                ) {
+                    Text("Leave", color = Color(0xFFEF4444))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLeaveDialog = false }) {
+                    Text("Cancel", color = Color.Gray)
+                }
+            },
+            containerColor = Color(0xFF1A1A1A),
+            shape = RoundedCornerShape(16.dp)
+        )
     }
 }

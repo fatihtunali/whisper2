@@ -49,15 +49,25 @@ final class WebSocketService: NSObject, ObservableObject {
         setupNetworkMonitoring()
     }
 
-    // MARK: - Network Monitoring (status only)
+    // MARK: - Network Monitoring
 
     private func setupNetworkMonitoring() {
         networkMonitor = NWPathMonitor()
         networkMonitor?.pathUpdateHandler = { [weak self] path in
-            self?.isNetworkAvailable = (path.status == .satisfied)
+            guard let self = self else { return }
+            let wasAvailable = self.isNetworkAvailable
+            let isNowAvailable = (path.status == .satisfied)
+            self.isNetworkAvailable = isNowAvailable
+
             DispatchQueue.main.async {
-                if path.status == .satisfied {
+                if isNowAvailable {
                     print("[WebSocket] Network available")
+                    // Trigger reconnect if network just became available and we're disconnected
+                    if !wasAvailable && self.connectionState == .disconnected {
+                        print("[WebSocket] Network restored - triggering reconnect")
+                        self.reconnectAttempts = 0  // Reset backoff when network comes back
+                        self.connect()
+                    }
                 } else {
                     print("[WebSocket] Network unavailable")
                 }

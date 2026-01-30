@@ -22,6 +22,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.whisper2.app.data.network.ws.WsConnectionState
+import com.whisper2.app.ui.components.ConnectionStatusBar
+import com.whisper2.app.ui.components.ContactAvatar
 import com.whisper2.app.ui.theme.*
 import com.whisper2.app.ui.viewmodels.ChatsViewModel
 
@@ -29,6 +32,8 @@ import com.whisper2.app.ui.viewmodels.ChatsViewModel
 @Composable
 fun ChatsListScreen(
     onChatClick: (String) -> Unit,
+    onMessageRequestsClick: () -> Unit = {},
+    connectionState: WsConnectionState = WsConnectionState.CONNECTED,
     viewModel: ChatsViewModel = hiltViewModel()
 ) {
     val conversations by viewModel.conversations.collectAsState()
@@ -42,7 +47,7 @@ fun ChatsListScreen(
                 title = { Text("Chats", color = TextPrimary, fontWeight = FontWeight.Bold) },
                 actions = {
                     if (pendingRequests > 0) {
-                        IconButton(onClick = { /* Show requests */ }) {
+                        IconButton(onClick = onMessageRequestsClick) {
                             BadgedBox(badge = { Badge(containerColor = PrimaryBlue) { Text("$pendingRequests") } }) {
                                 Icon(Icons.Default.Inbox, "Requests", tint = TextPrimary)
                             }
@@ -58,12 +63,15 @@ fun ChatsListScreen(
         containerColor = MetalDark
     ) { padding ->
         Column(modifier = Modifier.padding(padding)) {
+            // Connection status bar (only shows when not connected)
+            ConnectionStatusBar(connectionState = connectionState)
+
             // Message requests banner
             if (pendingRequests > 0) {
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { /* Show requests */ },
+                        .clickable(onClick = onMessageRequestsClick),
                     color = Color(0xFFF59E0B).copy(alpha = 0.1f)
                 ) {
                     Row(
@@ -147,6 +155,7 @@ fun ChatsListScreen(
                     items(filteredConversations, key = { it.peerId }) { conversation ->
                         ChatRow(
                             displayName = conversation.peerNickname ?: conversation.peerId,
+                            avatarPath = conversation.peerAvatarPath,
                             lastMessage = conversation.lastMessagePreview ?: "",
                             timestamp = conversation.formattedTime,
                             unreadCount = conversation.unreadCount,
@@ -174,6 +183,7 @@ fun ChatsListScreen(
 @Composable
 fun ChatRow(
     displayName: String,
+    avatarPath: String? = null,
     lastMessage: String,
     timestamp: String,
     unreadCount: Int,
@@ -187,25 +197,13 @@ fun ChatRow(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Avatar with gradient like iOS
-        Box(
-            modifier = Modifier
-                .size(52.dp)
-                .background(
-                    brush = Brush.linearGradient(
-                        colors = listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6))
-                    ),
-                    shape = CircleShape
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                displayName.take(1).uppercase(),
-                color = Color.White,
-                fontWeight = FontWeight.Bold,
-                fontSize = 20.sp
-            )
-        }
+        // Avatar - uses custom avatar if available, otherwise initials
+        ContactAvatar(
+            displayName = displayName,
+            avatarPath = avatarPath,
+            size = 52.dp,
+            fontSize = 20.sp
+        )
 
         Spacer(modifier = Modifier.width(12.dp))
 
@@ -328,18 +326,12 @@ fun NewChatSheet(
                                 .padding(vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(44.dp)
-                                    .background(Color.Gray.copy(alpha = 0.3f), CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    contact.displayName.take(1).uppercase(),
-                                    color = Color.White,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
+                            ContactAvatar(
+                                displayName = contact.displayName,
+                                avatarPath = contact.avatarPath,
+                                size = 44.dp,
+                                fontSize = 16.sp
+                            )
                             Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(

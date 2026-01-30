@@ -4,11 +4,14 @@ import android.app.Activity
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
+import com.whisper2.app.data.local.prefs.SecureStorage
 
 /**
  * Whisper2 Premium Metal Theme
@@ -94,6 +97,23 @@ fun Whisper2Theme(
         shapes = Shapes,
         content = content
     )
+}
+
+/**
+ * Whisper2 Theme with font size scaling support.
+ * Use this version when you need to provide the FontSizeManager through the composition.
+ */
+@Composable
+fun Whisper2ThemeWithFontSize(
+    secureStorage: SecureStorage,
+    darkTheme: Boolean = true,
+    content: @Composable () -> Unit
+) {
+    val fontSizeManager = remember(secureStorage) { FontSizeManager(secureStorage) }
+
+    CompositionLocalProvider(LocalFontSizeManager provides fontSizeManager) {
+        Whisper2Theme(darkTheme = darkTheme, content = content)
+    }
 }
 
 /**

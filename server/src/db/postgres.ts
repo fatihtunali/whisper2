@@ -10,10 +10,9 @@
 
 import { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { logger } from '../utils/logger';
-import { EventEmitter } from 'events';
 
-// Increase default max listeners to support many concurrent users
-EventEmitter.defaultMaxListeners = 200;
+// NOTE: EventEmitter.defaultMaxListeners is set in index.ts (500)
+// Do NOT override it here - it causes the value to drop from 500 to 200
 
 // =============================================================================
 // CONNECTION POOL

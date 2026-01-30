@@ -4,14 +4,19 @@ import android.app.Application
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.content.Context
 import android.media.AudioAttributes
-import android.net.Uri
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Build
 import android.provider.Settings
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.whisper2.app.core.Logger
+import com.whisper2.app.data.local.prefs.SecureStorage
 import com.whisper2.app.data.network.ws.WsClientImpl
 import com.whisper2.app.services.auth.AuthService
 import com.whisper2.app.services.calls.CallService
@@ -20,6 +25,9 @@ import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -45,7 +53,18 @@ class App : Application(), DefaultLifecycleObserver {
     @Inject
     lateinit var authService: dagger.Lazy<AuthService>
 
+    @Inject
+    lateinit var secureStorage: dagger.Lazy<SecureStorage>
+
+    // Lock screen state
+    private val _isLocked = MutableStateFlow(false)
+    val isLocked: StateFlow<Boolean> = _isLocked.asStateFlow()
+
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    // Network monitoring
+    private var connectivityManager: ConnectivityManager? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     override fun onCreate() {
         super<Application>.onCreate()
@@ -53,16 +72,93 @@ class App : Application(), DefaultLifecycleObserver {
 
         // Register app lifecycle observer
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
+
+        // Setup network monitoring
+        setupNetworkMonitoring()
+    }
+
+    /**
+     * Monitor network connectivity changes to trigger WebSocket reconnect.
+     * When network becomes available AND validated, reconnect immediately.
+     *
+     * IMPORTANT:
+     * - onAvailable() means "a network exists", NOT "internet works"
+     * - Only treat as available when NET_CAPABILITY_INTERNET + NET_CAPABILITY_VALIDATED
+     * - This prevents reconnect on captive portals / broken Wi-Fi
+     * - WsClient.setNetworkAvailable() is idempotent (ignores duplicate calls)
+     */
+    private fun setupNetworkMonitoring() {
+        // Guard against duplicate registration
+        if (networkCallback != null) {
+            Logger.w("[App] Network monitoring already setup, skipping")
+            return
+        }
+
+        connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+
+        networkCallback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                // Don't set available=true here - wait for onCapabilitiesChanged with VALIDATED
+                // onAvailable just means "a network exists", not "internet works"
+                Logger.d("[App] Network available (waiting for validation)")
+            }
+
+            override fun onLost(network: Network) {
+                Logger.i("[App] Network lost")
+                try {
+                    wsClient.get().setNetworkAvailable(false)
+                } catch (e: Exception) {
+                    Logger.w("[App] Error setting network unavailable: ${e.message}")
+                }
+            }
+
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                // Only consider available when both INTERNET and VALIDATED are present
+                // VALIDATED means system verified actual internet connectivity (not captive portal)
+                val hasInternet = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                                  caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+
+                // WsClient.setNetworkAvailable() is idempotent - ignores if value unchanged
+                // This prevents reconnect storms from frequent capability changes
+                try {
+                    wsClient.get().setNetworkAvailable(hasInternet)
+                } catch (e: Exception) {
+                    Logger.w("[App] Error updating network status: ${e.message}")
+                }
+            }
+        }
+
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+
+        try {
+            connectivityManager?.registerNetworkCallback(request, networkCallback!!)
+            Logger.i("[App] Network monitoring started")
+        } catch (e: Exception) {
+            Logger.e("[App] Failed to register network callback", e)
+        }
     }
 
     override fun onStart(owner: LifecycleOwner) {
         // App coming to foreground
         Logger.i("[App] App entering foreground")
-        try {
-            // Trigger WebSocket reconnection check
-            wsClient.get().handleAppForeground()
 
-            // Also trigger auth reconnect if needed
+        // Check if lock screen should be shown
+        try {
+            val storage = secureStorage.get()
+            if (storage.shouldShowLockScreen()) {
+                Logger.i("[App] Lock timeout elapsed, showing lock screen")
+                _isLocked.value = true
+            }
+        } catch (e: Exception) {
+            Logger.w("[App] Error checking lock screen: ${e.message}")
+        }
+
+        try {
+            // Trigger auth reconnect - this handles both WS connection and authentication
+            // NOTE: Don't call wsClient.handleAppForeground() separately - it's redundant
+            // since authService.reconnect() already calls wsClient.connect()
             appScope.launch {
                 try {
                     authService.get().reconnect()
@@ -81,10 +177,42 @@ class App : Application(), DefaultLifecycleObserver {
         // Calls should continue with the foreground service notification.
         // Only end calls on actual app destruction (onDestroy).
         Logger.i("[App] App going to background - calls continue via foreground service")
+
+        // Record background time for lock timeout
+        try {
+            val storage = secureStorage.get()
+            if (storage.biometricLockEnabled) {
+                storage.lastBackgroundTime = System.currentTimeMillis()
+                Logger.d("[App] Recorded background time for biometric lock")
+            }
+        } catch (e: Exception) {
+            Logger.w("[App] Error recording background time: ${e.message}")
+        }
+
         try {
             wsClient.get().handleAppBackground()
         } catch (e: Exception) {
             Logger.w("[App] Error handling background: ${e.message}")
+        }
+    }
+
+    /**
+     * Unlock the app after successful biometric authentication.
+     */
+    fun unlock() {
+        _isLocked.value = false
+        Logger.i("[App] App unlocked")
+    }
+
+    /**
+     * Check if the app should be locked.
+     */
+    fun shouldShowLockScreen(): Boolean {
+        return try {
+            secureStorage.get().shouldShowLockScreen()
+        } catch (e: Exception) {
+            Logger.w("[App] Error checking lock screen: ${e.message}")
+            false
         }
     }
 

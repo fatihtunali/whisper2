@@ -39,6 +39,9 @@ interface ContactDao {
     @Query("UPDATE contacts SET isBlocked = :blocked WHERE whisperId = :whisperId")
     suspend fun setBlocked(whisperId: String, blocked: Boolean)
 
+    @Query("UPDATE contacts SET isOnline = :isOnline, lastSeen = :lastSeen WHERE whisperId = :whisperId")
+    suspend fun updatePresence(whisperId: String, isOnline: Boolean, lastSeen: Long?)
+
     @Query("SELECT * FROM contacts WHERE isBlocked = 1 ORDER BY displayName")
     fun getBlockedContacts(): Flow<List<ContactEntity>>
 
@@ -50,4 +53,16 @@ interface ContactDao {
 
     @Query("DELETE FROM contacts")
     suspend fun deleteAll()
+
+    @Query("UPDATE contacts SET avatarPath = :avatarPath WHERE whisperId = :whisperId")
+    suspend fun updateAvatar(whisperId: String, avatarPath: String?)
+
+    @Query("SELECT avatarPath FROM contacts WHERE whisperId = :whisperId")
+    suspend fun getAvatarPath(whisperId: String): String?
+
+    @Query("UPDATE contacts SET isMessageRequest = 0 WHERE whisperId = :whisperId")
+    suspend fun acceptMessageRequest(whisperId: String)
+
+    @Query("SELECT * FROM contacts WHERE isMessageRequest = 1 ORDER BY updatedAt DESC")
+    fun getMessageRequestsOrdered(): Flow<List<ContactEntity>>
 }

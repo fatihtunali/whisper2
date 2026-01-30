@@ -14,10 +14,11 @@ import com.whisper2.app.data.local.db.entities.*
         ContactEntity::class,
         GroupEntity::class,
         GroupMemberEntity::class,
+        GroupInviteEntity::class,
         OutboxEntity::class,
         CallRecordEntity::class
     ],
-    version = 3,
+    version = 6,
     exportSchema = true
 )
 abstract class WhisperDatabase : RoomDatabase() {
@@ -43,6 +44,40 @@ abstract class WhisperDatabase : RoomDatabase() {
                 database.execSQL("ALTER TABLE messages ADD COLUMN expiresAt INTEGER DEFAULT NULL")
                 // Add disappearingTimer to conversations
                 database.execSQL("ALTER TABLE conversations ADD COLUMN disappearingTimer TEXT NOT NULL DEFAULT 'off'")
+            }
+        }
+
+        // Migration from version 3 to 4: Add group invites table
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("""
+                    CREATE TABLE IF NOT EXISTS group_invites (
+                        groupId TEXT NOT NULL PRIMARY KEY,
+                        groupName TEXT NOT NULL,
+                        inviterId TEXT NOT NULL,
+                        inviterName TEXT NOT NULL,
+                        memberCount INTEGER NOT NULL DEFAULT 0,
+                        createdAt INTEGER NOT NULL
+                    )
+                """)
+            }
+        }
+
+        // Migration from version 4 to 5: Add avatar support for contacts and conversations
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                // Add avatarPath to contacts table
+                database.execSQL("ALTER TABLE contacts ADD COLUMN avatarPath TEXT DEFAULT NULL")
+                // Add peerAvatarPath to conversations table
+                database.execSQL("ALTER TABLE conversations ADD COLUMN peerAvatarPath TEXT DEFAULT NULL")
+            }
+        }
+
+        // Migration from version 5 to 6: Add chat theme support for conversations
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                // Add chatThemeId to conversations table with default value 'default'
+                database.execSQL("ALTER TABLE conversations ADD COLUMN chatThemeId TEXT NOT NULL DEFAULT 'default'")
             }
         }
     }

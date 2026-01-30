@@ -140,7 +140,7 @@ export interface PongPayload {
 // MESSAGING (Section 4)
 // =============================================================================
 
-export type MessageType = 'text' | 'image' | 'voice' | 'file' | 'system';
+export type MessageType = 'text' | 'image' | 'voice' | 'audio' | 'video' | 'file' | 'location' | 'system';
 
 // Attachment pointer (Section 6.3)
 export interface AttachmentPointer {
@@ -269,6 +269,15 @@ export interface GroupUpdatePayload extends VersionedPayload {
   addMembers?: string[];
   removeMembers?: string[];
   title?: string;
+  roleChanges?: Array<{ whisperId: string; role: 'admin' | 'member' }>;
+}
+
+// Recipient envelope for pairwise-encrypted group messages
+export interface RecipientEnvelope {
+  to: string;        // recipient whisperId
+  nonce: string;     // base64(24 bytes)
+  ciphertext: string; // base64
+  sig: string;       // base64
 }
 
 export interface GroupSendMessagePayload extends VersionedPayload {
@@ -276,13 +285,18 @@ export interface GroupSendMessagePayload extends VersionedPayload {
   groupId: string;
   messageId: string;
   from: string;
-  to: string; // individual member
   msgType: MessageType;
   timestamp: number;
-  nonce: string;
-  ciphertext: string;
-  sig: string;
+  recipients: RecipientEnvelope[]; // pairwise encrypted for each member
+  replyTo?: string;
+  reactions?: Record<string, string[]>;
   attachment?: AttachmentPointer | null;
+}
+
+export interface GroupInviteResponsePayload extends VersionedPayload {
+  sessionToken: string;
+  groupId: string;
+  accepted: boolean;
 }
 
 // =============================================================================
@@ -454,6 +468,7 @@ export const MessageTypes = {
   GROUP_EVENT: 'group_event',
   GROUP_UPDATE: 'group_update',
   GROUP_SEND_MESSAGE: 'group_send_message',
+  GROUP_INVITE_RESPONSE: 'group_invite_response',
 
   // Calls
   GET_TURN_CREDENTIALS: 'get_turn_credentials',

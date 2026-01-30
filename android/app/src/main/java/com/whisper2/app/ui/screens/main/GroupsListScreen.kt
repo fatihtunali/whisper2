@@ -19,6 +19,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.whisper2.app.data.local.db.entities.GroupInviteEntity
 import com.whisper2.app.ui.viewmodels.ContactsViewModel
 import com.whisper2.app.ui.viewmodels.GroupsViewModel
 
@@ -30,6 +31,7 @@ fun GroupsListScreen(
     contactsViewModel: ContactsViewModel = hiltViewModel()
 ) {
     val groups by viewModel.groups.collectAsState()
+    val pendingInvites by viewModel.pendingInvites.collectAsState()
     var showCreateGroup by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -54,7 +56,7 @@ fun GroupsListScreen(
         },
         containerColor = Color.Black
     ) { padding ->
-        if (groups.isEmpty()) {
+        if (groups.isEmpty() && pendingInvites.isEmpty()) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -89,6 +91,44 @@ fun GroupsListScreen(
             }
         } else {
             LazyColumn(modifier = Modifier.padding(padding)) {
+                // Pending Invites Section
+                if (pendingInvites.isNotEmpty()) {
+                    item {
+                        PendingInvitesHeader(count = pendingInvites.size)
+                    }
+                    items(pendingInvites, key = { it.groupId }) { invite ->
+                        GroupInviteRow(
+                            invite = invite,
+                            onAccept = { viewModel.acceptInvite(invite.groupId) },
+                            onDecline = { viewModel.declineInvite(invite.groupId) }
+                        )
+                        HorizontalDivider(
+                            color = Color.Gray.copy(alpha = 0.2f),
+                            modifier = Modifier.padding(start = 76.dp)
+                        )
+                    }
+                    // Divider between invites and groups
+                    if (groups.isNotEmpty()) {
+                        item {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            HorizontalDivider(color = Color.Gray.copy(alpha = 0.3f))
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                    }
+                }
+
+                // Groups Section
+                if (groups.isNotEmpty() && pendingInvites.isNotEmpty()) {
+                    item {
+                        Text(
+                            "Your Groups",
+                            color = Color.Gray,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                        )
+                    }
+                }
                 items(groups, key = { it.groupId }) { group ->
                     GroupRow(
                         name = group.name,
@@ -114,6 +154,129 @@ fun GroupsListScreen(
                 showCreateGroup = false
             }
         )
+    }
+}
+
+@Composable
+fun PendingInvitesHeader(count: Int) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            Icons.Default.Mail,
+            contentDescription = null,
+            tint = Color(0xFFF59E0B),
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            "Pending Invites",
+            color = Color(0xFFF59E0B),
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Surface(
+            shape = RoundedCornerShape(10.dp),
+            color = Color(0xFFF59E0B)
+        ) {
+            Text(
+                "$count",
+                color = Color.Black,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+            )
+        }
+    }
+}
+
+@Composable
+fun GroupInviteRow(
+    invite: GroupInviteEntity,
+    onAccept: () -> Unit,
+    onDecline: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Group avatar with orange tint for invites
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .background(Color(0xFFF59E0B).copy(alpha = 0.3f), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(Icons.Default.GroupAdd, null, tint = Color(0xFFF59E0B), modifier = Modifier.size(28.dp))
+        }
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                invite.groupName,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                "Invited by ${invite.inviterName}",
+                color = Color.Gray,
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                "${invite.memberCount} members",
+                color = Color.Gray,
+                fontSize = 12.sp
+            )
+        }
+
+        Spacer(modifier = Modifier.width(8.dp))
+
+        // Action buttons
+        Row {
+            // Decline button
+            IconButton(
+                onClick = onDecline,
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(Color(0xFFEF4444).copy(alpha = 0.2f), CircleShape)
+            ) {
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = "Decline",
+                    tint = Color(0xFFEF4444),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            // Accept button
+            IconButton(
+                onClick = onAccept,
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(Color(0xFF22C55E).copy(alpha = 0.2f), CircleShape)
+            ) {
+                Icon(
+                    Icons.Default.Check,
+                    contentDescription = "Accept",
+                    tint = Color(0xFF22C55E),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
     }
 }
 

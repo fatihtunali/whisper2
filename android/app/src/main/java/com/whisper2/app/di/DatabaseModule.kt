@@ -19,7 +19,10 @@ object DatabaseModule {
         Room.databaseBuilder(ctx, WhisperDatabase::class.java, Constants.DATABASE_NAME)
             .addMigrations(
                 WhisperDatabase.MIGRATION_1_2,
-                WhisperDatabase.MIGRATION_2_3
+                WhisperDatabase.MIGRATION_2_3,
+                WhisperDatabase.MIGRATION_3_4,
+                WhisperDatabase.MIGRATION_4_5,
+                WhisperDatabase.MIGRATION_5_6
             )
             .build()
 

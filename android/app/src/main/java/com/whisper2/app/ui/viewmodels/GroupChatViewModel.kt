@@ -62,6 +62,18 @@ class GroupChatViewModel @Inject constructor(
         }
     }
 
+    fun leaveGroup(onSuccess: () -> Unit) {
+        val groupId = _groupId.value ?: return
+        viewModelScope.launch {
+            val result = groupService.leaveGroup(groupId)
+            result.onSuccess {
+                onSuccess()
+            }.onFailure { e ->
+                _error.value = e.message ?: "Failed to leave group"
+            }
+        }
+    }
+
     fun clearError() {
         _error.value = null
     }

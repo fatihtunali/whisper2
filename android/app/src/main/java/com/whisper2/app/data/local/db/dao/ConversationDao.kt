@@ -44,4 +44,16 @@ interface ConversationDao {
 
     @Query("UPDATE conversations SET isMuted = :isMuted WHERE peerId = :peerId")
     suspend fun setMuted(peerId: String, isMuted: Boolean)
+
+    @Query("UPDATE conversations SET lastMessagePreview = :message, lastMessageTimestamp = :timestamp, updatedAt = :timestamp WHERE peerId = :conversationId")
+    suspend fun updateLastMessage(conversationId: String, message: String, timestamp: Long)
+
+    @Query("UPDATE conversations SET peerAvatarPath = :avatarPath WHERE peerId = :peerId")
+    suspend fun updatePeerAvatar(peerId: String, avatarPath: String?)
+
+    @Query("UPDATE conversations SET peerNickname = :nickname, peerAvatarPath = :avatarPath WHERE peerId = :peerId")
+    suspend fun updatePeerInfo(peerId: String, nickname: String?, avatarPath: String?)
+
+    @Query("UPDATE conversations SET chatThemeId = :themeId WHERE peerId = :peerId")
+    suspend fun setChatTheme(peerId: String, themeId: String)
 }

@@ -407,14 +407,14 @@ struct GroupInviteResponsePayload: Codable {
     let cryptoVersion: Int
     let sessionToken: String
     let groupId: String
-    let accept: Bool
+    let accepted: Bool
 
-    init(sessionToken: String, groupId: String, accept: Bool) {
+    init(sessionToken: String, groupId: String, accepted: Bool) {
         self.protocolVersion = Constants.protocolVersion
         self.cryptoVersion = Constants.cryptoVersion
         self.sessionToken = sessionToken
         self.groupId = groupId
-        self.accept = accept
+        self.accepted = accepted
     }
 }
 

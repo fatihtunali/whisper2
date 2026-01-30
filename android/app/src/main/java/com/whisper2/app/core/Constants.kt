@@ -67,6 +67,7 @@ object Constants {
         const val GROUP_EVENT = "group_event"
         const val GROUP_UPDATE = "group_update"
         const val GROUP_SEND_MESSAGE = "group_send_message"
+        const val GROUP_INVITE_RESPONSE = "group_invite_response"
 
         // Calls
         const val GET_TURN_CREDENTIALS = "get_turn_credentials"
@@ -118,13 +119,17 @@ object Constants {
         const val OUTGOING = "outgoing"
     }
 
+    /** Error codes - MUST match server protocol.ts exactly */
     object ErrorCode {
-        const val AUTH_FAILED = "AUTH_FAILED"
-        const val INVALID_TIMESTAMP = "INVALID_TIMESTAMP"
-        const val INVALID_SIGNATURE = "INVALID_SIGNATURE"
-        const val USER_NOT_FOUND = "USER_NOT_FOUND"
-        const val SESSION_EXPIRED = "SESSION_EXPIRED"
-        const val RATE_LIMITED = "RATE_LIMITED"
+        const val NOT_REGISTERED = "NOT_REGISTERED"      // No active session
+        const val AUTH_FAILED = "AUTH_FAILED"            // Auth validation failed
+        const val INVALID_PAYLOAD = "INVALID_PAYLOAD"    // Payload schema validation failed
+        const val INVALID_TIMESTAMP = "INVALID_TIMESTAMP"// Timestamp outside skew window
+        const val RATE_LIMITED = "RATE_LIMITED"          // Rate limit exceeded
+        const val USER_BANNED = "USER_BANNED"            // User is banned
+        const val NOT_FOUND = "NOT_FOUND"                // Resource not found
+        const val FORBIDDEN = "FORBIDDEN"                // Access denied
+        const val INTERNAL_ERROR = "INTERNAL_ERROR"      // Server error
     }
 
     object CallEndReason {
@@ -134,5 +139,15 @@ object Constants {
         const val TIMEOUT = "timeout"
         const val FAILED = "failed"
         const val CANCELLED = "cancelled"
+    }
+
+    object PresenceStatus {
+        const val ONLINE = "online"
+        const val OFFLINE = "offline"
+    }
+
+    object DeliveryStatus {
+        const val DELIVERED = "delivered"
+        const val READ = "read"
     }
 }

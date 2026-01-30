@@ -19,6 +19,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.whisper2.app.ui.components.ContactAvatar
 import com.whisper2.app.ui.viewmodels.ContactsViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -127,6 +128,7 @@ fun ContactsListScreen(
                     items(filteredContacts, key = { it.whisperId }) { contact ->
                         ContactRow(
                             displayName = contact.displayName,
+                            avatarPath = contact.avatarPath,
                             whisperId = contact.whisperId,
                             hasPublicKey = contact.encPublicKey != null,
                             onClick = { onContactClick(contact.whisperId) },
@@ -153,6 +155,7 @@ fun ContactsListScreen(
 @Composable
 fun ContactRow(
     displayName: String,
+    avatarPath: String? = null,
     whisperId: String,
     hasPublicKey: Boolean,
     onClick: () -> Unit,
@@ -165,20 +168,13 @@ fun ContactRow(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Avatar
-        Box(
-            modifier = Modifier
-                .size(52.dp)
-                .background(Color.Gray.copy(alpha = 0.3f), CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                displayName.take(1).uppercase(),
-                color = Color.White,
-                fontWeight = FontWeight.Bold,
-                fontSize = 20.sp
-            )
-        }
+        // Avatar - uses custom avatar if available
+        ContactAvatar(
+            displayName = displayName,
+            avatarPath = avatarPath,
+            size = 52.dp,
+            fontSize = 20.sp
+        )
 
         Spacer(modifier = Modifier.width(12.dp))
 

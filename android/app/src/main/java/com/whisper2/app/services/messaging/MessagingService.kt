@@ -418,9 +418,16 @@ class MessagingService @Inject constructor(
 
     /**
      * Send typing indicator to peer.
+     * Respects the showTypingIndicator privacy setting.
      */
     suspend fun sendTypingIndicator(peerId: String, isTyping: Boolean = true) {
         try {
+            // Check privacy setting - don't send if disabled
+            if (!secureStorage.showTypingIndicator) {
+                Logger.d("[MessagingService] Typing indicator disabled in privacy settings")
+                return
+            }
+
             val token = secureStorage.sessionToken ?: return
 
             if (wsClient.connectionState.value == WsConnectionState.CONNECTED) {

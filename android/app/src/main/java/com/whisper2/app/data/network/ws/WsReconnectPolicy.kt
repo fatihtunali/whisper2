@@ -32,5 +32,7 @@ class WsReconnectPolicy {
         if (available && !isAuthExpired) _attemptCount = 0
     }
 
+    fun isNetworkAvailable(): Boolean = isNetworkAvailable
+
     fun isAuthenticationRequired(): Boolean = isAuthExpired
 }

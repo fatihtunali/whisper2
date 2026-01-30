@@ -24,6 +24,7 @@ enum class DisappearingMessageTimer(val value: String, val displayName: String, 
 data class ConversationEntity(
     @PrimaryKey val peerId: String,
     val peerNickname: String?,
+    val peerAvatarPath: String? = null,
     val lastMessageId: String? = null,
     val lastMessagePreview: String? = null,
     val lastMessageTimestamp: Long? = null,
@@ -32,6 +33,7 @@ data class ConversationEntity(
     val isMuted: Boolean = false,
     val isTyping: Boolean = false,
     val disappearingTimer: String = "off", // DisappearingMessageTimer value
+    val chatThemeId: String = "default",   // Chat theme ID for this conversation
     val updatedAt: Long = System.currentTimeMillis()
 ) {
     @get:Ignore

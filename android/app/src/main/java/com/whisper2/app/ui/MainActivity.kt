@@ -5,12 +5,12 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -20,14 +20,17 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
+import androidx.fragment.app.FragmentActivity
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.google.android.play.core.appupdate.AppUpdateManager
 import com.google.android.play.core.appupdate.AppUpdateManagerFactory
 import com.google.android.play.core.appupdate.AppUpdateOptions
 import com.google.android.play.core.install.model.AppUpdateType
 import com.google.android.play.core.install.model.UpdateAvailability
+import com.whisper2.app.App
 import com.whisper2.app.core.Logger
 import com.whisper2.app.ui.navigation.WhisperNavigation
+import com.whisper2.app.ui.screens.lock.LockScreenOverlay
 import com.whisper2.app.ui.theme.Whisper2Theme
 import com.whisper2.app.ui.viewmodels.MainViewModel
 import dagger.hilt.android.AndroidEntryPoint
@@ -39,7 +42,7 @@ data class NotificationData(
 )
 
 @AndroidEntryPoint
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
 
     // Notification data from intent
     private val notificationData = mutableStateOf<NotificationData?>(null)
@@ -93,12 +96,24 @@ class MainActivity : ComponentActivity() {
                     val connectionState by viewModel.connectionState.collectAsState()
                     val notification = notificationData.value
 
-                    WhisperNavigation(
-                        authState = authState,
-                        connectionState = connectionState,
-                        notificationData = notification,
-                        onNotificationHandled = { notificationData.value = null }
-                    )
+                    // Get lock state from App
+                    val app = application as App
+                    val isLocked by app.isLocked.collectAsState()
+
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        WhisperNavigation(
+                            authState = authState,
+                            connectionState = connectionState,
+                            notificationData = notification,
+                            onNotificationHandled = { notificationData.value = null }
+                        )
+
+                        // Show lock screen overlay when locked
+                        LockScreenOverlay(
+                            isLocked = isLocked,
+                            onUnlocked = { app.unlock() }
+                        )
+                    }
                 }
             }
         }

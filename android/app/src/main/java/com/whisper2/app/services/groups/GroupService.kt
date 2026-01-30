@@ -10,6 +10,7 @@ import com.whisper2.app.data.local.db.dao.ContactDao
 import com.whisper2.app.data.local.db.dao.GroupDao
 import com.whisper2.app.data.local.db.dao.MessageDao
 import com.whisper2.app.data.local.db.entities.GroupEntity
+import com.whisper2.app.data.local.db.entities.GroupInviteEntity
 import com.whisper2.app.data.local.db.entities.GroupMemberEntity
 import com.whisper2.app.data.local.db.entities.MessageEntity
 import com.whisper2.app.data.local.prefs.SecureStorage
@@ -29,6 +30,12 @@ data class GroupCreatePayload(
     val memberIds: List<String>
 )
 
+// Role change for group member (matches server protocol)
+data class RoleChange(
+    val whisperId: String,
+    val role: String  // "admin" or "member"
+)
+
 data class GroupUpdatePayload(
     val protocolVersion: Int = Constants.PROTOCOL_VERSION,
     val cryptoVersion: Int = Constants.CRYPTO_VERSION,
@@ -36,7 +43,33 @@ data class GroupUpdatePayload(
     val groupId: String,
     val addMembers: List<String>? = null,
     val removeMembers: List<String>? = null,
-    val title: String? = null
+    val title: String? = null,
+    val roleChanges: List<RoleChange>? = null
+)
+
+data class GroupInviteResponsePayload(
+    val protocolVersion: Int = Constants.PROTOCOL_VERSION,
+    val cryptoVersion: Int = Constants.CRYPTO_VERSION,
+    val sessionToken: String,
+    val groupId: String,
+    val accepted: Boolean
+)
+
+// Group invite received payload (matches server protocol)
+data class GroupInvitePayload(
+    val groupId: String,
+    val groupName: String,
+    val inviterId: String,
+    val inviterName: String,
+    val memberCount: Int
+)
+
+// Server's group creation acknowledgment (matches server protocol.ts)
+data class GroupCreateAckPayload(
+    val groupId: String,
+    val title: String,
+    val memberIds: List<String>,
+    val createdAt: Long
 )
 
 // Server's recipient envelope for group messages
@@ -57,6 +90,8 @@ data class GroupSendMessagePayload(
     val msgType: String,
     val timestamp: Long,
     val recipients: List<RecipientEnvelope>,
+    val replyTo: String? = null,
+    val reactions: Map<String, List<String>>? = null,  // emoji -> whisperId[]
     val attachment: AttachmentPointer? = null
 )
 
@@ -349,12 +384,70 @@ class GroupService @Inject constructor(
         return Result.success(Unit)
     }
 
+    // MARK: - Respond to Group Invite
+
+    suspend fun respondToInvite(groupId: String, accepted: Boolean): Result<Unit> {
+        val sessionToken = secureStorage.sessionToken ?: return Result.failure(Exception("Not authenticated"))
+
+        return try {
+            val payload = GroupInviteResponsePayload(
+                sessionToken = sessionToken,
+                groupId = groupId,
+                accepted = accepted
+            )
+
+            wsClient.send(WsFrame(Constants.MsgType.GROUP_INVITE_RESPONSE, payload = payload))
+
+            // Remove the invite from local storage
+            groupDao.deleteInvite(groupId)
+
+            Logger.i("[GroupService] Responded to group invite: $groupId, accepted: $accepted")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Logger.e("[GroupService] Failed to respond to group invite", e)
+            Result.failure(e)
+        }
+    }
+
+    // MARK: - Kick Member (alias for removeMembers with single member)
+
+    suspend fun kickMember(groupId: String, memberId: String): Result<Unit> {
+        return removeMembers(groupId, listOf(memberId))
+    }
+
+    // MARK: - Get Pending Invites
+
+    fun getPendingInvitesFlow() = groupDao.getAllInvitesFlow()
+
+    suspend fun getPendingInvites(): List<GroupInviteEntity> = groupDao.getAllInvites()
+
     // MARK: - Message Handling
 
     private suspend fun handleMessage(frame: WsFrame<JsonElement>) {
         when (frame.type) {
             Constants.MsgType.GROUP_EVENT -> handleGroupEvent(frame.payload)
             "group_message" -> handleGroupMessage(frame.payload)
+            "group_invite" -> handleGroupInvite(frame.payload)
+        }
+    }
+
+    private suspend fun handleGroupInvite(payload: JsonElement) {
+        try {
+            val invite = gson.fromJson(payload, GroupInvitePayload::class.java)
+            Logger.i("[GroupService] Received group invite: ${invite.groupId} from ${invite.inviterName}")
+
+            // Store the invite locally
+            val inviteEntity = GroupInviteEntity(
+                groupId = invite.groupId,
+                groupName = invite.groupName,
+                inviterId = invite.inviterId,
+                inviterName = invite.inviterName,
+                memberCount = invite.memberCount,
+                createdAt = System.currentTimeMillis()
+            )
+            groupDao.insertInvite(inviteEntity)
+        } catch (e: Exception) {
+            Logger.e("[GroupService] Failed to handle group invite", e)
         }
     }
 
