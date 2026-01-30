@@ -11,13 +11,8 @@ final class AuthViewModel: ObservableObject {
     private let authService = AuthService.shared
     
     init() {
-        checkExistingSession()
-    }
-    
-    private func checkExistingSession() {
-        if KeychainService.shared.isRegistered {
-            Task { await reconnect() }
-        }
+        // NOTE: Do NOT auto-reconnect here - AppCoordinator handles reconnection on app launch
+        // Having multiple reconnection sources causes race conditions and duplicate auth attempts
     }
     
     func generateMnemonic() async {

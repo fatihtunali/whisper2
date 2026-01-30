@@ -147,13 +147,18 @@ final class MessagingService: ObservableObject {
     }
 
     private func setupConnectionMonitor() {
-        // Monitor WebSocket connection state
-        ws.$connectionState
-            .dropFirst() // Skip initial value
-            .removeDuplicates()
-            .sink { [weak self] state in
-                if state == .connected {
-                    print("MessagingService: WebSocket connected, retrying failed messages...")
+        // Monitor both WebSocket connection AND auth state
+        // Only retry messages when BOTH connected AND authenticated
+        // This ensures we have a valid session token before attempting retries
+        auth.$isAuthenticated
+            .combineLatest(ws.$connectionState)
+            .dropFirst() // Skip initial combined value
+            .removeDuplicates { (prev, curr) in
+                prev.0 == curr.0 && prev.1 == curr.1
+            }
+            .sink { [weak self] (isAuthenticated, connectionState) in
+                if isAuthenticated && connectionState == .connected {
+                    print("MessagingService: Connected and authenticated, retrying failed messages...")
                     Task {
                         await self?.retryFailedMessages()
                     }

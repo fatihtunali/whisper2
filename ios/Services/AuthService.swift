@@ -23,6 +23,11 @@ final class AuthService: ObservableObject {
     private var isAuthenticating = false  // Prevent duplicate auth attempts
     private let authLock = NSLock()  // Thread-safe auth state
 
+    // Track which "connection instance" we authenticated on
+    // Reset when connection is lost, so we know to re-auth on new connection
+    private var authenticatedConnectionId: UUID?
+    private var currentConnectionId: UUID?
+
     private init() {
         setupMessageHandler()
         setupReconnectHandler()
@@ -39,12 +44,14 @@ final class AuthService: ObservableObject {
                     // Reset authenticated state - server requires new auth on each connection
                     if self.isAuthenticated {
                         print("WebSocket disconnected - resetting authentication state")
-                        Task { @MainActor in
+                        DispatchQueue.main.async {
                             self.isAuthenticated = false
                         }
                     }
-                    // Also reset authenticating flag on disconnect
+                    // Clear connection tracking - this connection is no longer valid
                     self.authLock.lock()
+                    self.currentConnectionId = nil
+                    self.authenticatedConnectionId = nil
                     self.isAuthenticating = false
                     // Cancel any pending auth continuation
                     if let cont = self.authContinuation {
@@ -56,14 +63,19 @@ final class AuthService: ObservableObject {
                     }
 
                 case .connected:
-                    // If we have stored credentials but not authenticated, re-authenticate
-                    // Guard against duplicate auth attempts
+                    // Generate a new connection ID for this connection
+                    let newConnectionId = UUID()
                     self.authLock.lock()
-                    let shouldReconnect = !self.isAuthenticated && !self.isAuthenticating && self.keychain.whisperId != nil
+                    self.currentConnectionId = newConnectionId
+                    // Check if we need to authenticate on this NEW connection
+                    // Use connection ID instead of isAuthenticated to avoid race conditions
+                    let needsAuth = self.authenticatedConnectionId != newConnectionId &&
+                                    !self.isAuthenticating &&
+                                    self.keychain.whisperId != nil
                     self.authLock.unlock()
 
-                    if shouldReconnect {
-                        print("WebSocket connected - re-authenticating...")
+                    if needsAuth {
+                        print("WebSocket connected (connId: \(newConnectionId.uuidString.prefix(8))) - authenticating...")
                         Task {
                             do {
                                 try await self.reconnect()
@@ -71,6 +83,8 @@ final class AuthService: ObservableObject {
                                 print("Re-authentication failed: \(error)")
                             }
                         }
+                    } else {
+                        print("WebSocket connected - already authenticated or auth in progress")
                     }
 
                 case .connecting:
@@ -156,8 +170,12 @@ final class AuthService: ObservableObject {
         )
         print("[AuthService] Authentication complete, received whisperId: \(ack.whisperId)")
 
-        // 7. Store session
+        // 7. Store session and mark connection as authenticated
         print("[AuthService] Step 7: Storing session...")
+        authLock.lock()
+        authenticatedConnectionId = currentConnectionId
+        authLock.unlock()
+
         await MainActor.run {
             self.whisperId = ack.whisperId
             self.sessionToken = ack.sessionToken
@@ -165,7 +183,7 @@ final class AuthService: ObservableObject {
         }
         keychain.whisperId = ack.whisperId
         keychain.sessionToken = ack.sessionToken
-        print("[AuthService] Session stored, isAuthenticated = true")
+        print("[AuthService] Session stored, isAuthenticated = true, connId: \(currentConnectionId?.uuidString.prefix(8) ?? "nil")")
 
         // 8. Send push tokens now that we're authenticated
         print("[AuthService] Step 8: Sending push tokens...")
@@ -232,12 +250,19 @@ final class AuthService: ObservableObject {
             signPrivateKey: signPriv
         )
 
+        // Mark this connection as authenticated
+        authLock.lock()
+        authenticatedConnectionId = currentConnectionId
+        authLock.unlock()
+
         await MainActor.run {
             self.whisperId = ack.whisperId
             self.sessionToken = ack.sessionToken
             self.isAuthenticated = true
         }
         keychain.sessionToken = ack.sessionToken
+
+        print("Authentication complete on connection \(currentConnectionId?.uuidString.prefix(8) ?? "nil")")
 
         // Send push tokens now that we're authenticated
         await PushNotificationService.shared.sendTokensAfterAuth()

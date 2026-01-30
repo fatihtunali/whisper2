@@ -23,12 +23,16 @@ final class AppCoordinator: ObservableObject {
             isAuthenticated = true
             isLoading = false
 
-            // Connect in background
+            // Connect in background - only ONE reconnect source (here)
+            // AuthService's observer will handle subsequent reconnections after disconnects
             Task {
                 do {
                     try await authService.reconnect()
                 } catch {
                     print("Auto-reconnect failed: \(error)")
+                    // Don't set isAuthenticated = false here
+                    // AuthService's observer will handle reconnection when network is available
+                    // The UI stays on main view but AuthService tracks the real auth state
                 }
             }
         } else {
@@ -36,7 +40,7 @@ final class AppCoordinator: ObservableObject {
             isLoading = false
         }
 
-        // Only listen for NEW authentications (after registration)
+        // Listen for auth state changes from AuthService
         setupBindings()
     }
 
