@@ -148,8 +148,10 @@ final class CallService: NSObject, ObservableObject {
     }
 
     /// Handle incoming call from VoIP push (when app was in background/killed)
+    /// NOTE: This is the LEGACY method used via onIncomingCall callback
+    /// For iOS 26+ compliance, PushNotificationService now handles CallKit reporting directly
     private func handleVoIPIncomingCall(_ payload: CallIncomingPayload) {
-        print("=== VoIP Push: Incoming call ===")
+        print("=== VoIP Push (legacy): Incoming call ===")
         print("  callId: \(payload.callId)")
         print("  from: \(payload.from)")
         print("  isVideo: \(payload.isVideo)")
@@ -169,14 +171,36 @@ final class CallService: NSObject, ObservableObject {
         let contact = contacts.getContact(whisperId: payload.from)
         let displayName = contact?.displayName ?? payload.from
 
-        print("VoIP Push: Reporting to CallKit with displayName: \(displayName)")
+        print("VoIP Push (legacy): Reporting to CallKit with displayName: \(displayName)")
         callKitManager?.reportIncomingCall(
             callId: payload.callId,
             handle: payload.from,
             displayName: displayName,
             hasVideo: payload.isVideo
         )
-        print("=== VoIP Push: reportIncomingCall called ===")
+        print("=== VoIP Push (legacy): reportIncomingCall called ===")
+    }
+
+    /// Handle incoming call from VoIP push - called AFTER CallKit has already been notified
+    /// This is the iOS 26+ compliant flow where PushNotificationService reports to CallKit first
+    /// We just need to store the call state for when user answers
+    func handleIncomingCallFromPush(_ payload: CallIncomingPayload) {
+        print("=== handleIncomingCallFromPush (iOS 26+ flow) ===")
+        print("  callId: \(payload.callId)")
+        print("  from: \(payload.from)")
+        print("  isVideo: \(payload.isVideo)")
+        print("  ciphertext length: \(payload.ciphertext.count)")
+
+        // Store pending incoming call for CallKit answer flow
+        pendingIncomingCall = payload
+
+        // Store internal state
+        activeCallId = payload.callId
+        activeCallPeerId = payload.from
+        activeCallIsVideo = payload.isVideo
+        activeCallIsOutgoing = false
+
+        print("=== handleIncomingCallFromPush: Call state stored, waiting for user to answer via CallKit ===")
     }
 
     private func setupMessageHandler() {

@@ -324,6 +324,26 @@ extension PushNotificationService: PKPushRegistryDelegate {
             let ciphertext = callData["ciphertext"] as? String ?? ""
             let sig = callData["sig"] as? String ?? ""
 
+            // CRITICAL: Report to CallKit FIRST, before anything else
+            // This ensures iOS doesn't terminate the app
+            // Access CallService.shared to ensure it's initialized, then use its CallKitManager
+            let callService = CallService.shared
+            if let callKitManager = callService.callKitManager {
+                print("Reporting to CallKit via CallService.callKitManager...")
+                callKitManager.reportIncomingCall(
+                    callId: callId,
+                    handle: from,
+                    displayName: from,
+                    hasVideo: isVideo
+                )
+                print("CallKit reportIncomingCall called successfully")
+            } else {
+                // CallKitManager not ready - use fallback provider
+                print("WARNING: CallKitManager is nil, using fallback provider")
+                reportFallbackCall(callId: callId, handle: from, isVideo: isVideo, endImmediately: false)
+            }
+
+            // Now notify CallService about the call details (for crypto, WebRTC setup, etc.)
             let callPayload = CallIncomingPayload(
                 callId: callId,
                 from: from,
@@ -333,17 +353,7 @@ extension PushNotificationService: PKPushRegistryDelegate {
                 ciphertext: ciphertext,
                 sig: sig
             )
-
-            // Notify CallService via callback
-            if let callback = onIncomingCall {
-                print("Invoking onIncomingCall callback...")
-                callback(callPayload)
-                print("onIncomingCall callback invoked successfully")
-            } else {
-                // FALLBACK: Callback is nil - report directly to CallKit
-                print("WARNING: onIncomingCall callback is nil! Using fallback...")
-                reportFallbackCall(callId: callId, handle: from, isVideo: isVideo, endImmediately: false)
-            }
+            callService.handleIncomingCallFromPush(callPayload)
 
         } else {
             // FALLBACK: Failed to parse payload - MUST still report a call to CallKit
