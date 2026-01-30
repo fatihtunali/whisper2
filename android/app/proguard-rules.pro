@@ -9,9 +9,23 @@
 # Native methods
 -keepclasseswithmembernames class * { native <methods>; }
 
-# Data models
+# Data models and service payloads
 -keep class com.whisper2.app.data.network.** { *; }
 -keep class com.whisper2.app.domain.model.** { *; }
+-keep class com.whisper2.app.services.groups.*Payload { *; }
+-keep class com.whisper2.app.services.groups.RecipientEnvelope { *; }
+-keep class com.whisper2.app.services.groups.ServerGroup { *; }
+-keep class com.whisper2.app.services.groups.ServerGroupMember { *; }
+-keep class com.whisper2.app.services.calls.*Payload { *; }
+-keep class com.whisper2.app.services.auth.*Payload { *; }
+
+# Keep all data classes used with Gson serialization
+-keepclassmembers class * {
+    @com.google.gson.annotations.SerializedName <fields>;
+}
+-keepclassmembers,allowobfuscation class * {
+    @com.google.gson.annotations.SerializedName <fields>;
+}
 
 # WebRTC - comprehensive rules to prevent R8 from stripping JNI methods
 -keep class org.webrtc.** { *; }
