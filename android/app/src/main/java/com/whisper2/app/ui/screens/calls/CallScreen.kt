@@ -640,6 +640,7 @@ private fun formatDuration(seconds: Long): String {
 private fun getEndReasonText(reason: CallEndReason): String {
     return when (reason) {
         CallEndReason.ENDED -> "Call ended"
+        CallEndReason.CANCELLED -> "Call cancelled"
         CallEndReason.DECLINED -> "Call declined"
         CallEndReason.BUSY -> "User busy"
         CallEndReason.TIMEOUT -> "No answer"
