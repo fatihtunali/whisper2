@@ -10,6 +10,11 @@
  */
 
 import 'dotenv/config';
+import { EventEmitter } from 'events';
+
+// Increase max listeners to support many concurrent connections
+EventEmitter.defaultMaxListeners = 500;
+
 import http from 'http';
 import express from 'express';
 import path from 'path';
@@ -98,6 +103,7 @@ async function main(): Promise<void> {
 
   // 5. Create HTTP server
   const server = http.createServer(app);
+  server.setMaxListeners(500);
 
   // 6. Create WebSocket server
   const wss = new WebSocketServer({
@@ -105,6 +111,7 @@ async function main(): Promise<void> {
     path: '/ws',
     maxPayload: 512 * 1024, // 512KB max frame size
   });
+  wss.setMaxListeners(500);
 
   // 7. Initialize WebSocket gateway
   wsGateway.init(wss);

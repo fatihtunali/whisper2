@@ -10,6 +10,10 @@
 
 import { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { logger } from '../utils/logger';
+import { EventEmitter } from 'events';
+
+// Increase default max listeners to support many concurrent users
+EventEmitter.defaultMaxListeners = 200;
 
 // =============================================================================
 // CONNECTION POOL
@@ -25,22 +29,22 @@ export function getPool(): Pool {
       database: process.env.POSTGRES_DB || 'whisper2',
       user: process.env.POSTGRES_USER || 'whisper2',
       password: process.env.POSTGRES_PASSWORD,
-      max: parseInt(process.env.POSTGRES_POOL_SIZE || '20', 10),
+      max: parseInt(process.env.POSTGRES_POOL_SIZE || '100', 10),
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 5000,
     });
 
-    // Increase max listeners to prevent EventEmitter warnings
-    pool.setMaxListeners(100);
+    // Increase max listeners to support many concurrent users
+    pool.setMaxListeners(500);
 
     pool.on('error', (err) => {
       logger.error({ err }, 'Unexpected PostgreSQL pool error');
     });
 
     pool.on('connect', (client) => {
-      // Increase max listeners on individual client connections to prevent warnings
-      // when many concurrent operations are queued on a single connection
-      client.setMaxListeners(50);
+      // Increase max listeners on individual client connections
+      // to support many concurrent operations per connection
+      client.setMaxListeners(200);
       logger.debug('PostgreSQL client connected');
     });
   }
