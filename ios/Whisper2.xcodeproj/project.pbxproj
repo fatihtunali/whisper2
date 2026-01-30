@@ -78,6 +78,9 @@
 		EB4391007218AB1BA066C044 /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 366F57F5E618B73A8DDF8416 /* WelcomeView.swift */; };
 		F3D9A514EE4F283030FA38D4 /* CallService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7975B76D3788564E0E3976FA /* CallService.swift */; };
 		FAB279A57A07EFB3F9FCD08B /* WsFrame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FEE6B01AB5FDC3E3F51533A /* WsFrame.swift */; };
+		QRCODEFULLSCREENBUILD01 /* QRCodeFullScreenView.swift in Sources */ = {isa = PBXBuildFile; fileRef = QRCODEFULLSCREENREF001 /* QRCodeFullScreenView.swift */; };
+		SEARCHMESSAGESBUILD0001 /* SearchMessagesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SEARCHMESSAGESREF00001 /* SearchMessagesView.swift */; };
+		ATTACHMENTPREVBUILD001 /* AttachmentPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ATTACHMENTPREVREF00001 /* AttachmentPreviewView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -155,6 +158,9 @@
 		F72812296906C23775F15335 /* CryptoService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CryptoService.swift; sourceTree = "<group>"; };
 		CHATTHEME12345678901234 /* ChatTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatTheme.swift; sourceTree = "<group>"; };
 		CHATTHEMEPICKER123456789 /* ChatThemePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatThemePickerView.swift; sourceTree = "<group>"; };
+		QRCODEFULLSCREENREF001 /* QRCodeFullScreenView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRCodeFullScreenView.swift; sourceTree = "<group>"; };
+		SEARCHMESSAGESREF00001 /* SearchMessagesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchMessagesView.swift; sourceTree = "<group>"; };
+		ATTACHMENTPREVREF00001 /* AttachmentPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentPreviewView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -204,6 +210,7 @@
 		23527972A044A600B4B943FC /* Components */ = {
 			isa = PBXGroup;
 			children = (
+				ATTACHMENTPREVREF00001 /* AttachmentPreviewView.swift */,
 				68D37B780FC446CF8D51C0E9 /* AttachmentView.swift */,
 				0C9C79B5DDBC8DD49F0E3EE0 /* AudioMessageView.swift */,
 				14711286FDD8D1EF872492D9 /* ChatRow.swift */,
@@ -211,6 +218,7 @@
 				0DA740433B1688D91B8F0201 /* LocationView.swift */,
 				C5DC3759496B09ED1EC1B883 /* MessageBubble.swift */,
 				3756A19C09A240E0202DE8A4 /* MessageInputBar.swift */,
+				SEARCHMESSAGESREF00001 /* SearchMessagesView.swift */,
 			);
 			path = Components;
 			sourceTree = "<group>";
@@ -264,6 +272,7 @@
 			children = (
 				BLOCKEDUSERSVW123456789 /* BlockedUsersView.swift */,
 				DE9C1A0A473F72EDA0A95262 /* ProfileView.swift */,
+				QRCODEFULLSCREENREF001 /* QRCodeFullScreenView.swift */,
 				68424DE7EBED910C2747F82E /* SettingsView.swift */,
 			);
 			path = Settings;
@@ -589,6 +598,9 @@
 				EB4391007218AB1BA066C044 /* WelcomeView.swift in Sources */,
 				172457ADBA8BB9E7A938BEA3 /* Whisper2App.swift in Sources */,
 				FAB279A57A07EFB3F9FCD08B /* WsFrame.swift in Sources */,
+				QRCODEFULLSCREENBUILD01 /* QRCodeFullScreenView.swift in Sources */,
+				SEARCHMESSAGESBUILD0001 /* SearchMessagesView.swift in Sources */,
+				ATTACHMENTPREVBUILD001 /* AttachmentPreviewView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
