@@ -15,6 +15,7 @@ import com.whisper2.app.data.network.ws.UpdateTokensPayload
 import com.whisper2.app.data.network.ws.WsClientImpl
 import com.whisper2.app.data.network.ws.WsConnectionState
 import com.whisper2.app.data.network.ws.WsFrame
+import com.whisper2.app.services.auth.AuthService
 import com.whisper2.app.ui.MainActivity
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -28,6 +29,7 @@ class FcmService : FirebaseMessagingService() {
 
     @Inject lateinit var secureStorage: SecureStorage
     @Inject lateinit var wsClient: WsClientImpl
+    @Inject lateinit var authService: AuthService
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -205,8 +207,10 @@ class FcmService : FirebaseMessagingService() {
         scope.launch {
             try {
                 if (wsClient.connectionState.value != WsConnectionState.CONNECTED) {
-                    Logger.d("[FcmService] Reconnecting WebSocket...")
-                    wsClient.connect()
+                    Logger.d("[FcmService] Reconnecting and authenticating WebSocket...")
+                    // Use authService.reconnect() instead of wsClient.connect()
+                    // This ensures proper authentication after connection
+                    authService.reconnect()
                 }
                 // MessageHandler will automatically fetch pending messages on connect
             } catch (e: Exception) {
