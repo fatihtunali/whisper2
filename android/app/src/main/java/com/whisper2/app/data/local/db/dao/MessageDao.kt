@@ -35,4 +35,16 @@ interface MessageDao {
 
     @Query("DELETE FROM messages")
     suspend fun deleteAll()
+
+    // Delete expired messages (for disappearing messages feature)
+    @Query("DELETE FROM messages WHERE expiresAt IS NOT NULL AND expiresAt < :currentTime")
+    suspend fun deleteExpiredMessages(currentTime: Long = System.currentTimeMillis())
+
+    // Set expiration for a message
+    @Query("UPDATE messages SET expiresAt = :expiresAt WHERE id = :messageId")
+    suspend fun setExpiration(messageId: String, expiresAt: Long?)
+
+    // Get count of messages in conversation
+    @Query("SELECT COUNT(*) FROM messages WHERE conversationId = :conversationId")
+    suspend fun getMessageCount(conversationId: String): Int
 }

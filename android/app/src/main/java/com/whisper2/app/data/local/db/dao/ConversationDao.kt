@@ -35,4 +35,13 @@ interface ConversationDao {
 
     @Query("DELETE FROM conversations")
     suspend fun deleteAll()
+
+    @Query("UPDATE conversations SET disappearingTimer = :timer WHERE peerId = :peerId")
+    suspend fun setDisappearingTimer(peerId: String, timer: String)
+
+    @Query("UPDATE conversations SET isPinned = :isPinned WHERE peerId = :peerId")
+    suspend fun setPinned(peerId: String, isPinned: Boolean)
+
+    @Query("UPDATE conversations SET isMuted = :isMuted WHERE peerId = :peerId")
+    suspend fun setMuted(peerId: String, isMuted: Boolean)
 }

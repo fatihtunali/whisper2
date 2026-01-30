@@ -41,8 +41,12 @@ data class MessageEntity(
     val locationAddress: String? = null,
 
     val createdAt: Long = System.currentTimeMillis(),
-    val readAt: Long? = null
+    val readAt: Long? = null,
+    val expiresAt: Long? = null // For disappearing messages
 ) {
+    @get:Ignore
+    val isExpired: Boolean
+        get() = expiresAt != null && System.currentTimeMillis() > expiresAt
     @get:Ignore
     val formattedTime: String
         get() = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestamp))

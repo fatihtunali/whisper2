@@ -6,6 +6,20 @@ import androidx.room.PrimaryKey
 import java.text.SimpleDateFormat
 import java.util.*
 
+/** Disappearing message timer options - must match iOS */
+enum class DisappearingMessageTimer(val value: String, val displayName: String, val durationMs: Long?) {
+    OFF("off", "Off", null),
+    ONE_DAY("24h", "24 hours", 24 * 60 * 60 * 1000L),
+    SEVEN_DAYS("7d", "7 days", 7 * 24 * 60 * 60 * 1000L),
+    THIRTY_DAYS("30d", "30 days", 30 * 24 * 60 * 60 * 1000L);
+
+    companion object {
+        fun fromValue(value: String?): DisappearingMessageTimer {
+            return entries.find { it.value == value } ?: OFF
+        }
+    }
+}
+
 @Entity(tableName = "conversations")
 data class ConversationEntity(
     @PrimaryKey val peerId: String,
@@ -17,8 +31,13 @@ data class ConversationEntity(
     val isPinned: Boolean = false,
     val isMuted: Boolean = false,
     val isTyping: Boolean = false,
+    val disappearingTimer: String = "off", // DisappearingMessageTimer value
     val updatedAt: Long = System.currentTimeMillis()
 ) {
+    @get:Ignore
+    val disappearingMessageTimer: DisappearingMessageTimer
+        get() = DisappearingMessageTimer.fromValue(disappearingTimer)
+
     @get:Ignore
     val formattedTime: String
         get() {

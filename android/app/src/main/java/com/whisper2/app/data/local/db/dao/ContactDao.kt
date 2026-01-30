@@ -39,6 +39,12 @@ interface ContactDao {
     @Query("UPDATE contacts SET isBlocked = :blocked WHERE whisperId = :whisperId")
     suspend fun setBlocked(whisperId: String, blocked: Boolean)
 
+    @Query("SELECT * FROM contacts WHERE isBlocked = 1 ORDER BY displayName")
+    fun getBlockedContacts(): Flow<List<ContactEntity>>
+
+    @Query("SELECT isBlocked FROM contacts WHERE whisperId = :whisperId")
+    suspend fun isBlocked(whisperId: String): Boolean?
+
     @Query("DELETE FROM contacts WHERE whisperId = :whisperId")
     suspend fun deleteByWhisperId(whisperId: String)
 
