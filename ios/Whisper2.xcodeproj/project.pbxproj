@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		APPSETTINGSBUILD12345678 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = APPSETTINGSREF123456789 /* AppSettings.swift */; };
+		APPUPDATESVCBUILD123456 /* AppUpdateService.swift in Sources */ = {isa = PBXBuildFile; fileRef = APPUPDATESVCREF12345678 /* AppUpdateService.swift */; };
+		DISAPPEARMSGBUILD123456 /* DisappearingMessageSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DISAPPEARMSGREF12345678 /* DisappearingMessageSettingsView.swift */; };
 		BLOCKEDUSERSVWBUILD1234 /* BlockedUsersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BLOCKEDUSERSVW123456789 /* BlockedUsersView.swift */; };
 		0158C94E7BA46528B0F6FD9C /* ChatsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF813C2E1D93FF6B34CF603F /* ChatsViewModel.swift */; };
 		02BF112A3DA063972D6774F5 /* CreateAccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5D60A4E6445EC48C5FB287D /* CreateAccountView.swift */; };
@@ -78,6 +81,9 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		APPSETTINGSREF123456789 /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
+		APPUPDATESVCREF12345678 /* AppUpdateService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateService.swift; sourceTree = "<group>"; };
+		DISAPPEARMSGREF12345678 /* DisappearingMessageSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisappearingMessageSettingsView.swift; sourceTree = "<group>"; };
 		BLOCKEDUSERSVW123456789 /* BlockedUsersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockedUsersView.swift; sourceTree = "<group>"; };
 		0C9C79B5DDBC8DD49F0E3EE0 /* AudioMessageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioMessageView.swift; sourceTree = "<group>"; };
 		0DA740433B1688D91B8F0201 /* LocationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationView.swift; sourceTree = "<group>"; };
@@ -166,6 +172,7 @@
 		0159227BFB748C095C89C5E8 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				APPUPDATESVCREF12345678 /* AppUpdateService.swift */,
 				A780635AD5C6CA3786637510 /* AttachmentService.swift */,
 				807A87F87EBAFFC25FBB25AB /* AudioMessageService.swift */,
 				8E726641F6F72BE366C875C5 /* AuthService.swift */,
@@ -237,6 +244,7 @@
 				8EC6D3CDD8D494434163F367 /* ChatView.swift */,
 				913628273C6F97712E4D4A16 /* ContactProfileView.swift */,
 				78DC4915E0A686295312943B /* ContactsListView.swift */,
+				DISAPPEARMSGREF12345678 /* DisappearingMessageSettingsView.swift */,
 				0F19984AE23212340B9D8752 /* MainTabView.swift */,
 				4BD2DE13ABE5949A07D2857B /* MessageRequestsView.swift */,
 			);
@@ -353,6 +361,7 @@
 		C69DE3C9374E33C94B841799 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				APPSETTINGSREF123456789 /* AppSettings.swift */,
 				7B1E7A52019BE1DA7EFA8A61 /* CallHistory.swift */,
 				CHATTHEME12345678901234 /* ChatTheme.swift */,
 				1C043E02CB8D20206D40CD67 /* Contact.swift */,
@@ -513,6 +522,9 @@
 			files = (
 				34CB94BD6FAF134A38BF28F4 /* AddContactView.swift in Sources */,
 				DEC819E42D61D05A6CDE4B4E /* AppCoordinator.swift in Sources */,
+				APPSETTINGSBUILD12345678 /* AppSettings.swift in Sources */,
+				APPUPDATESVCBUILD123456 /* AppUpdateService.swift in Sources */,
+				DISAPPEARMSGBUILD123456 /* DisappearingMessageSettingsView.swift in Sources */,
 				119B568B4473ED2FA72DE240 /* AttachmentService.swift in Sources */,
 				77B519E095378257666D8841 /* AttachmentView.swift in Sources */,
 				19BD7B24ECC8E3B070707906 /* AudioMessageService.swift in Sources */,
