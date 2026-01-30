@@ -5,6 +5,7 @@ import com.google.gson.Gson
 import com.whisper2.app.data.local.db.dao.*
 import com.whisper2.app.data.local.prefs.SecureStorage
 import com.whisper2.app.data.network.api.AttachmentsApi
+import com.whisper2.app.data.network.api.WhisperApi
 import com.whisper2.app.data.network.ws.WsClientImpl
 import com.whisper2.app.crypto.CryptoService
 import com.whisper2.app.services.attachments.AttachmentService
@@ -67,8 +68,9 @@ object ServiceModule {
     fun provideContactsService(
         contactDao: ContactDao,
         wsClient: WsClientImpl,
-        secureStorage: SecureStorage
-    ): ContactsService = ContactsService(contactDao, wsClient, secureStorage)
+        secureStorage: SecureStorage,
+        whisperApi: WhisperApi
+    ): ContactsService = ContactsService(contactDao, wsClient, secureStorage, whisperApi)
 
     // GroupService is provided via @Inject constructor
 

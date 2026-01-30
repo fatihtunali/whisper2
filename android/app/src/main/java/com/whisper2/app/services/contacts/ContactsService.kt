@@ -5,6 +5,7 @@ import com.whisper2.app.core.Logger
 import com.whisper2.app.data.local.db.dao.ContactDao
 import com.whisper2.app.data.local.db.entities.ContactEntity
 import com.whisper2.app.data.local.prefs.SecureStorage
+import com.whisper2.app.data.network.api.WhisperApi
 import com.whisper2.app.data.network.ws.WsClientImpl
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -27,7 +28,8 @@ sealed class QrParseResult {
 class ContactsService @Inject constructor(
     private val contactDao: ContactDao,
     private val wsClient: WsClientImpl,
-    private val secureStorage: SecureStorage
+    private val secureStorage: SecureStorage,
+    private val whisperApi: WhisperApi
 ) {
     /**
      * Parse a QR code string into contact data.
@@ -143,7 +145,19 @@ class ContactsService @Inject constructor(
     }
 
     private suspend fun requestPublicKey(whisperId: String) {
-        // Send request to server to get public key
-        // The response will be handled by WebSocket message handler
+        try {
+            val token = secureStorage.sessionToken
+            if (token == null) {
+                Logger.w("[ContactsService] Cannot fetch keys: no session token")
+                return
+            }
+
+            val response = whisperApi.getUserKeys("Bearer $token", whisperId)
+            contactDao.updatePublicKey(whisperId, response.encPublicKey)
+            contactDao.updateSignPublicKey(whisperId, response.signPublicKey)
+            Logger.i("[ContactsService] Fetched keys for $whisperId")
+        } catch (e: Exception) {
+            Logger.e("[ContactsService] Failed to fetch keys for $whisperId", e)
+        }
     }
 }
