@@ -24,8 +24,10 @@ object NetworkModule {
     @Provides @Singleton @WsClient
     fun provideWsClient(): OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(0, TimeUnit.SECONDS)
-        .pingInterval(30, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.SECONDS)  // Disabled for WebSocket
+        .writeTimeout(30, TimeUnit.SECONDS)
+        // REMOVED: pingInterval - we handle pings at application level
+        // OkHttp's pingInterval can conflict with app-level heartbeat and cause unexpected disconnects
         .build()
 
     @Provides @Singleton @HttpClient

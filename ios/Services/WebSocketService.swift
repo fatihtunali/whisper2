@@ -17,16 +17,21 @@ final class WebSocketService: NSObject, ObservableObject {
     private var webSocket: URLSessionWebSocketTask?
     private var session: URLSession?
     private var pingTimer: Timer?
+    private var pongTimeoutTimer: Timer?
     private var reconnectAttempts = 0
-    private let maxReconnectAttempts = 5
+    private let maxReconnectAttempts = 50  // Increased from 5 to 50
 
     // Pong monitoring
     private var lastPongTime: Date = Date()
     private let pingInterval: TimeInterval = 30  // Send ping every 30 seconds
+    private let pongTimeout: TimeInterval = 60   // Close connection if no pong in 60 seconds
 
     // Network monitoring (for status only, not for triggering reconnects)
     private var networkMonitor: NWPathMonitor?
     private var isNetworkAvailable = true
+
+    // Background queue for network operations (don't block main thread)
+    private let networkQueue = DispatchQueue(label: "com.whisper2.websocket", qos: .userInitiated)
 
     private let messageSubject = PassthroughSubject<Data, Never>()
     var messagePublisher: AnyPublisher<Data, Never> {
@@ -79,9 +84,12 @@ final class WebSocketService: NSObject, ObservableObject {
         connectionState = .connecting
 
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 30
-        config.timeoutIntervalForResource = 60
-        session = URLSession(configuration: config, delegate: self, delegateQueue: .main)
+        config.timeoutIntervalForRequest = 60
+        config.timeoutIntervalForResource = 300
+        config.waitsForConnectivity = true  // Wait for network instead of failing immediately
+
+        // Use background queue for delegate callbacks to not block UI
+        session = URLSession(configuration: config, delegate: self, delegateQueue: OperationQueue())
 
         guard let url = URL(string: Constants.wsURL) else {
             print("[WebSocket] Invalid URL: \(Constants.wsURL)")
@@ -97,11 +105,14 @@ final class WebSocketService: NSObject, ObservableObject {
     func disconnect() {
         print("[WebSocket] Disconnecting...")
         stopPingTimer()
+        stopPongTimeoutTimer()
         webSocket?.cancel(with: .normalClosure, reason: nil)
         webSocket = nil
         session?.invalidateAndCancel()
         session = nil
-        connectionState = .disconnected
+        DispatchQueue.main.async {
+            self.connectionState = .disconnected
+        }
         reconnectAttempts = 0
     }
 
@@ -113,25 +124,54 @@ final class WebSocketService: NSObject, ObservableObject {
         }
     }
 
+    /// Called when app enters foreground - force reconnect if disconnected
+    func handleAppDidBecomeActive() {
+        print("[WebSocket] App became active, checking connection...")
+        if connectionState == .disconnected {
+            reconnectAttempts = 0
+            connect()
+        } else if connectionState == .connected {
+            // Send a ping to verify connection is still alive
+            sendPing()
+        }
+    }
+
+    /// Called when app enters background
+    func handleAppWillResignActive() {
+        print("[WebSocket] App resigning active")
+        // Don't disconnect - let iOS manage the connection
+        // But stop timers as they won't fire reliably in background
+        stopPingTimer()
+        stopPongTimeoutTimer()
+    }
+
     private func reconnect() {
         guard reconnectAttempts < maxReconnectAttempts else {
-            print("[WebSocket] Max reconnect attempts reached")
-            connectionState = .disconnected
+            print("[WebSocket] Max reconnect attempts reached, will retry on next app foreground")
+            DispatchQueue.main.async {
+                self.connectionState = .disconnected
+            }
             return
         }
 
         guard isNetworkAvailable else {
             print("[WebSocket] Network not available, waiting...")
-            connectionState = .disconnected
+            DispatchQueue.main.async {
+                self.connectionState = .disconnected
+            }
             return
         }
 
-        connectionState = .reconnecting
+        DispatchQueue.main.async {
+            self.connectionState = .reconnecting
+        }
         reconnectAttempts += 1
 
-        // Simple backoff: 2s, 4s, 6s, 8s, 10s
-        let delay = Double(reconnectAttempts) * 2.0
-        print("[WebSocket] Reconnecting in \(delay)s (attempt \(reconnectAttempts)/\(maxReconnectAttempts))...")
+        // Exponential backoff with jitter: 1s, 2s, 4s, 8s... max 30s
+        let baseDelay = min(pow(2.0, Double(reconnectAttempts - 1)), 30.0)
+        let jitter = Double.random(in: 0...1)
+        let delay = baseDelay + jitter
+        print("[WebSocket] Reconnecting in \(String(format: "%.1f", delay))s (attempt \(reconnectAttempts)/\(maxReconnectAttempts))...")
 
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self = self, self.connectionState == .reconnecting else { return }
@@ -141,6 +181,11 @@ final class WebSocketService: NSObject, ObservableObject {
             self.connectionState = .disconnected
             self.connect()
         }
+    }
+
+    /// Reset reconnect counter (called after successful auth)
+    func resetReconnectAttempts() {
+        reconnectAttempts = 0
     }
 
     // MARK: - Send
@@ -187,6 +232,7 @@ final class WebSocketService: NSObject, ObservableObject {
         if let raw = try? JSONDecoder().decode(RawWsFrame.self, from: data),
            raw.type == Constants.MessageType.pong || raw.type == "pong" {
             lastPongTime = Date()
+            print("[WebSocket] Pong received")
             return
         }
 
@@ -197,10 +243,13 @@ final class WebSocketService: NSObject, ObservableObject {
     private func handleDisconnect() {
         print("[WebSocket] Connection lost")
         stopPingTimer()
+        stopPongTimeoutTimer()
 
         // Only reconnect if we were actually connected
-        if connectionState == .connected {
-            reconnect()
+        DispatchQueue.main.async {
+            if self.connectionState == .connected {
+                self.reconnect()
+            }
         }
     }
 
@@ -208,22 +257,63 @@ final class WebSocketService: NSObject, ObservableObject {
 
     private func startPingTimer() {
         stopPingTimer()
+        stopPongTimeoutTimer()
         lastPongTime = Date()
-        pingTimer = Timer.scheduledTimer(withTimeInterval: pingInterval, repeats: true) { [weak self] _ in
-            self?.sendPing()
+
+        DispatchQueue.main.async {
+            self.pingTimer = Timer.scheduledTimer(withTimeInterval: self.pingInterval, repeats: true) { [weak self] _ in
+                self?.sendPing()
+                self?.startPongTimeoutTimer()
+            }
         }
     }
 
     private func stopPingTimer() {
-        pingTimer?.invalidate()
-        pingTimer = nil
+        DispatchQueue.main.async {
+            self.pingTimer?.invalidate()
+            self.pingTimer = nil
+        }
+    }
+
+    private func startPongTimeoutTimer() {
+        stopPongTimeoutTimer()
+
+        DispatchQueue.main.async {
+            self.pongTimeoutTimer = Timer.scheduledTimer(withTimeInterval: self.pongTimeout, repeats: false) { [weak self] _ in
+                self?.checkPongTimeout()
+            }
+        }
+    }
+
+    private func stopPongTimeoutTimer() {
+        DispatchQueue.main.async {
+            self.pongTimeoutTimer?.invalidate()
+            self.pongTimeoutTimer = nil
+        }
+    }
+
+    private func checkPongTimeout() {
+        let timeSinceLastPong = Date().timeIntervalSince(lastPongTime)
+        if timeSinceLastPong > pongTimeout {
+            print("[WebSocket] Pong timeout (\(Int(timeSinceLastPong))s since last pong), closing connection")
+            // Force close and reconnect
+            webSocket?.cancel(with: .abnormalClosure, reason: "Pong timeout".data(using: .utf8))
+            handleDisconnect()
+        }
     }
 
     private func sendPing() {
         guard connectionState == .connected else { return }
         let payload = PingPayload(timestamp: Int64(Date().timeIntervalSince1970 * 1000))
         let frame = WsFrame(type: Constants.MessageType.ping, payload: payload)
-        Task { try? await send(frame) }
+        Task {
+            do {
+                try await send(frame)
+                print("[WebSocket] Ping sent")
+            } catch {
+                print("[WebSocket] Failed to send ping: \(error)")
+            }
+        }
     }
 
     deinit {
@@ -236,9 +326,11 @@ final class WebSocketService: NSObject, ObservableObject {
 extension WebSocketService: URLSessionWebSocketDelegate {
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
         print("[WebSocket] Connected")
-        connectionState = .connected
-        reconnectAttempts = 0
-        startPingTimer()
+        DispatchQueue.main.async {
+            self.connectionState = .connected
+            self.reconnectAttempts = 0
+            self.startPingTimer()
+        }
     }
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {

@@ -6,6 +6,7 @@ import UserNotifications
 struct Whisper2App: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var coordinator = AppCoordinator()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -16,6 +17,29 @@ struct Whisper2App: App {
                     setupNotifications()
                     checkForAppUpdates()
                 }
+                .onChange(of: scenePhase) { oldPhase, newPhase in
+                    handleScenePhaseChange(from: oldPhase, to: newPhase)
+                }
+        }
+    }
+
+    private func handleScenePhaseChange(from oldPhase: ScenePhase, to newPhase: ScenePhase) {
+        switch newPhase {
+        case .active:
+            print("[App] Scene became active")
+            // Reconnect WebSocket when app enters foreground
+            WebSocketService.shared.handleAppDidBecomeActive()
+            // Also trigger auth reconnect if needed
+            Task {
+                try? await AuthService.shared.reconnect()
+            }
+        case .inactive:
+            print("[App] Scene became inactive")
+        case .background:
+            print("[App] Scene entered background")
+            WebSocketService.shared.handleAppWillResignActive()
+        @unknown default:
+            break
         }
     }
 

@@ -12,6 +12,8 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.whisper2.app.core.Logger
+import com.whisper2.app.data.network.ws.WsClientImpl
+import com.whisper2.app.services.auth.AuthService
 import com.whisper2.app.services.calls.CallService
 import com.whisper2.app.services.calls.CallState
 import dagger.hilt.android.HiltAndroidApp
@@ -37,6 +39,12 @@ class App : Application(), DefaultLifecycleObserver {
     @Inject
     lateinit var callService: dagger.Lazy<CallService>
 
+    @Inject
+    lateinit var wsClient: dagger.Lazy<WsClientImpl>
+
+    @Inject
+    lateinit var authService: dagger.Lazy<AuthService>
+
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     override fun onCreate() {
@@ -47,12 +55,37 @@ class App : Application(), DefaultLifecycleObserver {
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
     }
 
+    override fun onStart(owner: LifecycleOwner) {
+        // App coming to foreground
+        Logger.i("[App] App entering foreground")
+        try {
+            // Trigger WebSocket reconnection check
+            wsClient.get().handleAppForeground()
+
+            // Also trigger auth reconnect if needed
+            appScope.launch {
+                try {
+                    authService.get().reconnect()
+                } catch (e: Exception) {
+                    Logger.w("[App] Auth reconnect failed: ${e.message}")
+                }
+            }
+        } catch (e: Exception) {
+            Logger.w("[App] Error handling foreground: ${e.message}")
+        }
+    }
+
     override fun onStop(owner: LifecycleOwner) {
         // App going to background
         // NOTE: We do NOT end calls when app goes to background!
         // Calls should continue with the foreground service notification.
         // Only end calls on actual app destruction (onDestroy).
         Logger.i("[App] App going to background - calls continue via foreground service")
+        try {
+            wsClient.get().handleAppBackground()
+        } catch (e: Exception) {
+            Logger.w("[App] Error handling background: ${e.message}")
+        }
     }
 
     override fun onDestroy(owner: LifecycleOwner) {
