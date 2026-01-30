@@ -318,6 +318,12 @@ struct GroupCreateAckPayload: Codable {
     let createdAt: Int64
 }
 
+/// Role change for group members
+struct RoleChange: Codable {
+    let whisperId: String
+    let role: String  // "admin" or "member"
+}
+
 struct GroupUpdatePayload: Codable {
     let protocolVersion: Int
     let cryptoVersion: Int
@@ -326,8 +332,9 @@ struct GroupUpdatePayload: Codable {
     let addMembers: [String]?
     let removeMembers: [String]?
     let title: String?
+    let roleChanges: [RoleChange]?
 
-    init(sessionToken: String, groupId: String, addMembers: [String]? = nil, removeMembers: [String]? = nil, title: String? = nil) {
+    init(sessionToken: String, groupId: String, addMembers: [String]? = nil, removeMembers: [String]? = nil, title: String? = nil, roleChanges: [RoleChange]? = nil) {
         self.protocolVersion = Constants.protocolVersion
         self.cryptoVersion = Constants.cryptoVersion
         self.sessionToken = sessionToken
@@ -335,6 +342,7 @@ struct GroupUpdatePayload: Codable {
         self.addMembers = addMembers
         self.removeMembers = removeMembers
         self.title = title
+        self.roleChanges = roleChanges
     }
 }
 
@@ -364,6 +372,8 @@ struct GroupSendMessagePayload: Codable {
     let timestamp: Int64
     let recipients: [RecipientEnvelope]  // All recipients bundled in one frame
     let attachment: AttachmentPointer?
+    let replyTo: String?
+    let reactions: [String: [String]]?  // emoji -> [whisperId]
 
     init(
         sessionToken: String,
@@ -373,7 +383,9 @@ struct GroupSendMessagePayload: Codable {
         msgType: String = "text",
         timestamp: Int64,
         recipients: [RecipientEnvelope],
-        attachment: AttachmentPointer? = nil
+        attachment: AttachmentPointer? = nil,
+        replyTo: String? = nil,
+        reactions: [String: [String]]? = nil
     ) {
         self.protocolVersion = Constants.protocolVersion
         self.cryptoVersion = Constants.cryptoVersion
@@ -385,6 +397,8 @@ struct GroupSendMessagePayload: Codable {
         self.timestamp = timestamp
         self.recipients = recipients
         self.attachment = attachment
+        self.replyTo = replyTo
+        self.reactions = reactions
     }
 }
 
