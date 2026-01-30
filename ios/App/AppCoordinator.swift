@@ -18,6 +18,13 @@ final class AppCoordinator: ObservableObject {
         // Check registration FIRST, synchronously, before any async operations
         hasRegistration = keychain.isRegistered && keychain.mnemonic != nil
 
+        // Debug logging for keychain state
+        print("=== AppCoordinator Init ===")
+        print("  keychain.isRegistered: \(keychain.isRegistered)")
+        print("  keychain.mnemonic exists: \(keychain.mnemonic != nil)")
+        print("  keychain.whisperId: \(keychain.whisperId ?? "nil")")
+        print("  hasRegistration: \(hasRegistration)")
+
         // If registered, show main view immediately (no loading screen needed)
         if hasRegistration {
             isAuthenticated = true
