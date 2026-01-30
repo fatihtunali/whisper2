@@ -111,12 +111,16 @@ final class AttachmentService: ObservableObject {
         messageId: String
     ) async throws -> AttachmentPointer {
         guard let user = auth.currentUser else {
+            print("[AttachmentService] ERROR: No current user - not authenticated")
             throw NetworkError.connectionFailed
         }
 
-        guard let sessionToken = auth.sessionToken else {
+        guard let sessionToken = auth.sessionToken, !sessionToken.isEmpty else {
+            print("[AttachmentService] ERROR: No session token available")
             throw NetworkError.connectionFailed
         }
+
+        print("[AttachmentService] Starting upload with session token: \(sessionToken.prefix(20))...")
 
         // Read file data
         let fileData = try Data(contentsOf: fileURL)
@@ -164,11 +168,24 @@ final class AttachmentService: ObservableObject {
 
         let (presignData, presignResponse) = try await URLSession.shared.data(for: presignRequest)
 
-        guard let httpPresignResponse = presignResponse as? HTTPURLResponse,
-              (200...299).contains(httpPresignResponse.statusCode) else {
+        guard let httpPresignResponse = presignResponse as? HTTPURLResponse else {
+            print("[AttachmentService] ERROR: No HTTP response from presign request")
+            throw NetworkError.serverError(code: "NO_RESPONSE", message: "No response from server")
+        }
+
+        let statusCode = httpPresignResponse.statusCode
+        print("[AttachmentService] Presign response status: \(statusCode)")
+
+        guard (200...299).contains(statusCode) else {
             let errorMsg = String(data: presignData, encoding: .utf8) ?? "Unknown error"
-            print("[AttachmentService] Presign upload failed: \(errorMsg)")
-            throw NetworkError.serverError(code: "PRESIGN_FAILED", message: "Failed to get upload URL")
+            print("[AttachmentService] Presign upload failed (HTTP \(statusCode)): \(errorMsg)")
+
+            if statusCode == 401 {
+                throw NetworkError.serverError(code: "UNAUTHORIZED", message: "Session expired - please re-login")
+            } else if statusCode == 403 {
+                throw NetworkError.serverError(code: "FORBIDDEN", message: "Not authorized to upload")
+            }
+            throw NetworkError.serverError(code: "PRESIGN_FAILED", message: "Failed to get upload URL (HTTP \(statusCode))")
         }
 
         let presignResult = try JSONDecoder().decode(PresignUploadResponse.self, from: presignData)
