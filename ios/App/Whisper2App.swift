@@ -14,7 +14,15 @@ struct Whisper2App: App {
                 .preferredColorScheme(.dark)
                 .onAppear {
                     setupNotifications()
+                    checkForAppUpdates()
                 }
+        }
+    }
+
+    private func checkForAppUpdates() {
+        // Check for updates after a short delay to let UI load first
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            AppUpdateService.shared.checkForUpdates()
         }
     }
 
