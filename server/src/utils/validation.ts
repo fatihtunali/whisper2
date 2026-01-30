@@ -118,6 +118,21 @@ export function validateAttachment(att: AttachmentPointer): { valid: boolean; er
 const DEDUP_TTL_SECONDS = 3600; // 1 hour
 
 /**
+ * Atomically check and mark a message as processed.
+ * Returns true if this is a NEW message (first time seen).
+ * Returns false if this is a DUPLICATE (already processed).
+ *
+ * This is atomic - no race condition between check and set.
+ * Uses Redis SET NX (set if not exists) with TTL.
+ */
+export async function tryMarkMessageProcessed(senderId: string, messageId: string): Promise<boolean> {
+  const key = `dedup:${senderId}:${messageId}`;
+  // Returns true if key was set (new message), false if already exists (duplicate)
+  return await redis.setIfNotExists(key, '1', DEDUP_TTL_SECONDS);
+}
+
+/**
+ * @deprecated Use tryMarkMessageProcessed() for atomic check+set
  * Check if a message has already been processed (deduplication)
  */
 export async function isDuplicateMessage(senderId: string, messageId: string): Promise<boolean> {
@@ -126,6 +141,7 @@ export async function isDuplicateMessage(senderId: string, messageId: string): P
 }
 
 /**
+ * @deprecated Use tryMarkMessageProcessed() for atomic check+set
  * Mark a message as processed for deduplication
  */
 export async function markMessageProcessed(senderId: string, messageId: string): Promise<void> {

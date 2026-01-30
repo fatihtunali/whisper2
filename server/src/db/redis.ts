@@ -142,6 +142,21 @@ export async function expire(key: string, ttlSeconds: number): Promise<boolean> 
   return result === 1;
 }
 
+/**
+ * Atomically set key if it doesn't exist (with TTL).
+ * Returns true if key was set (new), false if it already existed (duplicate).
+ * This is atomic - no race condition between check and set.
+ */
+export async function setIfNotExists(
+  key: string,
+  value: string,
+  ttlSeconds: number
+): Promise<boolean> {
+  // SET key value EX ttl NX - returns 'OK' if set, null if key exists
+  const result = await getRedis().set(key, value, 'EX', ttlSeconds, 'NX');
+  return result === 'OK';
+}
+
 // =============================================================================
 // RATE LIMIT HELPERS
 // =============================================================================

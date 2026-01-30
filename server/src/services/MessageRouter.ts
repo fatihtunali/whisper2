@@ -34,8 +34,7 @@ import { attachmentService } from './AttachmentService';
 import { userExists, getUserKeys } from '../db/UserRepository';
 import {
   validateAttachment,
-  isDuplicateMessage,
-  markMessageProcessed,
+  tryMarkMessageProcessed,
 } from '../utils/validation';
 
 // =============================================================================
@@ -208,9 +207,9 @@ export class MessageRouter {
       };
     }
 
-    // 7. Check idempotency (dedup)
-    const isDuplicate = await isDuplicateMessage(from, messageId);
-    if (isDuplicate) {
+    // 7. Atomic check-and-mark for idempotency (prevents race conditions)
+    const isNewMessage = await tryMarkMessageProcessed(from, messageId);
+    if (!isNewMessage) {
       logger.info({ messageId, from }, 'Duplicate message, returning ACK');
       return {
         success: true,
@@ -218,10 +217,7 @@ export class MessageRouter {
       };
     }
 
-    // 8. Mark message as processed (dedup)
-    await markMessageProcessed(from, messageId);
-
-    // 9. Build message_received payload for recipient
+    // 8. Build message_received payload for recipient
     // Omit optional fields when not present (cleaner cross-platform decoding)
     const messageReceived: MessageReceivedPayload = {
       messageId,

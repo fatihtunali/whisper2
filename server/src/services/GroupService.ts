@@ -30,8 +30,7 @@ import {
 import { userExists, getUserKeys } from '../db/UserRepository';
 import {
   validateAttachment,
-  isDuplicateMessage,
-  markMessageProcessed,
+  tryMarkMessageProcessed,
 } from '../utils/validation';
 
 // =============================================================================
@@ -568,18 +567,15 @@ export class GroupService {
       }
     }
 
-    // Check idempotency
-    const isDuplicate = await isDuplicateMessage(senderWhisperId, messageId);
-    if (isDuplicate) {
+    // Atomic check-and-mark for idempotency (prevents race conditions)
+    const isNewMessage = await tryMarkMessageProcessed(senderWhisperId, messageId);
+    if (!isNewMessage) {
       logger.info({ messageId, from }, 'Duplicate group message, returning ACK');
       return {
         success: true,
         data: { messageId, status: 'sent' },
       };
     }
-
-    // Mark as processed
-    await markMessageProcessed(senderWhisperId, messageId);
 
     // Route to each recipient
     for (const envelope of recipients) {
