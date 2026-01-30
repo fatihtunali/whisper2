@@ -28,6 +28,7 @@ import com.whisper2.app.ui.viewmodels.GroupChatViewModel
 fun GroupChatScreen(
     groupId: String,
     onBack: () -> Unit,
+    onNavigateToGroupInfo: () -> Unit = {},
     viewModel: GroupChatViewModel = hiltViewModel()
 ) {
     val group by viewModel.group.collectAsState()
@@ -80,7 +81,7 @@ fun GroupChatScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { /* Group info */ }) {
+                    IconButton(onClick = onNavigateToGroupInfo) {
                         Icon(Icons.Default.Info, "Group Info", tint = Color.White)
                     }
                 },

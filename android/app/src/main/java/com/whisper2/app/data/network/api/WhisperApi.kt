@@ -1,5 +1,6 @@
 package com.whisper2.app.data.network.api
 
+import com.google.gson.annotations.SerializedName
 import retrofit2.http.*
 
 interface WhisperApi {
@@ -30,12 +31,24 @@ interface WhisperApi {
 }
 
 data class UserKeysResponse(
-    val whisperId: String,
-    val encPublicKey: String,
-    val signPublicKey: String
+    @SerializedName("whisperId") val whisperId: String,
+    @SerializedName("encPublicKey") val encPublicKey: String,
+    @SerializedName("signPublicKey") val signPublicKey: String
 )
 
-data class ContactsBackupRequest(val encryptedData: String)
-data class ContactsBackupResponse(val encryptedData: String?, val updatedAt: Long?)
-data class DeleteResponse(val success: Boolean)
-data class HealthResponse(val status: String)
+data class ContactsBackupRequest(
+    @SerializedName("encryptedData") val encryptedData: String
+)
+
+data class ContactsBackupResponse(
+    @SerializedName("encryptedData") val encryptedData: String?,
+    @SerializedName("updatedAt") val updatedAt: Long?
+)
+
+data class DeleteResponse(
+    @SerializedName("success") val success: Boolean
+)
+
+data class HealthResponse(
+    @SerializedName("status") val status: String
+)

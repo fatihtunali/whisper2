@@ -19,17 +19,23 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.whisper2.app.data.local.db.entities.DisappearingMessageTimer
+import com.whisper2.app.ui.viewmodels.DisappearingMessagesViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DisappearingMessageSettingsScreen(
-    peerId: String,
-    currentTimer: DisappearingMessageTimer,
-    onTimerSelected: (DisappearingMessageTimer) -> Unit,
-    onBack: () -> Unit
+    conversationId: String,
+    onBack: () -> Unit,
+    viewModel: DisappearingMessagesViewModel = hiltViewModel()
 ) {
-    var selectedTimer by remember { mutableStateOf(currentTimer) }
+    val currentTimer by viewModel.currentTimer.collectAsState()
+    var selectedTimer by remember(currentTimer) { mutableStateOf(currentTimer) }
+
+    LaunchedEffect(conversationId) {
+        viewModel.loadConversation(conversationId)
+    }
 
     Scaffold(
         topBar = {
@@ -103,7 +109,7 @@ fun DisappearingMessageSettingsScreen(
                         isSelected = selectedTimer == timer,
                         onClick = {
                             selectedTimer = timer
-                            onTimerSelected(timer)
+                            viewModel.setTimer(timer)
                         }
                     )
                 }

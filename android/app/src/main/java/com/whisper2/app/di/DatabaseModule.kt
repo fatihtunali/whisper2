@@ -17,7 +17,10 @@ object DatabaseModule {
     @Provides @Singleton
     fun provideDatabase(@ApplicationContext ctx: Context): WhisperDatabase =
         Room.databaseBuilder(ctx, WhisperDatabase::class.java, Constants.DATABASE_NAME)
-            .addMigrations(WhisperDatabase.MIGRATION_1_2)
+            .addMigrations(
+                WhisperDatabase.MIGRATION_1_2,
+                WhisperDatabase.MIGRATION_2_3
+            )
             .build()
 
     @Provides fun messageDao(db: WhisperDatabase) = db.messageDao()

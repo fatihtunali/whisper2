@@ -93,6 +93,22 @@ class SecureStorage(private val context: Context, private val keystoreManager: K
 
     fun getOrCreateDeviceId(): String = deviceId
 
+    // Active call tracking for cleanup on app restart
+    var activeCallId: String?
+        get() = prefs.getString("active_call_id", null)
+        set(value) = prefs.edit().putString("active_call_id", value).apply()
+
+    var activeCallPeerId: String?
+        get() = prefs.getString("active_call_peer_id", null)
+        set(value) = prefs.edit().putString("active_call_peer_id", value).apply()
+
+    fun clearActiveCall() {
+        prefs.edit()
+            .remove("active_call_id")
+            .remove("active_call_peer_id")
+            .apply()
+    }
+
     fun clearAll() {
         prefs.edit().clear().apply()
         keystoreManager.deleteKey()

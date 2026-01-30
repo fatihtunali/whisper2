@@ -27,6 +27,10 @@ import com.whisper2.app.ui.screens.contacts.ScanQrScreen
 import com.whisper2.app.ui.screens.main.MainScreen
 import com.whisper2.app.ui.screens.main.ChatScreen
 import com.whisper2.app.ui.screens.main.GroupChatScreen
+import com.whisper2.app.ui.screens.main.GroupInfoScreen
+import com.whisper2.app.ui.screens.settings.BlockedUsersScreen
+import com.whisper2.app.ui.screens.settings.DisappearingMessageSettingsScreen
+import com.whisper2.app.data.local.db.entities.DisappearingMessageTimer
 import com.whisper2.app.ui.screens.calls.CallScreen
 import com.whisper2.app.ui.NotificationData
 import com.whisper2.app.ui.viewmodels.AddContactState
@@ -64,6 +68,16 @@ sealed class Screen(val route: String) {
     object IncomingCall : Screen("incoming_call/{callerName}/{callerId}/{isVideo}") {
         fun createRoute(callerName: String, callerId: String, isVideo: Boolean) =
             "incoming_call/${Uri.encode(callerName)}/$callerId/$isVideo"
+    }
+    object GroupInfo : Screen("group_info/{groupId}") {
+        fun createRoute(groupId: String) = "group_info/$groupId"
+    }
+    object AddGroupMembers : Screen("add_group_members/{groupId}") {
+        fun createRoute(groupId: String) = "add_group_members/$groupId"
+    }
+    object BlockedUsers : Screen("blocked_users")
+    object DisappearingMessages : Screen("disappearing_messages/{conversationId}") {
+        fun createRoute(conversationId: String) = "disappearing_messages/$conversationId"
     }
 }
 
@@ -286,7 +300,10 @@ fun MainNavigation(
             val groupId = backStackEntry.arguments?.getString("groupId") ?: ""
             GroupChatScreen(
                 groupId = groupId,
-                onBack = { navController.popBackStack() }
+                onBack = { navController.popBackStack() },
+                onNavigateToGroupInfo = {
+                    navController.navigate(Screen.GroupInfo.createRoute(groupId))
+                }
             )
         }
 
@@ -305,6 +322,40 @@ fun MainNavigation(
                 isVideo = isVideo,
                 isOutgoing = true,
                 onCallEnded = { navController.popBackStack() }
+            )
+        }
+
+        // Group Info Screen
+        composable(
+            route = Screen.GroupInfo.route,
+            arguments = listOf(navArgument("groupId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val groupId = backStackEntry.arguments?.getString("groupId") ?: ""
+            GroupInfoScreen(
+                groupId = groupId,
+                onBack = { navController.popBackStack() },
+                onAddMembers = {
+                    navController.navigate(Screen.AddGroupMembers.createRoute(groupId))
+                }
+            )
+        }
+
+        // Blocked Users Screen
+        composable(Screen.BlockedUsers.route) {
+            BlockedUsersScreen(
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        // Disappearing Messages Settings Screen
+        composable(
+            route = Screen.DisappearingMessages.route,
+            arguments = listOf(navArgument("conversationId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val conversationId = backStackEntry.arguments?.getString("conversationId") ?: ""
+            DisappearingMessageSettingsScreen(
+                conversationId = conversationId,
+                onBack = { navController.popBackStack() }
             )
         }
 

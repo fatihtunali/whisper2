@@ -139,10 +139,134 @@ class CallService @Inject constructor(
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
     init {
+        // Clean up any stale call state from previous app session
+        cleanupStaleState()
         setupWebRTC()
         setupMessageHandler()
         // Initialize Telecom integration (Android's CallKit equivalent)
         telecomCallManager.initialize()
+    }
+
+    /**
+     * Clean up any stale call state that may have persisted from a previous app session.
+     * This handles cases where the app was killed during an active call.
+     */
+    private fun cleanupStaleState() {
+        Logger.i("[CallService] Cleaning up stale call state on app start")
+
+        // Check if there was an active call from previous session
+        val staleCallId = secureStorage.activeCallId
+        val staleCallPeerId = secureStorage.activeCallPeerId
+
+        if (staleCallId != null && staleCallPeerId != null) {
+            Logger.i("[CallService] Found stale call: $staleCallId with peer: $staleCallPeerId - sending cleanup to server")
+            // Send call_end to server to clean up server-side state
+            scope.launch {
+                try {
+                    sendStaleCallCleanup(staleCallId, staleCallPeerId)
+                } catch (e: Exception) {
+                    Logger.e("[CallService] Failed to send stale call cleanup", e)
+                }
+            }
+        }
+
+        // Clear persisted call info
+        secureStorage.clearActiveCall()
+
+        // Reset all call state
+        _callState.value = CallState.Idle
+        _activeCall.value = null
+        _turnCredentials.value = null
+        _callDuration.value = 0
+
+        // Clear any pending data
+        pendingRemoteIceCandidates.clear()
+        pendingLocalIceCandidates.clear()
+        pendingIncomingCall = null
+
+        // Reset flags
+        localSdpSent = false
+        remoteAudioTrackReceived = false
+        remoteVideoTrackReceived = false
+        remoteVideoSinkAdded = false
+
+        // Stop any lingering foreground service
+        try {
+            CallForegroundService.stopService(context)
+        } catch (e: Exception) {
+            Logger.w("[CallService] Error stopping foreground service during cleanup: ${e.message}")
+        }
+
+        // End any Telecom connections
+        try {
+            telecomCallManager.endCallSync()
+        } catch (e: Exception) {
+            Logger.w("[CallService] Error ending Telecom connection during cleanup: ${e.message}")
+        }
+
+        Logger.i("[CallService] Stale state cleanup complete")
+    }
+
+    /**
+     * Send call_end to server for a stale call that wasn't properly ended.
+     */
+    private suspend fun sendStaleCallCleanup(callId: String, peerId: String) {
+        val whisperId = secureStorage.whisperId ?: return
+        val sessionToken = secureStorage.sessionToken ?: return
+        val encPrivateKey = secureStorage.encPrivateKey ?: return
+        val signPrivateKey = secureStorage.signPrivateKey ?: return
+
+        val contact = contactDao.getContactById(peerId)
+        val recipientPublicKey = contact?.encPublicKey?.let {
+            Base64.decode(it.replace(" ", "+").trim(), Base64.NO_WRAP)
+        }
+
+        if (recipientPublicKey != null) {
+            try {
+                val message = "end"
+                val nonce = cryptoService.generateNonce()
+                val ciphertext = cryptoService.boxSeal(
+                    message.toByteArray(Charsets.UTF_8),
+                    nonce,
+                    recipientPublicKey,
+                    encPrivateKey
+                )
+
+                val timestamp = System.currentTimeMillis()
+
+                val signature = cryptoService.signMessage(
+                    Constants.MsgType.CALL_END,
+                    callId,
+                    whisperId,
+                    peerId,
+                    timestamp,
+                    nonce,
+                    ciphertext,
+                    signPrivateKey
+                )
+
+                Logger.i("[CallService] Sending stale call cleanup for callId: $callId, reason: 'failed'")
+
+                val payload = CallEndPayload(
+                    sessionToken = sessionToken,
+                    callId = callId,
+                    from = whisperId,
+                    to = peerId,
+                    timestamp = timestamp,
+                    nonce = Base64.encodeToString(nonce, Base64.NO_WRAP),
+                    ciphertext = Base64.encodeToString(ciphertext, Base64.NO_WRAP),
+                    sig = Base64.encodeToString(signature, Base64.NO_WRAP),
+                    reason = "failed"  // Stale calls are treated as failed
+                )
+
+                wsClient.send(WsFrame(Constants.MsgType.CALL_END, payload = payload))
+                Logger.i("[CallService] Stale call cleanup sent successfully")
+            } catch (e: Exception) {
+                Logger.e("[CallService] Failed to send stale call cleanup", e)
+            }
+        } else {
+            Logger.w("[CallService] Cannot send stale call cleanup - no public key for peer: $peerId")
+        }
     }
 
     private fun setupWebRTC() {
@@ -319,6 +443,10 @@ class CallService @Inject constructor(
             )
             _callState.value = CallState.Initiating
 
+            // Persist active call info for cleanup on app restart
+            secureStorage.activeCallId = callId
+            secureStorage.activeCallPeerId = peerId
+
             // Report outgoing call to Telecom system
             Logger.i("[CallService] Reporting outgoing call to Telecom - isVideo: $isVideo")
             telecomCallManager.reportOutgoingCall(
@@ -478,6 +606,10 @@ class CallService @Inject constructor(
             )
             _callState.value = CallState.Connecting
 
+            // Persist active call info for cleanup on app restart
+            secureStorage.activeCallId = incomingPayload.callId
+            secureStorage.activeCallPeerId = incomingPayload.from
+
             pendingIncomingCall = null
 
             Result.success(Unit)
@@ -537,6 +669,9 @@ class CallService @Inject constructor(
                     signPrivateKey
                 )
 
+                val reasonString = reason.name.lowercase()
+                Logger.i("[CallService] Sending call_end with reason: '$reasonString' (enum: $reason)")
+
                 val payload = CallEndPayload(
                     sessionToken = sessionToken,
                     callId = call.callId,
@@ -546,7 +681,7 @@ class CallService @Inject constructor(
                     nonce = Base64.encodeToString(nonce, Base64.NO_WRAP),
                     ciphertext = Base64.encodeToString(ciphertext, Base64.NO_WRAP),
                     sig = Base64.encodeToString(signature, Base64.NO_WRAP),
-                    reason = reason.name.lowercase()
+                    reason = reasonString
                 )
 
                 wsClient.send(WsFrame(Constants.MsgType.CALL_END, payload = payload))
@@ -554,6 +689,9 @@ class CallService @Inject constructor(
                 Logger.e("Failed to send call end", e)
             }
         }
+
+        // Clear persisted call info
+        secureStorage.clearActiveCall()
 
         _callState.value = CallState.Ended(reason)
         recordCallToHistory(call, reason)
@@ -1357,6 +1495,10 @@ class CallService @Inject constructor(
                 _activeCall.value?.let { call ->
                     recordCallToHistory(call, reason)
                 }
+
+                // Clear persisted call info
+                secureStorage.clearActiveCall()
+
                 _callState.value = CallState.Ended(reason)
 
                 // Remote ended - clean up Telecom and foreground service
@@ -1525,6 +1667,7 @@ class CallService @Inject constructor(
 
     private fun cleanup() {
         cleanupResources()
+        secureStorage.clearActiveCall()
         _activeCall.value = null
         _callState.value = CallState.Idle
     }

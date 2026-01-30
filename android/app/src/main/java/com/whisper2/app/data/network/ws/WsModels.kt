@@ -231,17 +231,17 @@ data class CallIceCandidatePayload(
 )
 
 data class CallEndPayload(
-    val protocolVersion: Int = Constants.PROTOCOL_VERSION,
-    val cryptoVersion: Int = Constants.CRYPTO_VERSION,
-    val sessionToken: String,
-    val callId: String,
-    val from: String,
-    val to: String,
-    val timestamp: Long,
-    val nonce: String,
-    val ciphertext: String,
-    val sig: String,
-    val reason: String
+    @SerializedName("protocolVersion") val protocolVersion: Int = Constants.PROTOCOL_VERSION,
+    @SerializedName("cryptoVersion") val cryptoVersion: Int = Constants.CRYPTO_VERSION,
+    @SerializedName("sessionToken") val sessionToken: String,
+    @SerializedName("callId") val callId: String,
+    @SerializedName("from") val from: String,
+    @SerializedName("to") val to: String,
+    @SerializedName("timestamp") val timestamp: Long,
+    @SerializedName("nonce") val nonce: String,
+    @SerializedName("ciphertext") val ciphertext: String,
+    @SerializedName("sig") val sig: String,
+    @SerializedName("reason") val reason: String
 )
 
 data class CallRingingPayload(

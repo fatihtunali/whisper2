@@ -1,5 +1,6 @@
 package com.whisper2.app.data.network.api
 
+import com.google.gson.annotations.SerializedName
 import retrofit2.http.*
 
 interface AttachmentsApi {
@@ -16,8 +17,21 @@ interface AttachmentsApi {
     ): PresignDownloadResponse
 }
 
-// Field names must match server protocol exactly
-data class PresignUploadRequest(val contentType: String, val sizeBytes: Long)
-data class PresignUploadResponse(val objectKey: String, val uploadUrl: String)
-data class PresignDownloadRequest(val objectKey: String)  // Server expects objectKey, not blobId
-data class PresignDownloadResponse(val downloadUrl: String)
+// Field names must match server protocol exactly - use @SerializedName for ProGuard safety
+data class PresignUploadRequest(
+    @SerializedName("contentType") val contentType: String,
+    @SerializedName("sizeBytes") val sizeBytes: Long
+)
+
+data class PresignUploadResponse(
+    @SerializedName("objectKey") val objectKey: String,
+    @SerializedName("uploadUrl") val uploadUrl: String
+)
+
+data class PresignDownloadRequest(
+    @SerializedName("objectKey") val objectKey: String
+)
+
+data class PresignDownloadResponse(
+    @SerializedName("downloadUrl") val downloadUrl: String
+)

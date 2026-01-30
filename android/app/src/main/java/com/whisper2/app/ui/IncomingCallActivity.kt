@@ -101,13 +101,12 @@ class IncomingCallActivity : ComponentActivity() {
                         }
                     }
 
-                    // Handle call end - close activity
+                    // Handle call end - close activity (whether answered or not)
                     LaunchedEffect(callState) {
-                        if (callState is CallState.Ended || callState is CallState.Idle) {
-                            if (answered) {
-                                Logger.i("[IncomingCallActivity] Call ended, finishing activity")
-                                finish()
-                            }
+                        if (callState is CallState.Ended) {
+                            Logger.i("[IncomingCallActivity] Call ended, finishing activity (answered=$answered)")
+                            CallForegroundService.stopService(this@IncomingCallActivity)
+                            finish()
                         }
                     }
 
