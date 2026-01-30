@@ -129,14 +129,21 @@ final class AuthService: ObservableObject {
 
         // 1. Derive keys from mnemonic
         print("[AuthService] Step 1: Deriving keys from mnemonic...")
+        print("[AuthService] Mnemonic word count: \(mnemonic.split(separator: " ").count)")
+        print("[AuthService] Mnemonic first word: \(mnemonic.split(separator: " ").first ?? "none")")
+        print("[AuthService] Mnemonic last word: \(mnemonic.split(separator: " ").last ?? "none")")
         let derivedKeys = try KeyDerivation.deriveKeys(from: mnemonic)
         print("[AuthService] Keys derived successfully")
+        print("[AuthService] encSeed hash: \(derivedKeys.encSeed.prefix(4).map { String(format: "%02x", $0) }.joined())")
+        print("[AuthService] signSeed hash: \(derivedKeys.signSeed.prefix(4).map { String(format: "%02x", $0) }.joined())")
 
         // 2. Generate key pairs
         print("[AuthService] Step 2: Generating key pairs...")
         let encKP = try crypto.generateEncryptionKeyPair(from: derivedKeys.encSeed)
         let signKP = try crypto.generateSigningKeyPair(from: derivedKeys.signSeed)
         print("[AuthService] Key pairs generated")
+        print("[AuthService] encPublicKey: \(encKP.publicKey.prefix(8).map { String(format: "%02x", $0) }.joined())...")
+        print("[AuthService] signPublicKey: \(signKP.publicKey.prefix(8).map { String(format: "%02x", $0) }.joined())...")
 
         // 3. Store in keychain
         print("[AuthService] Step 3: Storing keys in keychain...")
