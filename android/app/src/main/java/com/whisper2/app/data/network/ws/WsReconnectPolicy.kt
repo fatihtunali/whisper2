@@ -3,24 +3,25 @@ package com.whisper2.app.data.network.ws
 import com.whisper2.app.core.Constants
 
 class WsReconnectPolicy {
-    private var attemptCount = 0
+    private var _attemptCount = 0
+    val attemptCount: Int get() = _attemptCount
     private var isAuthExpired = false
     private var isNetworkAvailable = true
 
     fun shouldRetry(): Boolean {
         if (isAuthExpired) return false
         if (!isNetworkAvailable) return false
-        return attemptCount < Constants.RECONNECT_MAX_ATTEMPTS
+        return _attemptCount < Constants.RECONNECT_MAX_ATTEMPTS
     }
 
     fun getDelayMs(): Long {
-        val delay = Constants.RECONNECT_BASE_DELAY_MS * (1 shl attemptCount)
-        attemptCount++
+        val delay = Constants.RECONNECT_BASE_DELAY_MS * (1 shl _attemptCount)
+        _attemptCount++
         return minOf(delay, Constants.RECONNECT_MAX_DELAY_MS)
     }
 
     fun reset() {
-        attemptCount = 0
+        _attemptCount = 0
         isAuthExpired = false
     }
 
@@ -28,7 +29,7 @@ class WsReconnectPolicy {
 
     fun setNetworkAvailable(available: Boolean) {
         isNetworkAvailable = available
-        if (available && !isAuthExpired) attemptCount = 0
+        if (available && !isAuthExpired) _attemptCount = 0
     }
 
     fun isAuthenticationRequired(): Boolean = isAuthExpired
