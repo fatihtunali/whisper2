@@ -3,11 +3,10 @@ import SwiftUI
 /// Conversation list view
 struct ChatsListView: View {
     @ObservedObject var viewModel: ChatsViewModel
+    @ObservedObject private var contactsService = ContactsService.shared
     @State private var showNewChat = false
     @State private var showMessageRequests = false
     @State private var searchText = ""
-
-    private let contactsService = ContactsService.shared
 
     private var filteredConversations: [Conversation] {
         if searchText.isEmpty {
@@ -19,7 +18,7 @@ struct ChatsListView: View {
     }
 
     private var pendingRequestCount: Int {
-        contactsService.getPendingRequestCount()
+        contactsService.messageRequests.values.filter { $0.status == .pending }.count
     }
 
     var body: some View {

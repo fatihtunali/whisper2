@@ -259,11 +259,20 @@ final class ContactsService: ObservableObject {
         }
         print("  -> Found request, adding contact...")
 
+        // Notify observers that changes are coming
+        objectWillChange.send()
+
         // Add to contacts with their public key
-        addContact(whisperId: senderId, encPublicKey: publicKey, nickname: nil)
-        print("  -> Contact added successfully")
-        
-        // Update request status
+        let contact = Contact(
+            whisperId: senderId,
+            encPublicKey: publicKey,
+            nickname: nil
+        )
+        contacts[senderId] = contact
+        saveContactsToStorage()
+        print("  -> Contact added successfully: \(senderId)")
+
+        // Update request status to accepted and remove from pending list
         request = MessageRequest(
             id: request.id,
             senderId: request.senderId,
@@ -272,18 +281,21 @@ final class ContactsService: ObservableObject {
             messageCount: request.messageCount,
             firstReceivedAt: request.firstReceivedAt,
             lastReceivedAt: request.lastReceivedAt,
-            status: .accepted
+            status: .accepted,
+            senderEncPublicKey: request.senderEncPublicKey
         )
         messageRequests[senderId] = request
-        
+
         saveRequestsToStorage()
-        
+        print("  -> Request status updated to accepted")
+
         // Notify that pending messages should be processed
         NotificationCenter.default.post(
             name: NSNotification.Name("ProcessPendingMessages"),
             object: nil,
             userInfo: ["senderId": senderId]
         )
+        print("  -> Posted ProcessPendingMessages notification")
     }
     
     /// Get pending messages for a sender (after accepting request)

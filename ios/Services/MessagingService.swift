@@ -767,6 +767,7 @@ final class MessagingService: ObservableObject {
             self.typingTimers[senderId] = nil
 
             if let index = self.conversations.firstIndex(where: { $0.peerId == senderId }) {
+                self.objectWillChange.send()
                 self.conversations[index].isTyping = isTyping
 
                 // If typing started, set a timeout to auto-clear after 5 seconds
@@ -774,6 +775,7 @@ final class MessagingService: ObservableObject {
                     self.typingTimers[senderId] = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { [weak self] _ in
                         DispatchQueue.main.async {
                             if let idx = self?.conversations.firstIndex(where: { $0.peerId == senderId }) {
+                                self?.objectWillChange.send()
                                 self?.conversations[idx].isTyping = false
                             }
                             self?.typingTimers[senderId] = nil
@@ -798,8 +800,11 @@ final class MessagingService: ObservableObject {
     }
 
     // MARK: - Helpers
-    
+
     private func updateConversation(for peerId: String, lastMessage: String, unreadIncrement: Int = 0) {
+        // Notify observers that changes are coming (required for in-place array modifications)
+        objectWillChange.send()
+
         if let index = conversations.firstIndex(where: { $0.peerId == peerId }) {
             conversations[index].lastMessage = lastMessage
             conversations[index].lastMessageTime = Date()
@@ -817,7 +822,7 @@ final class MessagingService: ObservableObject {
             )
             conversations.insert(conv, at: 0)
         }
-        
+
         conversations.sort { ($0.lastMessageTime ?? .distantPast) > ($1.lastMessageTime ?? .distantPast) }
         updateAppBadge()
     }
@@ -825,6 +830,7 @@ final class MessagingService: ObservableObject {
     func markAsRead(conversationId: String) {
         if let index = conversations.firstIndex(where: { $0.peerId == conversationId }) {
             if conversations[index].unreadCount > 0 {
+                objectWillChange.send()
                 conversations[index].unreadCount = 0
                 saveConversationsToStorage()
                 updateAppBadge()

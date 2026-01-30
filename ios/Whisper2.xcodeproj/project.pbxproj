@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		BLOCKEDUSERSVWBUILD1234 /* BlockedUsersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BLOCKEDUSERSVW123456789 /* BlockedUsersView.swift */; };
 		0158C94E7BA46528B0F6FD9C /* ChatsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF813C2E1D93FF6B34CF603F /* ChatsViewModel.swift */; };
 		02BF112A3DA063972D6774F5 /* CreateAccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5D60A4E6445EC48C5FB287D /* CreateAccountView.swift */; };
 		030855EDED5F6AD80E41DAAF /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EC6D3CDD8D494434163F367 /* ChatView.swift */; };
@@ -77,6 +78,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		BLOCKEDUSERSVW123456789 /* BlockedUsersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockedUsersView.swift; sourceTree = "<group>"; };
 		0C9C79B5DDBC8DD49F0E3EE0 /* AudioMessageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioMessageView.swift; sourceTree = "<group>"; };
 		0DA740433B1688D91B8F0201 /* LocationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationView.swift; sourceTree = "<group>"; };
 		0F19984AE23212340B9D8752 /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
@@ -252,6 +254,7 @@
 		3D6D6C78535A3FD1108591B8 /* Settings */ = {
 			isa = PBXGroup;
 			children = (
+				BLOCKEDUSERSVW123456789 /* BlockedUsersView.swift */,
 				DE9C1A0A473F72EDA0A95262 /* ProfileView.swift */,
 				68424DE7EBED910C2747F82E /* SettingsView.swift */,
 			);
@@ -518,6 +521,7 @@
 				4345CA95B1C07469D92B6F41 /* AuthService.swift in Sources */,
 				27B7DC335E8E6E2F1961D4F7 /* AuthViewModel.swift in Sources */,
 				6AFD259DEF1E32D390D1D5E2 /* BIP39WordList.swift in Sources */,
+				BLOCKEDUSERSVWBUILD1234 /* BlockedUsersView.swift in Sources */,
 				81F0D4582FE5EBA546CB8D2B /* CallHistory.swift in Sources */,
 				D1EFCBE6F6CC212F7E58CB41 /* CallKitManager.swift in Sources */,
 				F3D9A514EE4F283030FA38D4 /* CallService.swift in Sources */,
