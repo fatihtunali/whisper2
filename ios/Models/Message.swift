@@ -29,6 +29,7 @@ struct Message: Codable, Identifiable, Hashable {
     var replyToId: String?
     var attachmentId: String?  // Deprecated: use attachment.objectKey instead
     var attachment: AttachmentPointer?  // Full attachment info for media messages
+    var disappearsAt: Date?  // When the message should auto-delete (nil = never)
     let createdAt: Date
     var updatedAt: Date
 
@@ -45,6 +46,7 @@ struct Message: Codable, Identifiable, Hashable {
         replyToId: String? = nil,
         attachmentId: String? = nil,
         attachment: AttachmentPointer? = nil,
+        disappearsAt: Date? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -60,6 +62,7 @@ struct Message: Codable, Identifiable, Hashable {
         self.replyToId = replyToId
         self.attachmentId = attachmentId
         self.attachment = attachment
+        self.disappearsAt = disappearsAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -80,7 +83,37 @@ struct Message: Codable, Identifiable, Hashable {
         formatter.dateFormat = "HH:mm"
         return formatter.string(from: timestamp)
     }
-    
+
+    /// Whether this message will disappear
+    var isDisappearing: Bool {
+        disappearsAt != nil
+    }
+
+    /// Time remaining until message disappears (nil if not disappearing or already expired)
+    var timeUntilDisappears: TimeInterval? {
+        guard let disappearsAt = disappearsAt else { return nil }
+        let remaining = disappearsAt.timeIntervalSinceNow
+        return remaining > 0 ? remaining : nil
+    }
+
+    /// Formatted string showing time until message disappears
+    var disappearsInString: String? {
+        guard let remaining = timeUntilDisappears else { return nil }
+
+        if remaining < 60 {
+            return "<1m"
+        } else if remaining < 3600 {
+            let minutes = Int(remaining / 60)
+            return "\(minutes)m"
+        } else if remaining < 86400 {
+            let hours = Int(remaining / 3600)
+            return "\(hours)h"
+        } else {
+            let days = Int(remaining / 86400)
+            return "\(days)d"
+        }
+    }
+
     // Hashable
     func hash(into hasher: inout Hasher) {
         hasher.combine(id)

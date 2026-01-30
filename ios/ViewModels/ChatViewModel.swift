@@ -354,6 +354,12 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Clear Chat
+
+    func clearChat() {
+        messagingService.clearMessages(for: conversationId)
+    }
+
     deinit {
         typingTimer?.invalidate()
         // Capture conversationId before self is deallocated

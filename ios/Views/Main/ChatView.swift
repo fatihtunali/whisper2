@@ -8,9 +8,15 @@ struct ChatView: View {
     @FocusState private var isInputFocused: Bool
     @State private var showAddKeyAlert = false
     @State private var showContactProfile = false
+    @State private var showDisappearingSettings = false
+    @State private var showChatTheme = false
 
     private var theme: ChatTheme {
         messagingService.getChatTheme(for: conversation.peerId)
+    }
+
+    private var disappearingTimer: DisappearingMessageTimer {
+        messagingService.getDisappearingMessageTimer(for: conversation.peerId)
     }
 
     init(conversation: Conversation) {
@@ -162,6 +168,15 @@ struct ChatView: View {
                         Button(action: { showContactProfile = true }) {
                             Label("View Profile", systemImage: "person.circle")
                         }
+                        Button(action: { showDisappearingSettings = true }) {
+                            Label(
+                                disappearingTimer == .off ? "Disappearing Messages" : "Disappearing: \(disappearingTimer.displayName)",
+                                systemImage: disappearingTimer == .off ? "timer" : "timer.circle.fill"
+                            )
+                        }
+                        Button(action: { showChatTheme = true }) {
+                            Label("Chat Theme", systemImage: "paintpalette")
+                        }
                         Button(action: {}) {
                             Label("Search Messages", systemImage: "magnifyingglass")
                         }
@@ -169,7 +184,7 @@ struct ChatView: View {
                             Label("Mute Notifications", systemImage: "bell.slash")
                         }
                         Divider()
-                        Button(role: .destructive, action: {}) {
+                        Button(role: .destructive, action: { viewModel.clearChat() }) {
                             Label("Clear Chat", systemImage: "trash")
                         }
                     } label: {
@@ -192,6 +207,30 @@ struct ChatView: View {
                         ToolbarItem(placement: .cancellationAction) {
                             Button("Done") {
                                 showContactProfile = false
+                            }
+                        }
+                    }
+            }
+        }
+        .sheet(isPresented: $showDisappearingSettings) {
+            NavigationStack {
+                DisappearingMessageSettingsView(peerId: conversation.peerId)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") {
+                                showDisappearingSettings = false
+                            }
+                        }
+                    }
+            }
+        }
+        .sheet(isPresented: $showChatTheme) {
+            NavigationStack {
+                ChatThemePickerView(peerId: conversation.peerId)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") {
+                                showChatTheme = false
                             }
                         }
                     }

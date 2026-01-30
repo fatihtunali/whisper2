@@ -29,6 +29,9 @@ final class MessagingService: ObservableObject {
     // Typing timeout timers - auto-clear typing status after 5 seconds
     private var typingTimers: [String: Timer] = [:]
 
+    // Disappearing messages cleanup timer
+    private var disappearingMessagesTimer: Timer?
+
     private let messagesStorageKey = "whisper2.messages.data"
     private let conversationsStorageKey = "whisper2.conversations.data"
 
@@ -45,6 +48,7 @@ final class MessagingService: ObservableObject {
         setupMessageHandler()
         setupRequestAcceptedHandler()
         setupConnectionMonitor()
+        startDisappearingMessagesTimer()
     }
 
     // MARK: - Persistence
@@ -305,6 +309,9 @@ final class MessagingService: ObservableObject {
         let frame = WsFrame(type: Constants.MessageType.sendMessage, payload: payload, requestId: messageId)
         try await ws.send(frame)
         
+        // Calculate disappearsAt based on conversation settings
+        let disappearsAt = calculateDisappearsAt(for: recipientId)
+
         // Create local message
         let message = Message(
             id: messageId,
@@ -315,9 +322,10 @@ final class MessagingService: ObservableObject {
             contentType: "text",
             timestamp: Date(timeIntervalSince1970: Double(timestamp) / 1000),
             status: .pending,
-            direction: .outgoing
+            direction: .outgoing,
+            disappearsAt: disappearsAt
         )
-        
+
         // Add to local messages
         await MainActor.run {
             if self.messages[recipientId] == nil {
@@ -409,6 +417,9 @@ final class MessagingService: ObservableObject {
         // For display, use content or generate preview based on attachment
         let displayContent = content.isEmpty ? "[\(contentType.capitalized)]" : content
 
+        // Calculate disappearsAt based on conversation settings
+        let disappearsAt = calculateDisappearsAt(for: recipientId)
+
         let message = Message(
             id: messageId,
             conversationId: recipientId,
@@ -419,7 +430,8 @@ final class MessagingService: ObservableObject {
             timestamp: Date(timeIntervalSince1970: Double(timestamp) / 1000),
             status: .pending,
             direction: .outgoing,
-            attachment: attachment
+            attachment: attachment,
+            disappearsAt: disappearsAt
         )
 
         await MainActor.run {
@@ -638,7 +650,10 @@ final class MessagingService: ObservableObject {
         } else {
             decryptedContent = "[Scan QR to decrypt]"
         }
-        
+
+        // Calculate disappearsAt based on conversation settings
+        let disappearsAt = calculateDisappearsAt(for: payload.from)
+
         let message = Message(
             id: payload.messageId,
             conversationId: payload.from,
@@ -650,9 +665,10 @@ final class MessagingService: ObservableObject {
             status: .delivered,
             direction: .incoming,
             replyToId: payload.replyTo,
-            attachment: payload.attachment
+            attachment: payload.attachment,
+            disappearsAt: disappearsAt
         )
-        
+
         DispatchQueue.main.async {
             if self.messages[payload.from] == nil {
                 self.messages[payload.from] = []
@@ -969,6 +985,77 @@ final class MessagingService: ObservableObject {
     func getChatTheme(for conversationId: String) -> ChatTheme {
         let conversation = conversations.first { $0.peerId == conversationId }
         return ChatTheme.getTheme(id: conversation?.chatThemeId)
+    }
+
+    // MARK: - Disappearing Messages
+
+    /// Set disappearing message timer for a conversation
+    func setDisappearingMessageTimer(for conversationId: String, timer: DisappearingMessageTimer) {
+        objectWillChange.send()
+        if let index = conversations.firstIndex(where: { $0.peerId == conversationId }) {
+            conversations[index].disappearingMessageTimer = timer
+        } else {
+            // Create conversation if it doesn't exist
+            let contact = contactsService.getContact(whisperId: conversationId)
+            let conv = Conversation(
+                peerId: conversationId,
+                peerNickname: contact?.nickname,
+                disappearingMessageTimer: timer
+            )
+            conversations.append(conv)
+        }
+        saveConversationsToStorage()
+    }
+
+    /// Get disappearing message timer for a conversation
+    func getDisappearingMessageTimer(for conversationId: String) -> DisappearingMessageTimer {
+        let conversation = conversations.first { $0.peerId == conversationId }
+        return conversation?.disappearingMessageTimer ?? .off
+    }
+
+    /// Start the background timer that checks for expired messages
+    private func startDisappearingMessagesTimer() {
+        // Check every 30 seconds for expired messages
+        disappearingMessagesTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            self?.deleteExpiredMessages()
+        }
+        // Also run immediately on startup
+        deleteExpiredMessages()
+    }
+
+    /// Delete all messages that have passed their disappearsAt time
+    private func deleteExpiredMessages() {
+        let now = Date()
+        var hasChanges = false
+
+        for (convId, msgs) in messages {
+            let expiredIds = msgs.compactMap { msg -> String? in
+                guard let disappearsAt = msg.disappearsAt, disappearsAt <= now else { return nil }
+                return msg.id
+            }
+
+            if !expiredIds.isEmpty {
+                hasChanges = true
+                messages[convId] = msgs.filter { msg in
+                    !expiredIds.contains(msg.id)
+                }
+                print("Deleted \(expiredIds.count) expired messages from conversation \(convId)")
+            }
+        }
+
+        if hasChanges {
+            DispatchQueue.main.async {
+                self.objectWillChange.send()
+                self.saveMessagesToStorage()
+            }
+        }
+    }
+
+    /// Calculate the disappearsAt date for a new message based on conversation settings
+    private func calculateDisappearsAt(for conversationId: String) -> Date? {
+        let timer = getDisappearingMessageTimer(for: conversationId)
+        guard let interval = timer.timeInterval else { return nil }
+        return Date(timeIntervalSinceNow: interval)
     }
 
     func clearAllData() {

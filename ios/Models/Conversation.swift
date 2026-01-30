@@ -1,5 +1,40 @@
 import Foundation
 
+/// Disappearing message timer options
+enum DisappearingMessageTimer: String, Codable, CaseIterable {
+    case off = "off"
+    case oneDay = "24h"
+    case sevenDays = "7d"
+    case thirtyDays = "30d"
+
+    var displayName: String {
+        switch self {
+        case .off: return "Off"
+        case .oneDay: return "24 hours"
+        case .sevenDays: return "7 days"
+        case .thirtyDays: return "30 days"
+        }
+    }
+
+    var timeInterval: TimeInterval? {
+        switch self {
+        case .off: return nil
+        case .oneDay: return 86_400        // 24 * 60 * 60
+        case .sevenDays: return 604_800    // 7 * 24 * 60 * 60
+        case .thirtyDays: return 2_592_000 // 30 * 24 * 60 * 60
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .off: return "infinity"
+        case .oneDay: return "clock"
+        case .sevenDays: return "calendar"
+        case .thirtyDays: return "calendar.badge.clock"
+        }
+    }
+}
+
 /// Conversation/Chat metadata
 struct Conversation: Codable, Identifiable, Hashable {
     let id: String
@@ -12,6 +47,7 @@ struct Conversation: Codable, Identifiable, Hashable {
     var isPinned: Bool
     var isMuted: Bool
     var chatThemeId: String?    // Custom chat theme
+    var disappearingMessageTimer: DisappearingMessageTimer  // Disappearing messages setting
     let createdAt: Date
     var updatedAt: Date
 
@@ -26,6 +62,7 @@ struct Conversation: Codable, Identifiable, Hashable {
         isPinned: Bool = false,
         isMuted: Bool = false,
         chatThemeId: String? = nil,
+        disappearingMessageTimer: DisappearingMessageTimer = .off,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -39,6 +76,7 @@ struct Conversation: Codable, Identifiable, Hashable {
         self.isPinned = isPinned
         self.isMuted = isMuted
         self.chatThemeId = chatThemeId
+        self.disappearingMessageTimer = disappearingMessageTimer
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }

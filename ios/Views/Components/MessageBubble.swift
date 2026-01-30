@@ -37,11 +37,24 @@ struct MessageBubble: View {
                 // Message content based on type
                 contentView
 
-                // Time and status
+                // Time, disappearing indicator, and status
                 HStack(spacing: 4) {
                     Text(message.timeString)
                         .font(.caption2)
                         .foregroundColor(.gray)
+
+                    // Disappearing message indicator
+                    if message.isDisappearing {
+                        HStack(spacing: 2) {
+                            Image(systemName: "timer")
+                                .font(.system(size: 9))
+                            if let timeLeft = message.disappearsInString {
+                                Text(timeLeft)
+                                    .font(.system(size: 9))
+                            }
+                        }
+                        .foregroundColor(.orange)
+                    }
 
                     if isOutgoing {
                         statusIcon
