@@ -20,6 +20,7 @@ import com.whisper2.app.data.local.db.entities.ConversationEntity
 import com.whisper2.app.data.local.db.entities.MessageEntity
 import com.whisper2.app.data.local.prefs.SecureStorage
 import com.whisper2.app.data.network.ws.*
+import com.whisper2.app.services.attachments.AttachmentService
 import com.whisper2.app.ui.MainActivity
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
@@ -42,6 +43,7 @@ class MessageHandler @Inject constructor(
     private val contactDao: ContactDao,
     private val cryptoService: CryptoService,
     private val secureStorage: SecureStorage,
+    private val attachmentService: AttachmentService,
     private val gson: Gson
 ) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -119,7 +121,7 @@ class MessageHandler @Inject constructor(
             // Decrypt message
             val decryptedContent = decryptMessage(msg, myPrivateKey)
 
-            // Create message entity
+            // Create message entity with attachment metadata
             val message = MessageEntity(
                 id = msg.messageId,
                 conversationId = msg.from,  // For 1:1, conversation ID is the sender
@@ -131,7 +133,13 @@ class MessageHandler @Inject constructor(
                 timestamp = msg.timestamp,
                 status = "delivered",
                 direction = Constants.Direction.INCOMING,
-                replyTo = msg.replyTo
+                replyTo = msg.replyTo,
+                // Store attachment metadata for later download
+                attachmentBlobId = msg.attachment?.objectKey,
+                attachmentKey = msg.attachment?.fileKeyBox?.ciphertext,  // encrypted file key
+                attachmentNonce = msg.attachment?.fileKeyBox?.nonce,     // nonce for decrypting file key
+                attachmentMimeType = msg.attachment?.contentType,
+                attachmentSize = msg.attachment?.ciphertextSize?.toLong()
             )
 
             // Store message
@@ -153,6 +161,11 @@ class MessageHandler @Inject constructor(
 
             // Send delivery receipt
             sendDeliveryReceipt(msg.messageId, msg.from, "delivered")
+
+            // Auto-download attachment from known contacts
+            if (msg.attachment != null && contact?.encPublicKey != null) {
+                autoDownloadAttachment(msg.messageId, msg.attachment, contact.encPublicKey)
+            }
 
             Logger.d("[MessageHandler] Message processed: ${msg.messageId}")
 
@@ -275,6 +288,38 @@ class MessageHandler @Inject constructor(
                 Logger.d("[MessageHandler] Sent delivery receipt for $messageId")
             } catch (e: Exception) {
                 Logger.e("[MessageHandler] Failed to send delivery receipt", e)
+            }
+        }
+    }
+
+    /**
+     * Auto-download attachment from known contact.
+     */
+    private fun autoDownloadAttachment(messageId: String, attachment: AttachmentPointer, senderPubKeyBase64: String) {
+        scope.launch {
+            try {
+                val senderPubKey = Base64.decode(senderPubKeyBase64.replace(" ", "+").trim(), Base64.NO_WRAP)
+
+                // Download and decrypt
+                val decryptedContent = attachmentService.downloadAttachment(attachment, senderPubKey)
+
+                // Save to file
+                val extension = when {
+                    attachment.contentType.startsWith("audio/") -> "m4a"
+                    attachment.contentType.startsWith("image/jpeg") -> "jpg"
+                    attachment.contentType.startsWith("image/png") -> "png"
+                    attachment.contentType.startsWith("image/gif") -> "gif"
+                    attachment.contentType.startsWith("image/webp") -> "webp"
+                    attachment.contentType.startsWith("video/") -> "mp4"
+                    else -> "bin"
+                }
+                val savedFile = attachmentService.saveToFile(decryptedContent, "${messageId}.$extension")
+
+                // Update message with local path
+                messageDao.updateAttachmentLocalPath(messageId, savedFile.absolutePath)
+                Logger.i("[MessageHandler] Auto-downloaded attachment: ${savedFile.absolutePath}")
+            } catch (e: Exception) {
+                Logger.e("[MessageHandler] Auto-download failed for $messageId", e)
             }
         }
     }

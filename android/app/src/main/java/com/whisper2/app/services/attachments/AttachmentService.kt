@@ -68,27 +68,33 @@ class AttachmentService @Inject constructor(
         val fileNonce = cryptoService.generateNonce()  // 24 bytes
 
         // Encrypt file content
-        val encryptedContent = cryptoService.secretBoxSeal(content, fileNonce, fileKey)
-        Logger.d("[AttachmentService] Encrypted size: ${encryptedContent.size}")
+        val ciphertext = cryptoService.secretBoxSeal(content, fileNonce, fileKey)
+
+        // Prepend nonce to ciphertext (iOS compatibility: upload format is [nonce][ciphertext])
+        val encryptedContent = ByteArray(fileNonce.size + ciphertext.size)
+        System.arraycopy(fileNonce, 0, encryptedContent, 0, fileNonce.size)
+        System.arraycopy(ciphertext, 0, encryptedContent, fileNonce.size, ciphertext.size)
+        Logger.d("[AttachmentService] Encrypted size: ${encryptedContent.size} (nonce: ${fileNonce.size}, ciphertext: ${ciphertext.size})")
 
         // Get presigned upload URL
         val presignResponse = attachmentsApi.presignUpload(
             token = "Bearer $sessionToken",
             request = PresignUploadRequest(
                 contentType = "application/octet-stream",  // Always octet-stream for encrypted data
-                size = encryptedContent.size.toLong()
+                sizeBytes = encryptedContent.size.toLong()
             )
         )
-        Logger.d("[AttachmentService] Got presigned URL for blobId: ${presignResponse.blobId}")
+        Logger.d("[AttachmentService] Got presigned URL for objectKey: ${presignResponse.objectKey}")
 
         // Upload encrypted content to S3
         uploadToS3(presignResponse.uploadUrl, encryptedContent)
         Logger.d("[AttachmentService] Upload complete")
 
-        // Encrypt file key to recipient
+        // Encrypt file key to recipient (iOS compatibility: encrypt base64 string of key, not raw bytes)
         val fileKeyNonce = cryptoService.generateNonce()
+        val fileKeyBase64 = Base64.encodeToString(fileKey, Base64.NO_WRAP)
         val encryptedFileKey = cryptoService.boxSeal(
-            fileKey,
+            fileKeyBase64.toByteArray(Charsets.UTF_8),
             fileKeyNonce,
             recipientPublicKey,
             myPrivKey
@@ -96,7 +102,7 @@ class AttachmentService @Inject constructor(
 
         // Return attachment pointer
         AttachmentPointer(
-            objectKey = presignResponse.blobId,
+            objectKey = presignResponse.objectKey,
             contentType = contentType,
             ciphertextSize = encryptedContent.size,
             fileNonce = Base64.encodeToString(fileNonce, Base64.NO_WRAP),
@@ -141,7 +147,7 @@ class AttachmentService @Inject constructor(
         val presignResponse = attachmentsApi.presignDownload(
             token = "Bearer $sessionToken",
             request = com.whisper2.app.data.network.api.PresignDownloadRequest(
-                blobId = pointer.objectKey
+                objectKey = pointer.objectKey
             )
         )
 
@@ -149,14 +155,22 @@ class AttachmentService @Inject constructor(
         val encryptedContent = downloadFromS3(presignResponse.downloadUrl)
         Logger.d("[AttachmentService] Downloaded ${encryptedContent.size} bytes")
 
-        // Decrypt file key
+        // Decrypt file key (iOS compatibility: decrypted value is base64 string of actual key)
         val fileKeyNonce = Base64.decode(pointer.fileKeyBox.nonce, Base64.NO_WRAP)
         val encryptedFileKey = Base64.decode(pointer.fileKeyBox.ciphertext, Base64.NO_WRAP)
-        val fileKey = cryptoService.boxOpen(encryptedFileKey, fileKeyNonce, senderPublicKey, myPrivKey)
+        val fileKeyBase64Bytes = cryptoService.boxOpen(encryptedFileKey, fileKeyNonce, senderPublicKey, myPrivKey)
+        val fileKeyBase64 = String(fileKeyBase64Bytes, Charsets.UTF_8)
+        val fileKey = Base64.decode(fileKeyBase64, Base64.NO_WRAP)
+
+        // Extract nonce from encrypted content (iOS compatibility: format is [nonce 24 bytes][ciphertext])
+        if (encryptedContent.size <= 24) {
+            throw IllegalStateException("Encrypted content too small")
+        }
+        val fileNonce = encryptedContent.copyOfRange(0, 24)
+        val ciphertext = encryptedContent.copyOfRange(24, encryptedContent.size)
 
         // Decrypt file content
-        val fileNonce = Base64.decode(pointer.fileNonce, Base64.NO_WRAP)
-        cryptoService.secretBoxOpen(encryptedContent, fileNonce, fileKey)
+        cryptoService.secretBoxOpen(ciphertext, fileNonce, fileKey)
     }
 
     /**

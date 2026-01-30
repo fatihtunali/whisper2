@@ -160,6 +160,10 @@ class MessagingService @Inject constructor(
         // iOS sends duration in seconds as content
         val durationSeconds = (durationMs / 1000).toInt()
 
+        // Copy audio to persistent storage
+        val persistentPath = copyAudioToPersistentStorage(audioPath, messageId)
+        Logger.d("[MessagingService] Audio copied to persistent storage: $persistentPath")
+
         val message = MessageEntity(
             id = messageId,
             conversationId = peerId,
@@ -170,7 +174,7 @@ class MessagingService @Inject constructor(
             timestamp = System.currentTimeMillis(),
             status = Constants.MessageStatus.PENDING,
             direction = Constants.Direction.OUTGOING,
-            attachmentLocalPath = audioPath,
+            attachmentLocalPath = persistentPath,
             attachmentDuration = durationSeconds
         )
 
@@ -188,8 +192,8 @@ class MessagingService @Inject constructor(
             }
             val recipientPubKey = Base64.decode(recipientPubKeyBase64.replace(" ", "+").trim(), Base64.NO_WRAP)
 
-            // Upload encrypted audio file
-            val attachmentPointer = attachmentService.uploadAttachment(audioPath, recipientPubKey)
+            // Upload encrypted audio file from persistent storage
+            val attachmentPointer = attachmentService.uploadAttachment(persistentPath, recipientPubKey)
             Logger.d("[MessagingService] Audio uploaded: ${attachmentPointer.objectKey}")
 
             // Send message with attachment pointer - content is duration in seconds (iOS format)
@@ -204,6 +208,34 @@ class MessagingService @Inject constructor(
             Logger.e("[MessagingService] Failed to send audio message", e)
             messageDao.updateStatus(messageId, Constants.MessageStatus.FAILED)
         }
+    }
+
+    /**
+     * Copy audio file to persistent storage.
+     */
+    private fun copyAudioToPersistentStorage(sourcePath: String, messageId: String): String {
+        val attachmentsDir = java.io.File(context.filesDir, "attachments")
+        if (!attachmentsDir.exists()) {
+            attachmentsDir.mkdirs()
+        }
+
+        val sourceFile = java.io.File(sourcePath)
+        val extension = sourceFile.extension.ifEmpty { "m4a" }
+        val fileName = "${messageId}.$extension"
+        val destFile = java.io.File(attachmentsDir, fileName)
+
+        // If already in attachments dir, no need to copy
+        if (sourceFile.parentFile?.absolutePath == attachmentsDir.absolutePath) {
+            return sourcePath
+        }
+
+        sourceFile.inputStream().use { input ->
+            destFile.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+
+        return destFile.absolutePath
     }
 
     suspend fun sendLocationMessage(peerId: String, latitude: Double, longitude: Double) {
@@ -250,6 +282,10 @@ class MessagingService @Inject constructor(
             else -> Constants.ContentType.FILE to "File"
         }
 
+        // Copy file to persistent storage (content:// URIs become invalid after picker closes)
+        val persistentPath = copyToPersistentStorage(contentUri, messageId, mimeType)
+        Logger.d("[MessagingService] Copied to persistent storage: $persistentPath")
+
         val message = MessageEntity(
             id = messageId,
             conversationId = peerId,
@@ -260,7 +296,7 @@ class MessagingService @Inject constructor(
             timestamp = System.currentTimeMillis(),
             status = Constants.MessageStatus.PENDING,
             direction = Constants.Direction.OUTGOING,
-            attachmentLocalPath = uri
+            attachmentLocalPath = persistentPath
         )
 
         messageDao.insert(message)
@@ -277,8 +313,9 @@ class MessagingService @Inject constructor(
             }
             val recipientPubKey = Base64.decode(recipientPubKeyBase64.replace(" ", "+").trim(), Base64.NO_WRAP)
 
-            // Upload encrypted file
-            val attachmentPointer = attachmentService.uploadAttachment(contentUri, recipientPubKey)
+            // Upload encrypted file from persistent storage
+            val persistentUri = android.net.Uri.fromFile(java.io.File(persistentPath))
+            val attachmentPointer = attachmentService.uploadAttachment(persistentUri, recipientPubKey)
             Logger.d("[MessagingService] File uploaded: ${attachmentPointer.objectKey}")
 
             // Send message with attachment pointer - use detected content type
@@ -293,6 +330,41 @@ class MessagingService @Inject constructor(
             Logger.e("[MessagingService] Failed to send attachment", e)
             messageDao.updateStatus(messageId, Constants.MessageStatus.FAILED)
         }
+    }
+
+    /**
+     * Copy file from content:// URI to app's persistent storage.
+     * Returns the absolute path to the copied file.
+     */
+    private fun copyToPersistentStorage(uri: android.net.Uri, messageId: String, mimeType: String): String {
+        val attachmentsDir = java.io.File(context.filesDir, "attachments")
+        if (!attachmentsDir.exists()) {
+            attachmentsDir.mkdirs()
+        }
+
+        // Determine file extension from mime type
+        val extension = when {
+            mimeType.startsWith("image/jpeg") -> "jpg"
+            mimeType.startsWith("image/png") -> "png"
+            mimeType.startsWith("image/gif") -> "gif"
+            mimeType.startsWith("image/webp") -> "webp"
+            mimeType.startsWith("image/heic") -> "heic"
+            mimeType.startsWith("video/mp4") -> "mp4"
+            mimeType.startsWith("video/") -> "mp4"
+            mimeType.startsWith("audio/") -> "m4a"
+            else -> "bin"
+        }
+
+        val fileName = "${messageId}.$extension"
+        val destFile = java.io.File(attachmentsDir, fileName)
+
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            destFile.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        } ?: throw IllegalStateException("Cannot read file: $uri")
+
+        return destFile.absolutePath
     }
 
     /**

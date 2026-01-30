@@ -16,7 +16,8 @@ interface AttachmentsApi {
     ): PresignDownloadResponse
 }
 
-data class PresignUploadRequest(val contentType: String, val size: Long)
-data class PresignUploadResponse(val blobId: String, val uploadUrl: String)
-data class PresignDownloadRequest(val blobId: String)
+// Field names must match server protocol exactly
+data class PresignUploadRequest(val contentType: String, val sizeBytes: Long)
+data class PresignUploadResponse(val objectKey: String, val uploadUrl: String)
+data class PresignDownloadRequest(val objectKey: String)  // Server expects objectKey, not blobId
 data class PresignDownloadResponse(val downloadUrl: String)

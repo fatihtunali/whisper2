@@ -4,6 +4,7 @@ import android.media.MediaPlayer
 import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -16,10 +17,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.whisper2.app.data.local.db.entities.MessageEntity
 import com.whisper2.app.ui.theme.*
 import kotlinx.coroutines.delay
@@ -32,7 +36,9 @@ import java.io.File
 @Composable
 fun MessageBubble(
     message: MessageEntity,
-    onDelete: (Boolean) -> Unit
+    onDelete: (Boolean) -> Unit,
+    onDownload: (String) -> Unit = {},
+    isDownloading: Boolean = false
 ) {
     val isOutgoing = message.direction == "outgoing"
     var showMenu by remember { mutableStateOf(false) }
@@ -123,11 +129,11 @@ fun MessageBubble(
                 ) {
                     // Content based on type
                     when (message.contentType) {
-                        "voice", "audio" -> VoiceMessageContent(message, isOutgoing)
+                        "voice", "audio" -> VoiceMessageContent(message, isOutgoing, onDownload, isDownloading)
                         "location" -> LocationMessageContent(message, isOutgoing)
-                        "image" -> ImageMessageContent(message, isOutgoing)
-                        "video" -> VideoMessageContent(message, isOutgoing)
-                        "file" -> FileMessageContent(message, isOutgoing)
+                        "image" -> ImageMessageContent(message, isOutgoing, onDownload, isDownloading)
+                        "video" -> VideoMessageContent(message, isOutgoing, onDownload, isDownloading)
+                        "file" -> FileMessageContent(message, isOutgoing, onDownload, isDownloading)
                         else -> TextMessageContent(message.content)
                     }
 
@@ -225,7 +231,12 @@ private fun TextMessageContent(content: String) {
  * Plays audio from local file path or can be downloaded from server.
  */
 @Composable
-private fun VoiceMessageContent(message: MessageEntity, isOutgoing: Boolean) {
+private fun VoiceMessageContent(
+    message: MessageEntity,
+    isOutgoing: Boolean,
+    onDownload: (String) -> Unit,
+    isDownloading: Boolean
+) {
     val context = LocalContext.current
     var isPlaying by remember { mutableStateOf(false) }
     var currentPosition by remember { mutableStateOf(0f) }
@@ -233,6 +244,12 @@ private fun VoiceMessageContent(message: MessageEntity, isOutgoing: Boolean) {
 
     // Duration from message (content is duration in seconds for voice messages)
     val durationSeconds = message.attachmentDuration ?: message.content.toIntOrNull() ?: 0
+
+    // Check if file is available locally
+    val localPath = message.attachmentLocalPath
+    val hasLocalFile = remember(localPath) {
+        localPath != null && (File(localPath).exists() || localPath.startsWith("content://"))
+    }
 
     // Cleanup media player when composable is disposed
     DisposableEffect(message.id) {
@@ -266,7 +283,7 @@ private fun VoiceMessageContent(message: MessageEntity, isOutgoing: Boolean) {
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         modifier = Modifier.padding(vertical = 4.dp)
     ) {
-        // Play/Pause button with glow effect
+        // Play/Pause/Download button with glow effect
         Box(
             modifier = Modifier
                 .size(44.dp)
@@ -281,49 +298,64 @@ private fun VoiceMessageContent(message: MessageEntity, isOutgoing: Boolean) {
                 ),
             contentAlignment = Alignment.Center
         ) {
-            IconButton(
-                onClick = {
-                    if (isPlaying) {
-                        // Pause
-                        mediaPlayer?.pause()
-                        isPlaying = false
-                    } else {
-                        // Play
-                        val localPath = message.attachmentLocalPath
-                        if (localPath != null && (File(localPath).exists() || localPath.startsWith("content://"))) {
-                            try {
-                                if (mediaPlayer == null) {
-                                    mediaPlayer = MediaPlayer().apply {
-                                        if (localPath.startsWith("content://")) {
-                                            setDataSource(context, Uri.parse(localPath))
-                                        } else {
-                                            setDataSource(localPath)
-                                        }
-                                        prepare()
-                                        setOnCompletionListener {
-                                            isPlaying = false
-                                            currentPosition = 0f
+            if (isDownloading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(24.dp),
+                    color = Color.White,
+                    strokeWidth = 2.dp
+                )
+            } else {
+                IconButton(
+                    onClick = {
+                        if (!hasLocalFile) {
+                            // Need to download first
+                            onDownload(message.id)
+                        } else if (isPlaying) {
+                            // Pause
+                            mediaPlayer?.pause()
+                            isPlaying = false
+                        } else {
+                            // Play
+                            if (localPath != null) {
+                                try {
+                                    if (mediaPlayer == null) {
+                                        mediaPlayer = MediaPlayer().apply {
+                                            if (localPath.startsWith("content://")) {
+                                                setDataSource(context, Uri.parse(localPath))
+                                            } else {
+                                                setDataSource(localPath)
+                                            }
+                                            prepare()
+                                            setOnCompletionListener {
+                                                isPlaying = false
+                                                currentPosition = 0f
+                                            }
                                         }
                                     }
+                                    mediaPlayer?.start()
+                                    isPlaying = true
+                                } catch (e: Exception) {
+                                    android.util.Log.e("VoiceMessage", "Error playing audio: ${e.message}")
                                 }
-                                mediaPlayer?.start()
-                                isPlaying = true
-                            } catch (e: Exception) {
-                                android.util.Log.e("VoiceMessage", "Error playing audio: ${e.message}")
                             }
-                        } else {
-                            // TODO: Download from server if not available locally
-                            android.util.Log.d("VoiceMessage", "Audio file not available locally")
                         }
                     }
+                ) {
+                    Icon(
+                        when {
+                            !hasLocalFile -> Icons.Default.Download
+                            isPlaying -> Icons.Default.Pause
+                            else -> Icons.Default.PlayArrow
+                        },
+                        contentDescription = when {
+                            !hasLocalFile -> "Download"
+                            isPlaying -> "Pause"
+                            else -> "Play"
+                        },
+                        tint = Color.White,
+                        modifier = Modifier.size(28.dp)
+                    )
                 }
-            ) {
-                Icon(
-                    if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    contentDescription = if (isPlaying) "Pause" else "Play",
-                    tint = Color.White,
-                    modifier = Modifier.size(28.dp)
-                )
             }
         }
 
@@ -354,7 +386,7 @@ private fun VoiceMessageContent(message: MessageEntity, isOutgoing: Boolean) {
             }
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "${durationSeconds}s",
+                text = if (!hasLocalFile && !isDownloading) "Tap to download" else "${durationSeconds}s",
                 fontSize = 11.sp,
                 color = Color.White.copy(alpha = 0.6f)
             )
@@ -364,7 +396,38 @@ private fun VoiceMessageContent(message: MessageEntity, isOutgoing: Boolean) {
 
 @Composable
 private fun LocationMessageContent(message: MessageEntity, isOutgoing: Boolean) {
-    Column {
+    val context = LocalContext.current
+
+    // Get coordinates from message
+    val latitude = message.locationLatitude ?: run {
+        // Try parsing from JSON content
+        try {
+            val json = org.json.JSONObject(message.content)
+            json.optDouble("latitude", 0.0)
+        } catch (e: Exception) { 0.0 }
+    }
+    val longitude = message.locationLongitude ?: run {
+        try {
+            val json = org.json.JSONObject(message.content)
+            json.optDouble("longitude", 0.0)
+        } catch (e: Exception) { 0.0 }
+    }
+
+    Column(
+        modifier = Modifier.clickable {
+            // Open in Google Maps
+            val uri = android.net.Uri.parse("geo:$latitude,$longitude?q=$latitude,$longitude")
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, uri)
+            intent.setPackage("com.google.android.apps.maps")
+            try {
+                context.startActivity(intent)
+            } catch (e: Exception) {
+                // If Google Maps not installed, open in browser
+                val browserUri = android.net.Uri.parse("https://www.google.com/maps?q=$latitude,$longitude")
+                context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, browserUri))
+            }
+        }
+    ) {
         // Map placeholder with metal styling
         Box(
             modifier = Modifier
@@ -412,10 +475,29 @@ private fun LocationMessageContent(message: MessageEntity, isOutgoing: Boolean) 
 }
 
 @Composable
-private fun ImageMessageContent(message: MessageEntity, isOutgoing: Boolean) {
+private fun ImageMessageContent(
+    message: MessageEntity,
+    isOutgoing: Boolean,
+    onDownload: (String) -> Unit,
+    isDownloading: Boolean
+) {
+    val context = LocalContext.current
+    val localPath = message.attachmentLocalPath
+
+    // Check if we have a local file to display
+    val imageUri = remember(localPath) {
+        when {
+            localPath == null -> null
+            localPath.startsWith("content://") -> Uri.parse(localPath)
+            File(localPath).exists() -> Uri.fromFile(File(localPath))
+            else -> null
+        }
+    }
+
     Box(
         modifier = Modifier
-            .size(220.dp, 160.dp)
+            .widthIn(max = 240.dp)
+            .heightIn(max = 300.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(
                 Brush.verticalGradient(
@@ -429,20 +511,68 @@ private fun ImageMessageContent(message: MessageEntity, isOutgoing: Boolean) {
                 1.dp,
                 BorderDefault.copy(alpha = 0.3f),
                 RoundedCornerShape(12.dp)
-            ),
+            )
+            .clickable(enabled = imageUri == null && !isDownloading) {
+                onDownload(message.id)
+            },
         contentAlignment = Alignment.Center
     ) {
-        Icon(
-            Icons.Default.Image,
-            null,
-            tint = TextTertiary,
-            modifier = Modifier.size(40.dp)
-        )
+        if (imageUri != null) {
+            // Display actual image using Coil
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(imageUri)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = "Image",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp)),
+                contentScale = ContentScale.Fit
+            )
+        } else {
+            // Placeholder when image not available locally
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(24.dp)
+            ) {
+                if (isDownloading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(40.dp),
+                        color = TextSecondary,
+                        strokeWidth = 3.dp
+                    )
+                } else {
+                    Icon(
+                        Icons.Default.Download,
+                        null,
+                        tint = TextTertiary,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = if (isDownloading) "Downloading..." else "Tap to download",
+                    fontSize = 12.sp,
+                    color = TextSecondary
+                )
+            }
+        }
     }
 }
 
 @Composable
-private fun VideoMessageContent(message: MessageEntity, isOutgoing: Boolean) {
+private fun VideoMessageContent(
+    message: MessageEntity,
+    isOutgoing: Boolean,
+    onDownload: (String) -> Unit,
+    isDownloading: Boolean
+) {
+    val localPath = message.attachmentLocalPath
+    val hasLocalFile = remember(localPath) {
+        localPath != null && File(localPath).exists()
+    }
+
     Box(
         modifier = Modifier
             .size(220.dp, 160.dp)
@@ -459,10 +589,13 @@ private fun VideoMessageContent(message: MessageEntity, isOutgoing: Boolean) {
                 1.dp,
                 BorderDefault.copy(alpha = 0.3f),
                 RoundedCornerShape(12.dp)
-            ),
+            )
+            .clickable(enabled = !hasLocalFile && !isDownloading) {
+                onDownload(message.id)
+            },
         contentAlignment = Alignment.Center
     ) {
-        // Play button overlay
+        // Play/Download button overlay
         Box(
             modifier = Modifier
                 .size(56.dp)
@@ -477,22 +610,44 @@ private fun VideoMessageContent(message: MessageEntity, isOutgoing: Boolean) {
                 ),
             contentAlignment = Alignment.Center
         ) {
-            Icon(
-                Icons.Default.PlayArrow,
-                null,
-                tint = Color.White,
-                modifier = Modifier.size(32.dp)
-            )
+            if (isDownloading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(32.dp),
+                    color = Color.White,
+                    strokeWidth = 3.dp
+                )
+            } else {
+                Icon(
+                    if (hasLocalFile) Icons.Default.PlayArrow else Icons.Default.Download,
+                    null,
+                    tint = Color.White,
+                    modifier = Modifier.size(32.dp)
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun FileMessageContent(message: MessageEntity, isOutgoing: Boolean) {
+private fun FileMessageContent(
+    message: MessageEntity,
+    isOutgoing: Boolean,
+    onDownload: (String) -> Unit,
+    isDownloading: Boolean
+) {
+    val localPath = message.attachmentLocalPath
+    val hasLocalFile = remember(localPath) {
+        localPath != null && File(localPath).exists()
+    }
+
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier.padding(vertical = 4.dp)
+        modifier = Modifier
+            .padding(vertical = 4.dp)
+            .clickable(enabled = !hasLocalFile && !isDownloading) {
+                onDownload(message.id)
+            }
     ) {
         // File icon with background
         Box(
@@ -509,22 +664,34 @@ private fun FileMessageContent(message: MessageEntity, isOutgoing: Boolean) {
                 ),
             contentAlignment = Alignment.Center
         ) {
-            Icon(
-                Icons.AutoMirrored.Filled.InsertDriveFile,
-                null,
-                tint = PrimaryBlueLight,
-                modifier = Modifier.size(24.dp)
-            )
+            if (isDownloading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(24.dp),
+                    color = PrimaryBlueLight,
+                    strokeWidth = 2.dp
+                )
+            } else {
+                Icon(
+                    if (hasLocalFile) Icons.AutoMirrored.Filled.InsertDriveFile else Icons.Default.Download,
+                    null,
+                    tint = PrimaryBlueLight,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
         }
         Column {
             Text(
-                text = "File",
+                text = message.attachmentFileName ?: "File",
                 color = Color.White,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium
             )
             Text(
-                text = "Tap to download",
+                text = when {
+                    isDownloading -> "Downloading..."
+                    hasLocalFile -> "Tap to open"
+                    else -> "Tap to download"
+                },
                 fontSize = 12.sp,
                 color = Color.White.copy(alpha = 0.6f)
             )

@@ -82,8 +82,9 @@ object ServiceModule {
         contactDao: ContactDao,
         cryptoService: CryptoService,
         secureStorage: SecureStorage,
+        attachmentService: AttachmentService,
         gson: Gson
     ): MessageHandler = MessageHandler(
-        context, wsClient, messageDao, conversationDao, contactDao, cryptoService, secureStorage, gson
+        context, wsClient, messageDao, conversationDao, contactDao, cryptoService, secureStorage, attachmentService, gson
     )
 }

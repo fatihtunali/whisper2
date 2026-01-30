@@ -8,6 +8,8 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
@@ -19,6 +21,11 @@ import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.google.android.play.core.appupdate.AppUpdateManager
+import com.google.android.play.core.appupdate.AppUpdateManagerFactory
+import com.google.android.play.core.appupdate.AppUpdateOptions
+import com.google.android.play.core.install.model.AppUpdateType
+import com.google.android.play.core.install.model.UpdateAvailability
 import com.whisper2.app.core.Logger
 import com.whisper2.app.ui.navigation.WhisperNavigation
 import com.whisper2.app.ui.theme.Whisper2Theme
@@ -37,6 +44,10 @@ class MainActivity : ComponentActivity() {
     // Notification data from intent
     private val notificationData = mutableStateOf<NotificationData?>(null)
 
+    // In-App Update
+    private lateinit var appUpdateManager: AppUpdateManager
+    private lateinit var updateLauncher: ActivityResultLauncher<IntentSenderRequest>
+
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
@@ -52,6 +63,21 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         // Allow content to extend behind system bars for proper IME handling
         WindowCompat.setDecorFitsSystemWindows(window, false)
+
+        // Initialize In-App Update
+        appUpdateManager = AppUpdateManagerFactory.create(this)
+        updateLauncher = registerForActivityResult(
+            ActivityResultContracts.StartIntentSenderForResult()
+        ) { result ->
+            if (result.resultCode != RESULT_OK) {
+                Logger.w("[MainActivity] Update flow failed or cancelled: ${result.resultCode}")
+                // Re-check for update if user cancelled
+                checkForAppUpdate()
+            }
+        }
+
+        // Check for updates
+        checkForAppUpdate()
 
         // Request notification permission for Android 13+
         requestNotificationPermission()
@@ -98,6 +124,39 @@ class MainActivity : ComponentActivity() {
                     conversationId = conversationId
                 )
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Check if an update was in progress and ensure it completes
+        appUpdateManager.appUpdateInfo.addOnSuccessListener { appUpdateInfo ->
+            if (appUpdateInfo.updateAvailability() == UpdateAvailability.DEVELOPER_TRIGGERED_UPDATE_IN_PROGRESS) {
+                // Resume the update if it was interrupted
+                appUpdateManager.startUpdateFlowForResult(
+                    appUpdateInfo,
+                    updateLauncher,
+                    AppUpdateOptions.newBuilder(AppUpdateType.IMMEDIATE).build()
+                )
+            }
+        }
+    }
+
+    private fun checkForAppUpdate() {
+        appUpdateManager.appUpdateInfo.addOnSuccessListener { appUpdateInfo ->
+            if (appUpdateInfo.updateAvailability() == UpdateAvailability.UPDATE_AVAILABLE &&
+                appUpdateInfo.isUpdateTypeAllowed(AppUpdateType.IMMEDIATE)) {
+                Logger.i("[MainActivity] Update available, starting immediate update flow")
+                appUpdateManager.startUpdateFlowForResult(
+                    appUpdateInfo,
+                    updateLauncher,
+                    AppUpdateOptions.newBuilder(AppUpdateType.IMMEDIATE).build()
+                )
+            } else {
+                Logger.d("[MainActivity] No update available or not allowed")
+            }
+        }.addOnFailureListener { e ->
+            Logger.e("[MainActivity] Failed to check for updates", e)
         }
     }
 

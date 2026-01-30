@@ -57,6 +57,7 @@ fun ChatScreen(
     val canSendMessages by viewModel.canSendMessages.collectAsState()
     val isTyping by viewModel.peerIsTyping.collectAsState()
     val error by viewModel.error.collectAsState()
+    val downloadingMessages by viewModel.downloadingMessages.collectAsState()
     var messageText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
@@ -277,7 +278,9 @@ fun ChatScreen(
                 items(messages, key = { it.id }) { message ->
                     MessageBubble(
                         message = message,
-                        onDelete = { forEveryone -> viewModel.deleteMessage(message.id, forEveryone) }
+                        onDelete = { forEveryone -> viewModel.deleteMessage(message.id, forEveryone) },
+                        onDownload = { messageId -> viewModel.downloadAttachment(messageId) },
+                        isDownloading = message.id in downloadingMessages
                     )
                 }
             }
