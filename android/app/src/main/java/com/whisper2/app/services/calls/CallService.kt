@@ -49,7 +49,8 @@ sealed class CallState {
 }
 
 enum class CallEndReason {
-    ENDED,      // Normal end or cancelled
+    ENDED,      // Normal end
+    CANCELLED,  // Caller cancelled before answer
     DECLINED,
     BUSY,
     TIMEOUT,
@@ -1569,6 +1570,7 @@ class CallService @Inject constructor(
     private suspend fun recordCallToHistory(call: ActiveCall, reason: CallEndReason) {
         val status = when (reason) {
             CallEndReason.ENDED -> if (call.startTime != null) "completed" else "cancelled"
+            CallEndReason.CANCELLED -> "cancelled"
             CallEndReason.DECLINED -> if (call.isOutgoing) "no_answer" else "declined"
             CallEndReason.BUSY -> "busy"
             CallEndReason.TIMEOUT -> if (call.isOutgoing) "no_answer" else "missed"
