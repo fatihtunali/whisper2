@@ -833,13 +833,19 @@ class CallService @Inject constructor(
             }
 
             override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) {
-                Logger.d("ICE connection state: $state")
+                Logger.i("[CallService] ICE connection state changed: $state")
                 scope.launch {
                     when (state) {
                         PeerConnection.IceConnectionState.CONNECTED,
                         PeerConnection.IceConnectionState.COMPLETED -> {
                             // RULE 1: Only set Connected when media is actually flowing
+                            Logger.i("[CallService] ICE CONNECTED/COMPLETED - transitioning to Connected state")
                             checkAndSetConnected()
+                        }
+                        PeerConnection.IceConnectionState.CHECKING -> {
+                            Logger.i("[CallService] ICE CHECKING - connection in progress")
+                            // Start a fallback timer in case CONNECTED event doesn't fire
+                            startConnectionFallbackTimer()
                         }
                         PeerConnection.IceConnectionState.DISCONNECTED -> {
                             _callState.value = CallState.Reconnecting
@@ -1553,10 +1559,47 @@ class CallService @Inject constructor(
         }
     }
 
+    // MARK: - Connection Fallback Timer
+
+    private var connectionFallbackJob: Job? = null
+
+    /**
+     * Fallback timer to transition to Connected state if ICE CONNECTED event doesn't fire.
+     * Some devices/networks don't reliably report ICE state changes.
+     */
+    private fun startConnectionFallbackTimer() {
+        connectionFallbackJob?.cancel()
+        connectionFallbackJob = scope.launch {
+            delay(3000) // Wait 3 seconds
+            val iceState = peerConnection?.iceConnectionState()
+            Logger.i("[CallService] Connection fallback timer fired - ICE state: $iceState, callState: ${_callState.value}")
+
+            // If we're still in Connecting state but ICE is in a reasonable state, force Connected
+            if (_callState.value == CallState.Connecting) {
+                when (iceState) {
+                    PeerConnection.IceConnectionState.CONNECTED,
+                    PeerConnection.IceConnectionState.COMPLETED,
+                    PeerConnection.IceConnectionState.CHECKING -> {
+                        Logger.i("[CallService] Fallback: forcing Connected state (ICE=$iceState)")
+                        _callState.value = CallState.Connected
+                        _activeCall.value?.let { call ->
+                            _activeCall.value = call.copy(startTime = System.currentTimeMillis())
+                        }
+                        startCallDurationTimer()
+                    }
+                    else -> {
+                        Logger.w("[CallService] Fallback: ICE state $iceState not suitable for Connected")
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: - Call Duration Timer
 
     private fun startCallDurationTimer() {
         callDurationJob?.cancel()
+        connectionFallbackJob?.cancel() // Cancel fallback if we're starting the timer
         callDurationJob = scope.launch {
             while (isActive && _callState.value == CallState.Connected) {
                 delay(1000)
@@ -1601,6 +1644,8 @@ class CallService @Inject constructor(
     private fun cleanupResources() {
         callDurationJob?.cancel()
         callDurationJob = null
+        connectionFallbackJob?.cancel()
+        connectionFallbackJob = null
         _callDuration.value = 0
 
         // Stop and dispose video capturer with proper exception handling
