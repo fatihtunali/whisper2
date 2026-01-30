@@ -2,6 +2,7 @@ import SwiftUI
 
 /// Settings view
 struct SettingsView: View {
+    @EnvironmentObject private var coordinator: AppCoordinator
     @StateObject private var viewModel = SettingsViewModel()
     @State private var showSeedPhrase = false
     @State private var showLogoutAlert = false
@@ -53,6 +54,7 @@ struct SettingsView: View {
                 Button("Cancel", role: .cancel) {}
                 Button("Logout", role: .destructive) {
                     viewModel.logout()
+                    coordinator.logout()
                 }
             } message: {
                 Text("Are you sure you want to logout? Make sure you have backed up your seed phrase.")
@@ -61,6 +63,7 @@ struct SettingsView: View {
                 Button("Cancel", role: .cancel) {}
                 Button("Wipe Everything", role: .destructive) {
                     viewModel.wipeAllData()
+                    coordinator.logout()
                 }
             } message: {
                 Text("This will permanently delete ALL local data including messages, contacts, call history, files, and your account keys. This action cannot be undone.")

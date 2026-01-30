@@ -11,52 +11,55 @@ final class AppCoordinator: ObservableObject {
     private let keychain = KeychainService.shared
     private var cancellables = Set<AnyCancellable>()
 
+    /// Once set to true, never go back to false (prevents flashing welcome screen)
+    private var hasRegistration = false
+
     init() {
+        // Check registration FIRST, synchronously, before any async operations
+        hasRegistration = keychain.isRegistered && keychain.mnemonic != nil
+
+        // If registered, show main view immediately (no loading screen needed)
+        if hasRegistration {
+            isAuthenticated = true
+            isLoading = false
+
+            // Connect in background
+            Task {
+                do {
+                    try await authService.reconnect()
+                } catch {
+                    print("Auto-reconnect failed: \(error)")
+                }
+            }
+        } else {
+            // Not registered - show welcome screen
+            isLoading = false
+        }
+
+        // Only listen for NEW authentications (after registration)
         setupBindings()
-        checkAuthState()
     }
 
     private func setupBindings() {
-        // Only update isAuthenticated to false if we're not already registered locally
-        // This prevents showing welcome screen during reconnection attempts
+        // This sink only updates to TRUE when auth succeeds
+        // It NEVER sets isAuthenticated to false - that only happens on logout
         authService.$isAuthenticated
             .receive(on: DispatchQueue.main)
             .sink { [weak self] isAuth in
                 guard let self = self else { return }
                 if isAuth {
+                    self.hasRegistration = true
                     self.isAuthenticated = true
-                } else if !self.isRegisteredLocally {
-                    // Only show welcome if not registered locally
-                    self.isAuthenticated = false
                 }
-                // If registered locally but auth failed, keep showing main view
-                // and let reconnection happen in background
+                // Never set isAuthenticated = false here
+                // The welcome screen should only show if user was never registered
             }
             .store(in: &cancellables)
     }
 
-    /// Check if user has registration data stored locally
-    private var isRegisteredLocally: Bool {
-        keychain.isRegistered && keychain.mnemonic != nil
-    }
-
-    private func checkAuthState() {
-        Task {
-            // Check if we have saved credentials
-            if isRegisteredLocally {
-                // User is registered - show main view immediately
-                isAuthenticated = true
-
-                // Try to reconnect in background
-                do {
-                    try await authService.reconnect()
-                } catch {
-                    // Failed to reconnect, but still show main view
-                    // User can use offline features, reconnection will retry automatically
-                    print("Auto-reconnect failed: \(error)")
-                }
-            }
-            isLoading = false
-        }
+    /// Call this when user explicitly logs out
+    func logout() {
+        hasRegistration = false
+        isAuthenticated = false
     }
 }
