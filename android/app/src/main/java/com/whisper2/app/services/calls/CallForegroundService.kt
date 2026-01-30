@@ -26,6 +26,7 @@ class CallForegroundService : Service() {
 
     companion object {
         const val ACTION_INCOMING_CALL = "ACTION_INCOMING_CALL"
+        const val ACTION_CALL_ACTIVE = "ACTION_CALL_ACTIVE"
         const val ACTION_CALL_ANSWERED = "ACTION_CALL_ANSWERED"
         const val ACTION_CALL_DECLINED = "ACTION_CALL_DECLINED"
         const val ACTION_CALL_ENDED = "ACTION_CALL_ENDED"
@@ -50,6 +51,22 @@ class CallForegroundService : Service() {
                 putExtra(EXTRA_CALL_ID, callId)
                 putExtra(EXTRA_CALLER_ID, callerId)
                 putExtra(EXTRA_CALLER_NAME, callerName ?: callerId)
+                putExtra(EXTRA_IS_VIDEO, isVideo)
+            }
+            context.startForegroundService(intent)
+        }
+
+        /**
+         * Transition to active call notification (keeps foreground service alive)
+         */
+        fun setCallActive(
+            context: Context,
+            callerName: String?,
+            isVideo: Boolean
+        ) {
+            val intent = Intent(context, CallForegroundService::class.java).apply {
+                action = ACTION_CALL_ACTIVE
+                putExtra(EXTRA_CALLER_NAME, callerName ?: "Unknown")
                 putExtra(EXTRA_IS_VIDEO, isVideo)
             }
             context.startForegroundService(intent)
@@ -87,6 +104,15 @@ class CallForegroundService : Service() {
 
                 showIncomingCallNotification(callId, callerId, callerName, isVideo)
                 startVibration()
+            }
+            ACTION_CALL_ACTIVE -> {
+                // Transition from ringing to active call - keep service alive!
+                val callerName = intent.getStringExtra(EXTRA_CALLER_NAME) ?: "Unknown"
+                val isVideo = intent.getBooleanExtra(EXTRA_IS_VIDEO, false)
+
+                Logger.i("[CallForegroundService] *** CALL ACTIVE *** callerName=$callerName, isVideo=$isVideo")
+                stopVibration()
+                showOngoingCallNotification(callerName, isVideo)
             }
             ACTION_CALL_ANSWERED, ACTION_CALL_DECLINED, ACTION_CALL_ENDED -> {
                 stopVibration()
@@ -207,6 +233,50 @@ class CallForegroundService : Service() {
             startForeground(NOTIFICATION_ID, notification)
         }
         Logger.i("[CallForegroundService] Showing incoming call notification for $callerName (CallStyle=${Build.VERSION.SDK_INT >= Build.VERSION_CODES.S})")
+    }
+
+    private fun showOngoingCallNotification(callerName: String, isVideo: Boolean) {
+        val callType = if (isVideo) "Video call" else "Voice call"
+
+        // Use modern CallStyle for ongoing call on Android 12+
+        val notification = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val caller = Person.Builder()
+                .setName(callerName)
+                .setImportant(true)
+                .build()
+
+            // End call action
+            val endCallIntent = Intent(this, CallForegroundService::class.java).apply {
+                action = ACTION_CALL_ENDED
+            }
+            val endCallPendingIntent = PendingIntent.getService(
+                this, 3, endCallIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            Notification.Builder(this, CHANNEL_ID)
+                .setSmallIcon(Icon.createWithResource(this, R.drawable.ic_notification))
+                .setStyle(Notification.CallStyle.forOngoingCall(caller, endCallPendingIntent))
+                .setOngoing(true)
+                .setCategory(Notification.CATEGORY_CALL)
+                .build()
+        } else {
+            NotificationCompat.Builder(this, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle(callerName)
+                .setContentText("$callType in progress")
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setCategory(NotificationCompat.CATEGORY_CALL)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setOngoing(true)
+                .build()
+        }
+
+        // Update the notification (keeps foreground service running)
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.notify(NOTIFICATION_ID, notification)
+
+        Logger.i("[CallForegroundService] Showing ongoing call notification for $callerName")
     }
 
     private fun startVibration() {

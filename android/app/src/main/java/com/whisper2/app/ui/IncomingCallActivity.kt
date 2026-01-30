@@ -93,7 +93,8 @@ class IncomingCallActivity : ComponentActivity() {
                             Logger.i("[IncomingCallActivity] Auto-answering call (isVideo=$isVideo)")
                             try {
                                 viewModel.setConnectionActive()
-                                CallForegroundService.stopService(this@IncomingCallActivity)
+                                // Transition to ongoing call notification (keeps foreground service alive!)
+                                CallForegroundService.setCallActive(this@IncomingCallActivity, callerName, isVideo)
                                 answered = true
                             } catch (e: Exception) {
                                 Logger.e("[IncomingCallActivity] Error auto-answering: ${e.message}")
@@ -119,7 +120,8 @@ class IncomingCallActivity : ComponentActivity() {
                             onAnswer = {
                                 Logger.i("[IncomingCallActivity] Answer clicked (isVideo=$isVideo)")
                                 viewModel.setConnectionActive()
-                                CallForegroundService.stopService(this@IncomingCallActivity)
+                                // Transition to ongoing call notification (keeps foreground service alive!)
+                                CallForegroundService.setCallActive(this@IncomingCallActivity, callerName, isVideo)
                                 answered = true
                             },
                             onDecline = {
