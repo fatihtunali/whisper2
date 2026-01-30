@@ -70,12 +70,12 @@ enum DeliveryStatus: String, Codable {
 
 /// Call end reasons
 enum CallEndReason: String, Codable, Equatable {
-    case ended
-    case declined
-    case busy
-    case timeout
-    case failed
-    case cancelled
+    case ended      // Normal call end (either party hangs up)
+    case declined   // Callee rejected the call
+    case busy       // Callee is busy
+    case timeout    // Call wasn't answered in time
+    case failed     // Connection/technical failure
+    case cancelled  // Caller cancelled before callee answered
 }
 
 /// Presence status

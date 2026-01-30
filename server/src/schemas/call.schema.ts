@@ -370,7 +370,7 @@ export const callEndSchema = {
     },
     reason: {
       type: 'string',
-      enum: ['ended', 'declined', 'busy', 'timeout', 'failed'],
+      enum: ['ended', 'declined', 'busy', 'timeout', 'failed', 'cancelled'],
     },
   },
   required: [
