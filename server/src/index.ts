@@ -25,6 +25,7 @@ import { connectRedis, closeRedis } from './db/redis';
 import { wsGateway } from './handlers/WsGateway';
 import { createHttpRouter, errorHandler, requestLogger } from './handlers/HttpAdmin';
 import { initializeFirebase } from './services/firebase';
+import { connectionManager } from './services/ConnectionManager';
 
 // =============================================================================
 // CONFIGURATION
@@ -44,6 +45,9 @@ async function shutdown(signal: string): Promise<void> {
   isShuttingDown = true;
 
   logger.info({ signal }, 'Shutting down...');
+
+  // Stop heartbeat immediately
+  connectionManager.stopHeartbeat();
 
   // Close WebSocket connections gracefully
   // Give clients 5 seconds to disconnect
@@ -116,7 +120,10 @@ async function main(): Promise<void> {
   // 7. Initialize WebSocket gateway
   wsGateway.init(wss);
 
-  // 8. Start server
+  // 8. Start connection heartbeat (ping/pong keep-alive)
+  connectionManager.startHeartbeat();
+
+  // 9. Start server
   server.listen(PORT, HOST, () => {
     logger.info({ host: HOST, port: PORT }, 'Whisper2 server started');
     logger.info(`  HTTP:  http://${HOST}:${PORT}`);

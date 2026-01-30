@@ -41,6 +41,15 @@ export class ConnectionManager {
   /** In-memory map: whisperId → connId (for fast lookup) */
   private userConnections: Map<string, string> = new Map();
 
+  /** Heartbeat interval handle */
+  private heartbeatInterval: NodeJS.Timeout | null = null;
+
+  /** Ping interval in ms (10 seconds) */
+  private readonly PING_INTERVAL = 10_000;
+
+  /** Connection timeout - if no pong received within this time, close connection (20 seconds) */
+  private readonly CONNECTION_TIMEOUT = 20_000;
+
   /**
    * Register a new WebSocket connection.
    * Returns a unique connection ID.
@@ -296,6 +305,95 @@ export class ConnectionManager {
     const conn = this.getConnectionByUser(whisperId);
     if (conn && conn.platform) {
       await this.setPresence(whisperId, conn.connId, conn.platform);
+    }
+  }
+
+  // ===========================================================================
+  // HEARTBEAT / PING-PONG
+  // ===========================================================================
+
+  /**
+   * Start the heartbeat interval to ping all connections.
+   * Call this once when the server starts.
+   */
+  startHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      return; // Already running
+    }
+
+    logger.info({ pingInterval: this.PING_INTERVAL, timeout: this.CONNECTION_TIMEOUT }, 'Starting connection heartbeat');
+
+    this.heartbeatInterval = setInterval(() => {
+      this.pingAllConnections();
+    }, this.PING_INTERVAL);
+
+    // Don't prevent Node.js from exiting
+    this.heartbeatInterval.unref();
+  }
+
+  /**
+   * Stop the heartbeat interval.
+   * Call this during graceful shutdown.
+   */
+  stopHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+      logger.info('Connection heartbeat stopped');
+    }
+  }
+
+  /**
+   * Ping all connections and close stale ones.
+   */
+  private pingAllConnections(): void {
+    const now = Date.now();
+    const staleConnections: string[] = [];
+
+    for (const [connId, conn] of this.connections) {
+      // Check if connection is stale (no activity within timeout)
+      if (now - conn.lastActivity > this.CONNECTION_TIMEOUT) {
+        staleConnections.push(connId);
+        continue;
+      }
+
+      // Send WebSocket ping frame
+      if (conn.ws.readyState === WebSocket.OPEN) {
+        try {
+          conn.ws.ping();
+        } catch (err) {
+          logger.error({ err, connId }, 'Failed to send ping');
+          staleConnections.push(connId);
+        }
+      } else {
+        // Connection not open, mark for removal
+        staleConnections.push(connId);
+      }
+    }
+
+    // Remove stale connections
+    for (const connId of staleConnections) {
+      const conn = this.connections.get(connId);
+      logger.warn(
+        { connId, whisperId: conn?.whisperId, lastActivity: conn?.lastActivity },
+        'Closing stale connection'
+      );
+
+      try {
+        if (conn?.ws.readyState === WebSocket.OPEN) {
+          conn.ws.close(4000, 'Connection timeout');
+        }
+      } catch {
+        // Ignore close errors
+      }
+
+      this.removeConnection(connId, 'timeout').catch((err) => {
+        logger.error({ err, connId }, 'Error removing stale connection');
+      });
+    }
+
+    if (staleConnections.length > 0) {
+      logger.info({ removed: staleConnections.length, remaining: this.connections.size }, 'Heartbeat cleanup complete');
     }
   }
 }

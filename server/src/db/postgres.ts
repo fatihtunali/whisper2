@@ -45,6 +45,14 @@ export function getPool(): Pool {
       // Increase max listeners on individual client connections
       // to support many concurrent operations per connection
       client.setMaxListeners(200);
+
+      // Also increase max listeners on the underlying Connection object
+      // This fixes "MaxListenersExceededWarning: 11 wakeup listeners added to [Connection]"
+      const connection = (client as any).connection;
+      if (connection && typeof connection.setMaxListeners === 'function') {
+        connection.setMaxListeners(200);
+      }
+
       logger.debug('PostgreSQL client connected');
     });
   }
