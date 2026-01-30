@@ -29,13 +29,6 @@ data class GroupCreatePayload(
     val memberIds: List<String>
 )
 
-data class GroupCreateAckPayload(
-    val groupId: String,
-    val title: String,
-    val memberIds: List<String>,
-    val createdAt: Long
-)
-
 data class GroupUpdatePayload(
     val protocolVersion: Int = Constants.PROTOCOL_VERSION,
     val cryptoVersion: Int = Constants.CRYPTO_VERSION,
@@ -46,6 +39,14 @@ data class GroupUpdatePayload(
     val title: String? = null
 )
 
+// Server's recipient envelope for group messages
+data class RecipientEnvelope(
+    val to: String,
+    val nonce: String,
+    val ciphertext: String,
+    val sig: String
+)
+
 data class GroupSendMessagePayload(
     val protocolVersion: Int = Constants.PROTOCOL_VERSION,
     val cryptoVersion: Int = Constants.CRYPTO_VERSION,
@@ -53,29 +54,48 @@ data class GroupSendMessagePayload(
     val groupId: String,
     val messageId: String,
     val from: String,
-    val to: String,
+    val msgType: String,
+    val timestamp: Long,
+    val recipients: List<RecipientEnvelope>,
+    val attachment: AttachmentPointer? = null
+)
+
+// Server's group member structure
+data class ServerGroupMember(
+    val whisperId: String,
+    val role: String,
+    val joinedAt: Long,
+    val removedAt: Long? = null
+)
+
+// Server's group structure
+data class ServerGroup(
+    val groupId: String,
+    val title: String,
+    val ownerId: String,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val members: List<ServerGroupMember>
+)
+
+// Server's group event payload (matches server exactly)
+data class GroupEventPayload(
+    val event: String,  // "created", "updated", "member_added", "member_removed"
+    val group: ServerGroup,
+    val affectedMembers: List<String>? = null
+)
+
+// Group message received payload
+data class GroupMessageReceivedPayload(
+    val groupId: String,
+    val messageId: String,
+    val from: String,
     val msgType: String,
     val timestamp: Long,
     val nonce: String,
     val ciphertext: String,
     val sig: String,
     val attachment: AttachmentPointer? = null
-)
-
-data class GroupEventPayload(
-    val groupId: String,
-    val eventType: String,
-    val actorId: String? = null,
-    val targetId: String? = null,
-    val title: String? = null,
-    val memberIds: List<String>? = null,
-    val timestamp: Long,
-    val messageId: String? = null,
-    val from: String? = null,
-    val msgType: String? = null,
-    val nonce: String? = null,
-    val ciphertext: String? = null,
-    val sig: String? = null
 )
 
 @Singleton
@@ -255,8 +275,9 @@ class GroupService @Inject constructor(
         )
         messageDao.insert(message)
 
-        // Send encrypted message to each member individually
-        // This is how Whisper2 handles group encryption - per-member encryption
+        // Build recipient envelopes - encrypt for each member (pairwise encryption)
+        val recipients = mutableListOf<RecipientEnvelope>()
+
         for (member in members) {
             if (member.memberId == myId) continue
 
@@ -284,23 +305,42 @@ class GroupService @Inject constructor(
                     privateKey = mySignPrivKey
                 )
 
-                val payload = GroupSendMessagePayload(
-                    sessionToken = sessionToken,
-                    groupId = groupId,
-                    messageId = messageId,
-                    from = myId,
+                recipients.add(RecipientEnvelope(
                     to = member.memberId,
-                    msgType = Constants.ContentType.TEXT,
-                    timestamp = timestamp,
                     nonce = Base64.encodeToString(nonce, Base64.NO_WRAP),
                     ciphertext = Base64.encodeToString(ciphertext, Base64.NO_WRAP),
                     sig = Base64.encodeToString(signature, Base64.NO_WRAP)
-                )
-
-                wsClient.send(WsFrame(Constants.MsgType.GROUP_SEND_MESSAGE, payload = payload))
+                ))
             } catch (e: Exception) {
-                Logger.e("Failed to send to ${member.memberId}", e)
+                Logger.e("[GroupService] Failed to encrypt for ${member.memberId}", e)
             }
+        }
+
+        if (recipients.isEmpty()) {
+            Logger.w("[GroupService] No valid recipients for group message")
+            messageDao.updateStatus(messageId, Constants.MessageStatus.FAILED)
+            return Result.failure(Exception("No valid recipients"))
+        }
+
+        // Send single message with all recipient envelopes
+        val payload = GroupSendMessagePayload(
+            sessionToken = sessionToken,
+            groupId = groupId,
+            messageId = messageId,
+            from = myId,
+            msgType = Constants.ContentType.TEXT,
+            timestamp = timestamp,
+            recipients = recipients
+        )
+
+        try {
+            wsClient.send(WsFrame(Constants.MsgType.GROUP_SEND_MESSAGE, payload = payload))
+            messageDao.updateStatus(messageId, Constants.MessageStatus.SENT)
+            Logger.i("[GroupService] Sent group message to ${recipients.size} recipients")
+        } catch (e: Exception) {
+            Logger.e("[GroupService] Failed to send group message", e)
+            messageDao.updateStatus(messageId, Constants.MessageStatus.FAILED)
+            return Result.failure(e)
         }
 
         // Update group last message
@@ -313,38 +353,8 @@ class GroupService @Inject constructor(
 
     private suspend fun handleMessage(frame: WsFrame<JsonElement>) {
         when (frame.type) {
-            "group_create_ack" -> handleGroupCreateAck(frame.payload)
             Constants.MsgType.GROUP_EVENT -> handleGroupEvent(frame.payload)
-        }
-    }
-
-    private suspend fun handleGroupCreateAck(payload: JsonElement) {
-        try {
-            val ack = gson.fromJson(payload, GroupCreateAckPayload::class.java)
-            val myId = secureStorage.whisperId ?: return
-
-            val group = GroupEntity(
-                groupId = ack.groupId,
-                name = ack.title,
-                creatorId = myId,
-                memberCount = ack.memberIds.size,
-                createdAt = ack.createdAt,
-                updatedAt = ack.createdAt
-            )
-            groupDao.insert(group)
-
-            // Add members
-            ack.memberIds.forEach { memberId ->
-                groupDao.insertMember(GroupMemberEntity(
-                    groupId = ack.groupId,
-                    memberId = memberId,
-                    joinedAt = ack.createdAt
-                ))
-            }
-
-            Logger.d("Group created: ${ack.groupId}")
-        } catch (e: Exception) {
-            Logger.e("Failed to handle group create ack", e)
+            "group_message" -> handleGroupMessage(frame.payload)
         }
     }
 
@@ -352,124 +362,196 @@ class GroupService @Inject constructor(
         try {
             val event = gson.fromJson(payload, GroupEventPayload::class.java)
             val myId = secureStorage.whisperId ?: return
+            val serverGroup = event.group
 
-            when (event.eventType) {
+            Logger.d("[GroupService] Received group event: ${event.event} for group ${serverGroup.groupId}")
+
+            when (event.event) {
                 "created" -> {
-                    // New group created (we were added)
-                    if (event.memberIds != null && event.title != null) {
+                    // New group created (we were added or we created it)
+                    val activeMembers = serverGroup.members.filter { it.removedAt == null }
+
+                    val group = GroupEntity(
+                        groupId = serverGroup.groupId,
+                        name = serverGroup.title,
+                        creatorId = serverGroup.ownerId,
+                        memberCount = activeMembers.size,
+                        createdAt = serverGroup.createdAt,
+                        updatedAt = serverGroup.updatedAt
+                    )
+                    groupDao.insert(group)
+
+                    // Clear existing members and add fresh
+                    groupDao.deleteGroupMembers(serverGroup.groupId)
+                    activeMembers.forEach { member ->
+                        groupDao.insertMember(GroupMemberEntity(
+                            groupId = serverGroup.groupId,
+                            memberId = member.whisperId,
+                            joinedAt = member.joinedAt,
+                            role = member.role
+                        ))
+                    }
+
+                    Logger.i("[GroupService] Group created: ${serverGroup.groupId} with ${activeMembers.size} members")
+                }
+
+                "updated" -> {
+                    // Group was updated (title change, members added/removed)
+                    val activeMembers = serverGroup.members.filter { it.removedAt == null }
+
+                    // Check if we're still a member
+                    val amIMember = activeMembers.any { it.whisperId == myId }
+
+                    if (amIMember) {
                         val group = GroupEntity(
-                            groupId = event.groupId,
-                            name = event.title,
-                            creatorId = event.actorId ?: "",
-                            memberCount = event.memberIds.size,
-                            createdAt = event.timestamp,
-                            updatedAt = event.timestamp
+                            groupId = serverGroup.groupId,
+                            name = serverGroup.title,
+                            creatorId = serverGroup.ownerId,
+                            memberCount = activeMembers.size,
+                            createdAt = serverGroup.createdAt,
+                            updatedAt = serverGroup.updatedAt
                         )
                         groupDao.insert(group)
 
-                        event.memberIds.forEach { memberId ->
+                        // Refresh members
+                        groupDao.deleteGroupMembers(serverGroup.groupId)
+                        activeMembers.forEach { member ->
                             groupDao.insertMember(GroupMemberEntity(
-                                groupId = event.groupId,
-                                memberId = memberId,
-                                joinedAt = event.timestamp
+                                groupId = serverGroup.groupId,
+                                memberId = member.whisperId,
+                                joinedAt = member.joinedAt,
+                                role = member.role
                             ))
                         }
+
+                        Logger.i("[GroupService] Group updated: ${serverGroup.groupId}")
+                    } else {
+                        // We were removed from the group
+                        groupDao.delete(serverGroup.groupId)
+                        Logger.i("[GroupService] Removed from group: ${serverGroup.groupId}")
                     }
                 }
 
                 "member_added" -> {
-                    event.targetId?.let { targetId ->
+                    // Member was added - refresh full group
+                    val activeMembers = serverGroup.members.filter { it.removedAt == null }
+                    groupDao.insert(GroupEntity(
+                        groupId = serverGroup.groupId,
+                        name = serverGroup.title,
+                        creatorId = serverGroup.ownerId,
+                        memberCount = activeMembers.size,
+                        createdAt = serverGroup.createdAt,
+                        updatedAt = serverGroup.updatedAt
+                    ))
+
+                    event.affectedMembers?.forEach { memberId ->
+                        val memberData = serverGroup.members.find { it.whisperId == memberId }
                         groupDao.insertMember(GroupMemberEntity(
-                            groupId = event.groupId,
-                            memberId = targetId,
-                            joinedAt = event.timestamp
+                            groupId = serverGroup.groupId,
+                            memberId = memberId,
+                            joinedAt = memberData?.joinedAt ?: System.currentTimeMillis(),
+                            role = memberData?.role ?: "member"
                         ))
-                        val group = groupDao.getGroupById(event.groupId)
-                        group?.let {
-                            groupDao.insert(it.copy(memberCount = it.memberCount + 1, updatedAt = event.timestamp))
-                        }
                     }
+
+                    Logger.i("[GroupService] Members added to group: ${serverGroup.groupId}")
                 }
 
-                "member_removed", "member_left" -> {
-                    event.targetId?.let { targetId ->
-                        groupDao.removeMember(event.groupId, targetId)
-                        val group = groupDao.getGroupById(event.groupId)
-                        group?.let {
-                            groupDao.insert(it.copy(memberCount = maxOf(0, it.memberCount - 1), updatedAt = event.timestamp))
+                "member_removed" -> {
+                    // Member was removed
+                    val activeMembers = serverGroup.members.filter { it.removedAt == null }
+                    val amIMember = activeMembers.any { it.whisperId == myId }
+
+                    if (amIMember) {
+                        groupDao.insert(GroupEntity(
+                            groupId = serverGroup.groupId,
+                            name = serverGroup.title,
+                            creatorId = serverGroup.ownerId,
+                            memberCount = activeMembers.size,
+                            createdAt = serverGroup.createdAt,
+                            updatedAt = serverGroup.updatedAt
+                        ))
+
+                        event.affectedMembers?.forEach { memberId ->
+                            groupDao.removeMember(serverGroup.groupId, memberId)
                         }
 
-                        // If we were removed, delete the group locally
-                        if (targetId == myId) {
-                            groupDao.delete(event.groupId)
-                        }
+                        Logger.i("[GroupService] Members removed from group: ${serverGroup.groupId}")
+                    } else {
+                        // We were removed
+                        groupDao.delete(serverGroup.groupId)
+                        Logger.i("[GroupService] We were removed from group: ${serverGroup.groupId}")
                     }
-                }
-
-                "title_changed" -> {
-                    event.title?.let { title ->
-                        groupDao.updateName(event.groupId, title)
-                    }
-                }
-
-                "message_received" -> {
-                    // Handle incoming group message
-                    handleIncomingGroupMessage(event)
                 }
             }
-
-            _groupEvents.emit(event)
         } catch (e: Exception) {
-            Logger.e("Failed to handle group event", e)
+            Logger.e("[GroupService] Failed to handle group event", e)
         }
     }
 
-    private suspend fun handleIncomingGroupMessage(event: GroupEventPayload) {
+    private suspend fun handleGroupMessage(payload: JsonElement) {
+        try {
+            val msg = gson.fromJson(payload, GroupMessageReceivedPayload::class.java)
+            handleIncomingGroupMessagePayload(msg)
+        } catch (e: Exception) {
+            Logger.e("[GroupService] Failed to handle group message", e)
+        }
+    }
+
+    private suspend fun handleIncomingGroupMessagePayload(msg: GroupMessageReceivedPayload) {
         val myId = secureStorage.whisperId ?: return
         val myPrivKey = secureStorage.encPrivateKey ?: return
-        val from = event.from ?: return
-        val messageId = event.messageId ?: return
-        val ciphertextB64 = event.ciphertext ?: return
-        val nonceB64 = event.nonce ?: return
 
         // Get sender's public key
-        val contact = contactDao.getContactById(from)
-        val senderPubKeyBase64 = contact?.encPublicKey ?: return
+        val contact = contactDao.getContactById(msg.from)
+        val senderPubKeyBase64 = contact?.encPublicKey ?: run {
+            Logger.w("[GroupService] Unknown sender: ${msg.from}")
+            return
+        }
 
         try {
             val senderPubKey = Base64.decode(senderPubKeyBase64.replace(" ", "+").trim(), Base64.NO_WRAP)
-            val ciphertext = Base64.decode(ciphertextB64, Base64.NO_WRAP)
-            val nonce = Base64.decode(nonceB64, Base64.NO_WRAP)
+            val ciphertext = Base64.decode(msg.ciphertext, Base64.NO_WRAP)
+            val nonce = Base64.decode(msg.nonce, Base64.NO_WRAP)
 
             val plaintext = cryptoService.boxOpen(ciphertext, nonce, senderPubKey, myPrivKey)
             val content = String(plaintext, Charsets.UTF_8)
 
             // Check for duplicates
-            val existing = messageDao.getMessageById(messageId)
-            if (existing != null) return
+            val existing = messageDao.getMessageById(msg.messageId)
+            if (existing != null) {
+                Logger.d("[GroupService] Duplicate message: ${msg.messageId}")
+                return
+            }
 
             // Store message
             val message = MessageEntity(
-                id = messageId,
-                conversationId = event.groupId,
-                groupId = event.groupId,
-                from = from,
-                to = event.groupId,
-                contentType = event.msgType ?: Constants.ContentType.TEXT,
+                id = msg.messageId,
+                conversationId = msg.groupId,
+                groupId = msg.groupId,
+                from = msg.from,
+                to = msg.groupId,
+                contentType = msg.msgType,
                 content = content,
-                timestamp = event.timestamp,
+                timestamp = msg.timestamp,
                 status = Constants.MessageStatus.DELIVERED,
-                direction = Constants.Direction.INCOMING
+                direction = Constants.Direction.INCOMING,
+                // Attachment metadata
+                attachmentBlobId = msg.attachment?.objectKey,
+                attachmentKey = msg.attachment?.fileKeyBox?.ciphertext,
+                attachmentNonce = msg.attachment?.fileKeyBox?.nonce,
+                attachmentMimeType = msg.attachment?.contentType,
+                attachmentSize = msg.attachment?.ciphertextSize?.toLong()
             )
             messageDao.insert(message)
 
             // Update group
-            groupDao.updateLastMessage(event.groupId, content, event.timestamp)
-            groupDao.incrementUnreadCount(event.groupId)
+            groupDao.updateLastMessage(msg.groupId, content, msg.timestamp)
+            groupDao.incrementUnreadCount(msg.groupId)
 
-            Logger.d("Received group message in ${event.groupId} from $from")
+            Logger.i("[GroupService] Received group message in ${msg.groupId} from ${msg.from}")
         } catch (e: Exception) {
-            Logger.e("Failed to decrypt group message", e)
+            Logger.e("[GroupService] Failed to decrypt group message", e)
         }
     }
 
