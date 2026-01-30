@@ -815,6 +815,12 @@ class CallService @Inject constructor(
         val config = PeerConnection.RTCConfiguration(iceServers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
             continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
+            // Force all traffic through TURN relay - no direct P2P connections
+            iceTransportsType = PeerConnection.IceTransportsType.RELAY
+            // Reliability settings
+            bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE      // Bundle all media into single transport
+            rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE      // Multiplex RTP/RTCP on same port
+            iceCandidatePoolSize = 1                                   // Pre-gather candidates for faster connection
         }
 
         peerConnection = factory.createPeerConnection(config, object : PeerConnection.Observer {

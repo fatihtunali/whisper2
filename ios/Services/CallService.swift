@@ -682,14 +682,10 @@ final class CallService: NSObject, ObservableObject {
 
         let config = RTCConfiguration()
 
-        // Setup ICE servers
+        // Setup ICE servers - TURN only (no STUN, no direct)
         var iceServers: [RTCIceServer] = []
 
-        // Always add public STUN servers as fallback
-        let stunServer = RTCIceServer(urlStrings: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"])
-        iceServers.append(stunServer)
-
-        // Use TURN credentials if available
+        // Use TURN credentials - relay mode only
         if let turn = turnCredentials {
             for url in turn.urls {
                 let server = RTCIceServer(
@@ -703,6 +699,13 @@ final class CallService: NSObject, ObservableObject {
 
         config.iceServers = iceServers
 
+        // Force all traffic through TURN relay - no direct P2P connections
+        config.iceTransportPolicy = .relay
+
+        // Reliability settings
+        config.bundlePolicy = .maxBundle          // Bundle all media into single transport
+        config.rtcpMuxPolicy = .require           // Multiplex RTP/RTCP on same port
+        config.iceCandidatePoolSize = 1           // Pre-gather candidates for faster connection
         config.sdpSemantics = .unifiedPlan
         config.continualGatheringPolicy = .gatherContinually
 
