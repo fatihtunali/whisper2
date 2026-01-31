@@ -297,15 +297,17 @@ final class AuthService: ObservableObject {
             let frame = WsFrame(type: Constants.MessageType.logout, payload: payload)
             Task { try? await ws.send(frame) }
         }
-        
+
         ws.disconnect()
         keychain.clearAll()
-        
+
         encKeyPair = nil
         signKeyPair = nil
-        whisperId = nil
-        sessionToken = nil
-        isAuthenticated = false
+        DispatchQueue.main.async {
+            self.whisperId = nil
+            self.sessionToken = nil
+            self.isAuthenticated = false
+        }
     }
     
     // MARK: - Private

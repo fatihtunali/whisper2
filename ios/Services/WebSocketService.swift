@@ -91,7 +91,9 @@ final class WebSocketService: NSObject, ObservableObject {
         }
 
         print("[WebSocket] Connecting to \(Constants.wsURL)...")
-        connectionState = .connecting
+        DispatchQueue.main.async {
+            self.connectionState = .connecting
+        }
 
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 60
@@ -103,7 +105,9 @@ final class WebSocketService: NSObject, ObservableObject {
 
         guard let url = URL(string: Constants.wsURL) else {
             print("[WebSocket] Invalid URL: \(Constants.wsURL)")
-            connectionState = .disconnected
+            DispatchQueue.main.async {
+                self.connectionState = .disconnected
+            }
             return
         }
 
