@@ -35,6 +35,7 @@ import {
   DeleteMessagePayload,
   FetchPendingPayload,
   UpdateTokensPayload,
+  DeleteAccountPayload,
   GetTurnCredentialsPayload,
   CallInitiatePayload,
   CallRingingPayload,
@@ -252,6 +253,10 @@ export class WsGateway {
         await this.handleLogout(conn, payload as LogoutPayload, requestId);
         break;
 
+      case MessageTypes.DELETE_ACCOUNT:
+        await this.handleDeleteAccount(conn, payload as DeleteAccountPayload, requestId);
+        break;
+
       case MessageTypes.PING:
         await this.handlePing(conn, payload as PingPayload, requestId);
         break;
@@ -418,6 +423,43 @@ export class WsGateway {
 
     // Close connection after logout
     conn.ws.close(1000, 'Logged out');
+  }
+
+  private async handleDeleteAccount(
+    conn: Connection,
+    payload: DeleteAccountPayload,
+    requestId?: string
+  ): Promise<void> {
+    if (!conn.whisperId) {
+      this.sendError(conn.ws, 'NOT_REGISTERED', 'Not authenticated', requestId);
+      return;
+    }
+
+    const result = await authService.deleteAccount(payload.sessionToken, conn.ip);
+
+    if (!result.success) {
+      this.sendError(
+        conn.ws,
+        (result.error?.code as ErrorCode) || 'INTERNAL_ERROR',
+        result.error?.message || 'Failed to delete account',
+        requestId
+      );
+      return;
+    }
+
+    // Send confirmation before closing connection
+    this.send(conn.ws, {
+      type: MessageTypes.ACCOUNT_DELETED,
+      requestId,
+      payload: {
+        success: true,
+        whisperId: conn.whisperId,
+        deletedAt: Date.now(),
+      },
+    });
+
+    // Close connection after account deletion
+    conn.ws.close(1000, 'Account deleted');
   }
 
   private async handlePing(

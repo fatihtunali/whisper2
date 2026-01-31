@@ -434,6 +434,123 @@ export class AuthService {
     return true;
   }
 
+  /**
+   * Delete account - permanently removes all user data.
+   * This is irreversible and removes:
+   * - User record
+   * - All devices
+   * - All group memberships (and owned groups)
+   * - All contact backups
+   * - All attachments and access grants
+   * - All pending messages
+   * - All sessions
+   */
+  async deleteAccount(
+    sessionToken: string,
+    clientIp?: string
+  ): Promise<{ success: boolean; error?: { code: string; message: string } }> {
+    const session = await this.validateSession(sessionToken);
+    if (!session) {
+      return {
+        success: false,
+        error: { code: 'AUTH_FAILED', message: 'Invalid or expired session' },
+      };
+    }
+
+    const whisperId = session.whisperId;
+
+    try {
+      // Use transaction for database operations
+      await withTransaction(async (client) => {
+        // 1. Delete group memberships (before groups, to handle foreign keys)
+        await client.query(
+          'DELETE FROM group_members WHERE whisper_id = $1',
+          [whisperId]
+        );
+
+        // 2. Delete owned groups (this will cascade to their members via ON DELETE CASCADE)
+        // First get all groups owned by this user
+        const ownedGroups = await client.query<{ group_id: string }>(
+          'SELECT group_id FROM groups WHERE owner_whisper_id = $1',
+          [whisperId]
+        );
+
+        // Delete members of owned groups
+        for (const row of ownedGroups.rows) {
+          await client.query(
+            'DELETE FROM group_members WHERE group_id = $1',
+            [row.group_id]
+          );
+        }
+
+        // Delete the groups themselves
+        await client.query(
+          'DELETE FROM groups WHERE owner_whisper_id = $1',
+          [whisperId]
+        );
+
+        // 3. Delete contact backups
+        await client.query(
+          'DELETE FROM contact_backups WHERE whisper_id = $1',
+          [whisperId]
+        );
+
+        // 4. Delete attachment access grants (both given and received)
+        await client.query(
+          'DELETE FROM attachment_access WHERE whisper_id = $1',
+          [whisperId]
+        );
+
+        // 5. Delete owned attachments
+        await client.query(
+          'DELETE FROM attachments WHERE owner_whisper_id = $1',
+          [whisperId]
+        );
+
+        // 6. Delete devices
+        await client.query(
+          'DELETE FROM devices WHERE whisper_id = $1',
+          [whisperId]
+        );
+
+        // 7. Delete bans (if any)
+        await client.query(
+          'DELETE FROM bans WHERE whisper_id = $1',
+          [whisperId]
+        );
+
+        // 8. Audit log the deletion BEFORE deleting user
+        await client.query(
+          `INSERT INTO audit_events (event_type, whisper_id, ip_address, details)
+           VALUES ($1, $2, $3, $4)`,
+          ['account_deleted', whisperId, clientIp || null, JSON.stringify({ deletedAt: Date.now() })]
+        );
+
+        // 9. Finally delete the user record
+        await client.query(
+          'DELETE FROM users WHERE whisper_id = $1',
+          [whisperId]
+        );
+      });
+
+      // Clear Redis data (outside transaction)
+      await redis.del(RedisKeys.session(sessionToken));
+      await redis.del(RedisKeys.activeSession(whisperId));
+      await redis.del(RedisKeys.pending(whisperId));
+      await redis.del(RedisKeys.presence(whisperId));
+
+      logger.info({ whisperId }, 'Account deleted successfully');
+
+      return { success: true };
+    } catch (err) {
+      logger.error({ err, whisperId }, 'Failed to delete account');
+      return {
+        success: false,
+        error: { code: 'INTERNAL_ERROR', message: 'Failed to delete account' },
+      };
+    }
+  }
+
   // ===========================================================================
   // PRIVATE HELPERS
   // ===========================================================================

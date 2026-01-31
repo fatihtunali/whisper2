@@ -112,7 +112,11 @@ enum Constants {
         // Ping/Pong
         static let ping = "ping"
         static let pong = "pong"
-        
+
+        // Account Management
+        static let deleteAccount = "delete_account"
+        static let accountDeleted = "account_deleted"
+
         // Error
         static let error = "error"
     }

@@ -424,6 +424,23 @@ export interface TypingNotificationPayload {
 }
 
 // =============================================================================
+// ACCOUNT DELETION (for "Wipe All Data" feature)
+// =============================================================================
+
+// delete_account request (client → server)
+export interface DeleteAccountPayload extends VersionedPayload {
+  sessionToken: string;
+  confirmPhrase: string; // Must be "DELETE MY ACCOUNT" to confirm intent
+}
+
+// account_deleted response (server → client)
+export interface AccountDeletedPayload {
+  success: boolean;
+  whisperId: string;
+  deletedAt: number;
+}
+
+// =============================================================================
 // MESSAGE TYPES ENUM (for canonical signing)
 // =============================================================================
 
@@ -491,6 +508,10 @@ export const MessageTypes = {
   // Ping/Pong
   PING: 'ping',
   PONG: 'pong',
+
+  // Account Management
+  DELETE_ACCOUNT: 'delete_account',
+  ACCOUNT_DELETED: 'account_deleted',
 
   // Error
   ERROR: 'error',

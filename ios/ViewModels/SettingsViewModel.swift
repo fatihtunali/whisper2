@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import LocalAuthentication
+import Combine
 
 /// View model for settings
 @MainActor
@@ -101,11 +102,110 @@ final class SettingsViewModel: ObservableObject {
 
     // MARK: - Account Actions
 
+    @Published var isDeletingAccount = false
+    @Published var deleteAccountError: String?
+
     func logout() {
         authService.logout()
     }
 
-    func wipeAllData() {
+    /// Wipe all data - sends delete request to server first, then clears local data
+    /// User cannot recover their account after this operation
+    func wipeAllData() async -> Bool {
+        isDeletingAccount = true
+        deleteAccountError = nil
+
+        do {
+            // Step 1: Request server to delete account
+            let success = try await deleteAccountOnServer()
+
+            if success {
+                // Step 2: Clear all local data
+                await MainActor.run {
+                    clearLocalData()
+                }
+                return true
+            } else {
+                deleteAccountError = "Server failed to delete account"
+                return false
+            }
+        } catch {
+            deleteAccountError = error.localizedDescription
+            // Even if server fails, allow user to clear local data
+            await MainActor.run {
+                clearLocalData()
+            }
+            return true
+        }
+    }
+
+    /// Send delete_account request to server
+    private func deleteAccountOnServer() async throws -> Bool {
+        guard let sessionToken = keychain.sessionToken else {
+            throw NetworkError.authenticationRequired
+        }
+
+        let ws = WebSocketService.shared
+
+        // Ensure we're connected
+        guard ws.connectionState == .connected else {
+            throw NetworkError.connectionFailed
+        }
+
+        // Build delete_account payload
+        let payload = DeleteAccountPayload(
+            protocolVersion: Constants.protocolVersion,
+            cryptoVersion: Constants.cryptoVersion,
+            sessionToken: sessionToken,
+            confirmPhrase: "DELETE MY ACCOUNT"
+        )
+
+        let frame = WsFrame(type: Constants.MessageType.deleteAccount, payload: payload)
+
+        // Send and wait for response (with timeout)
+        return try await withCheckedThrowingContinuation { continuation in
+            var cancellable: AnyCancellable?
+            var hasResumed = false
+
+            // Set up timeout
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+                guard !hasResumed else { return }
+                hasResumed = true
+                cancellable?.cancel()
+                continuation.resume(throwing: NetworkError.timeout)
+            }
+
+            // Listen for account_deleted response
+            cancellable = ws.messagePublisher
+                .sink { data in
+                    guard !hasResumed else { return }
+                    if let response = try? JSONDecoder().decode(AccountDeletedResponse.self, from: data),
+                       response.type == Constants.MessageType.accountDeleted {
+                        hasResumed = true
+                        cancellable?.cancel()
+                        continuation.resume(returning: response.payload.success)
+                    }
+                }
+
+            // Send the request
+            Task {
+                do {
+                    try await ws.send(frame)
+                } catch {
+                    guard !hasResumed else { return }
+                    hasResumed = true
+                    cancellable?.cancel()
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    /// Clear all local data (called after server deletion or on failure)
+    private func clearLocalData() {
+        isDeletingAccount = false
+        // Clear cache (important: prevents stale state after wipe)
+        settingsManager.clearCache()
         MessagingService.shared.clearAllData()
         ContactsService.shared.clearAllData()
         CallService.shared.clearCallHistory()
@@ -159,4 +259,24 @@ final class SettingsViewModel: ObservableObject {
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
         return "\(version) (\(build))"
     }
+}
+
+// MARK: - Account Deletion Models
+
+struct DeleteAccountPayload: Codable {
+    let protocolVersion: Int
+    let cryptoVersion: Int
+    let sessionToken: String
+    let confirmPhrase: String
+}
+
+struct AccountDeletedResponse: Codable {
+    let type: String
+    let payload: AccountDeletedPayload
+}
+
+struct AccountDeletedPayload: Codable {
+    let success: Bool
+    let whisperId: String
+    let deletedAt: Int64
 }

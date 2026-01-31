@@ -306,6 +306,10 @@ class WsClientImpl @Inject constructor(
      * - This prevents reconnect storms from frequent onCapabilitiesChanged callbacks
      * - If we're in backoff (RECONNECTING), cancel the delay and reconnect immediately
      * - Backoff counter is reset when network becomes available (done in reconnectPolicy)
+     *
+     * NOTE: This method only updates the network state flag.
+     * The actual reconnection with authentication is handled by App/ConnectionForegroundService
+     * which calls authService.reconnect() to ensure proper authentication after connection.
      */
     fun setNetworkAvailable(available: Boolean) {
         val wasAvailable = reconnectPolicy.isNetworkAvailable()
@@ -324,16 +328,20 @@ class WsClientImpl @Inject constructor(
 
             when (currentState) {
                 WsConnectionState.DISCONNECTED -> {
-                    Logger.ws("Network restored (was unavailable) - triggering immediate reconnect")
-                    scope.launch { connect() }
+                    // NOTE: Don't call connect() directly here!
+                    // The ConnectionForegroundService monitors connection state and will
+                    // call authService.reconnect() which handles both connection AND authentication.
+                    // Calling connect() here would create an unauthenticated connection.
+                    Logger.ws("Network restored (was unavailable) - connection will be triggered by ConnectionForegroundService")
+                    // Just notify that network is available - the service will handle reconnection
                 }
                 WsConnectionState.RECONNECTING -> {
-                    // Cancel pending backoff delay and reconnect immediately
-                    Logger.ws("Network restored during backoff - canceling delay, reconnecting now")
+                    // Cancel pending backoff delay - the service will handle reconnection
+                    Logger.ws("Network restored during backoff - canceling delay")
                     reconnectJob?.cancel()
                     reconnectJob = null
                     _connectionState.value = WsConnectionState.DISCONNECTED
-                    scope.launch { connect() }
+                    // Don't call connect() here - let the service handle it with proper auth
                 }
                 else -> {
                     // CONNECTED, CONNECTING, AUTH_EXPIRED - no action needed

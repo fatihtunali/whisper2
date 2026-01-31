@@ -13,6 +13,7 @@ import {
   SessionRefreshPayload,
   LogoutPayload,
   UpdateTokensPayload,
+  DeleteAccountPayload,
   PROTOCOL_VERSION,
   CRYPTO_VERSION,
 } from '../types/protocol';
@@ -215,5 +216,34 @@ export const updateTokensSchema: JSONSchemaType<UpdateTokensPayload> = {
     },
   },
   required: ['protocolVersion', 'cryptoVersion', 'sessionToken'],
+  additionalProperties: false,
+};
+
+// =============================================================================
+// DELETE_ACCOUNT SCHEMA (Account Deletion / Wipe All Data)
+// =============================================================================
+
+export const deleteAccountSchema: JSONSchemaType<DeleteAccountPayload> = {
+  type: 'object',
+  properties: {
+    protocolVersion: {
+      type: 'integer',
+      const: PROTOCOL_VERSION,
+    },
+    cryptoVersion: {
+      type: 'integer',
+      const: CRYPTO_VERSION,
+    },
+    sessionToken: {
+      type: 'string',
+      minLength: 32,
+      maxLength: 64,
+    },
+    confirmPhrase: {
+      type: 'string',
+      const: 'DELETE MY ACCOUNT',
+    },
+  },
+  required: ['protocolVersion', 'cryptoVersion', 'sessionToken', 'confirmPhrase'],
   additionalProperties: false,
 };

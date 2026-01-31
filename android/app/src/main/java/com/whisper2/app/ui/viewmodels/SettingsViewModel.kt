@@ -11,6 +11,7 @@ import com.whisper2.app.services.auth.AuthService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import javax.inject.Inject
 
 @HiltViewModel
@@ -18,7 +19,8 @@ class SettingsViewModel @Inject constructor(
     private val secureStorage: SecureStorage,
     private val authService: AuthService,
     private val database: WhisperDatabase,
-    private val storageHelper: StorageHelper
+    private val storageHelper: StorageHelper,
+    private val wsClient: com.whisper2.app.data.network.ws.WsClientImpl
 ) : ViewModel() {
 
     private val _whisperId = MutableStateFlow<String?>(null)
@@ -313,7 +315,116 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun wipeAllData() {
+    private val _isDeletingAccount = MutableStateFlow(false)
+    val isDeletingAccount: StateFlow<Boolean> = _isDeletingAccount.asStateFlow()
+
+    private val _deleteAccountError = MutableStateFlow<String?>(null)
+    val deleteAccountError: StateFlow<String?> = _deleteAccountError.asStateFlow()
+
+    /**
+     * Wipe all data - sends delete request to server first, then clears local data.
+     * User cannot recover their account after this operation.
+     * @return true if successful (even if server deletion fails, local data is still cleared)
+     */
+    suspend fun wipeAllData(): Boolean {
+        _isDeletingAccount.value = true
+        _deleteAccountError.value = null
+
+        try {
+            // Step 1: Try to delete account on server
+            val serverSuccess = try {
+                deleteAccountOnServer()
+            } catch (e: Exception) {
+                Logger.e("Server account deletion failed", e)
+                _deleteAccountError.value = e.message
+                false
+            }
+
+            // Step 2: Clear local data (always do this, even if server fails)
+            clearLocalData()
+
+            return true
+        } finally {
+            _isDeletingAccount.value = false
+        }
+    }
+
+    /**
+     * Send delete_account request to server.
+     */
+    private suspend fun deleteAccountOnServer(): Boolean {
+        val sessionToken = secureStorage.sessionToken
+            ?: throw IllegalStateException("No session token")
+
+        // Build delete_account payload
+        val payload = mapOf(
+            "protocolVersion" to com.whisper2.app.core.Constants.PROTOCOL_VERSION,
+            "cryptoVersion" to com.whisper2.app.core.Constants.CRYPTO_VERSION,
+            "sessionToken" to sessionToken,
+            "confirmPhrase" to "DELETE MY ACCOUNT"
+        )
+
+        val frame = com.whisper2.app.data.network.ws.WsFrame(
+            type = "delete_account",
+            payload = payload
+        )
+
+        // Send and wait for response with timeout
+        return withTimeout(10_000) {
+            kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
+                var hasResumed = false
+                var messageCollectorJob: kotlinx.coroutines.Job? = null
+
+                // Listen for account_deleted response
+                messageCollectorJob = viewModelScope.launch {
+                    wsClient.messages.collect { response ->
+                        if (!hasResumed && response.type == "account_deleted") {
+                            hasResumed = true
+                            messageCollectorJob?.cancel()
+                            val success = (response.payload as? Map<*, *>)?.get("success") as? Boolean ?: false
+                            continuation.resume(success) { }
+                        }
+                    }
+                }
+
+                // Send the request
+                viewModelScope.launch {
+                    try {
+                        wsClient.send(frame)
+                    } catch (e: Exception) {
+                        if (!hasResumed) {
+                            hasResumed = true
+                            messageCollectorJob?.cancel()
+                            continuation.resumeWith(Result.failure(e))
+                        }
+                    }
+                }
+
+                continuation.invokeOnCancellation {
+                    messageCollectorJob?.cancel()
+                }
+            }
+        }
+    }
+
+    /**
+     * Clear all local data.
+     */
+    private suspend fun clearLocalData() {
+        // Clear cache (important: prevents stale state after wipe)
+        storageHelper.clearCache()
+        // Clear media/attachments
+        storageHelper.clearMedia()
+        // Clear database
+        database.clearAllTables()
+        // Clear secure storage
+        secureStorage.clearAll()
+        // Logout (stops services, disconnects WebSocket)
+        authService.logout()
+    }
+
+    @Deprecated("Use suspend fun wipeAllData() instead", ReplaceWith("wipeAllData()"))
+    fun wipeAllDataLegacy() {
         viewModelScope.launch {
             // Clear database
             database.clearAllTables()
