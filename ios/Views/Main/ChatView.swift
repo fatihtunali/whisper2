@@ -61,6 +61,14 @@ struct ChatView: View {
         self._viewModel = StateObject(wrappedValue: ChatViewModel(conversationId: conversation.peerId))
     }
 
+    /// Initialize with just a peer ID - creates or fetches conversation
+    init(peerId: String) {
+        // Get or create conversation from messaging service
+        let conv = MessagingService.shared.getOrCreateConversation(peerId: peerId)
+        self.conversation = conv
+        self._viewModel = StateObject(wrappedValue: ChatViewModel(conversationId: peerId))
+    }
+
     var body: some View {
         ZStack {
             theme.backgroundColor.color.ignoresSafeArea()

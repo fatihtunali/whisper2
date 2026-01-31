@@ -58,25 +58,25 @@ struct ChatsListView: View {
     @State private var showMessageRequests = false
     @State private var searchText = ""
     @State private var showDeleteConfirmation = false
-    @State private var conversationToDelete: Conversation?
+    @State private var itemToDelete: ChatItem?
     @State private var showArchiveConfirmation = false
-    @State private var conversationToArchive: Conversation?
+    @State private var itemToArchive: ChatItem?
 
-    private var filteredConversations: [Conversation] {
-        let convos: [Conversation]
+    private var filteredChatItems: [ChatItem] {
+        let items: [ChatItem]
         if searchText.isEmpty {
-            convos = viewModel.conversations
+            items = viewModel.chatItems
         } else {
-            convos = viewModel.conversations.filter {
-                $0.displayName.localizedCaseInsensitiveContains(searchText)
+            items = viewModel.chatItems.filter {
+                $0.name.localizedCaseInsensitiveContains(searchText)
             }
         }
         // Sort: pinned first, then by last message time
-        return convos.sorted { lhs, rhs in
+        return items.sorted { lhs, rhs in
             if lhs.isPinned != rhs.isPinned {
                 return lhs.isPinned
             }
-            return (lhs.lastMessageTime ?? .distantPast) > (rhs.lastMessageTime ?? .distantPast)
+            return lhs.lastMessageTimestamp > rhs.lastMessageTimestamp
         }
     }
 
@@ -122,9 +122,9 @@ struct ChatsListView: View {
                         }
                     }
 
-                    if viewModel.conversations.isEmpty && pendingRequestCount == 0 {
+                    if viewModel.chatItems.isEmpty && pendingRequestCount == 0 {
                         EmptyChatsView(showNewChat: $showNewChat)
-                    } else if viewModel.conversations.isEmpty {
+                    } else if viewModel.chatItems.isEmpty {
                         Spacer()
                         VStack(spacing: 16) {
                             Text("No conversations yet")
@@ -137,55 +137,50 @@ struct ChatsListView: View {
                         Spacer()
                     } else {
                         List {
-                            ForEach(filteredConversations) { conversation in
-                                NavigationLink(destination: ChatView(conversation: conversation)) {
-                                    ChatRow(conversation: conversation)
-                                }
+                            ForEach(filteredChatItems) { item in
+                                ChatItemRowLink(item: item)
                                 .listRowBackground(Color.black)
                                 .listRowSeparatorTint(Color.gray.opacity(0.3))
-                                // Swipe left actions: Delete, Archive
+                                // Swipe left actions: Delete
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                     Button(role: .destructive) {
-                                        conversationToDelete = conversation
+                                        itemToDelete = item
                                         showDeleteConfirmation = true
                                     } label: {
                                         Label("Delete", systemImage: "trash")
                                     }
-
-                                    Button {
-                                        viewModel.archiveConversation(conversation)
-                                    } label: {
-                                        Label("Archive", systemImage: "archivebox")
-                                    }
-                                    .tint(.orange)
                                 }
-                                // Swipe right actions: Pin, Mute
+                                // Swipe right actions: Pin, Mute (only for 1:1 chats)
                                 .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                    Button {
-                                        viewModel.togglePin(conversation)
-                                        // Haptic feedback
-                                        let impact = UIImpactFeedbackGenerator(style: .medium)
-                                        impact.impactOccurred()
-                                    } label: {
-                                        Label(
-                                            conversation.isPinned ? "Unpin" : "Pin",
-                                            systemImage: conversation.isPinned ? "pin.slash" : "pin"
-                                        )
-                                    }
-                                    .tint(.blue)
+                                    if !item.isGroup {
+                                        Button {
+                                            if let conv = viewModel.conversations.first(where: { $0.peerId == item.id }) {
+                                                viewModel.togglePin(conv)
+                                            }
+                                            let impact = UIImpactFeedbackGenerator(style: .medium)
+                                            impact.impactOccurred()
+                                        } label: {
+                                            Label(
+                                                item.isPinned ? "Unpin" : "Pin",
+                                                systemImage: item.isPinned ? "pin.slash" : "pin"
+                                            )
+                                        }
+                                        .tint(.blue)
 
-                                    Button {
-                                        viewModel.toggleMute(conversation)
-                                        // Haptic feedback
-                                        let impact = UIImpactFeedbackGenerator(style: .light)
-                                        impact.impactOccurred()
-                                    } label: {
-                                        Label(
-                                            conversation.isMuted ? "Unmute" : "Mute",
-                                            systemImage: conversation.isMuted ? "bell" : "bell.slash"
-                                        )
+                                        Button {
+                                            if let conv = viewModel.conversations.first(where: { $0.peerId == item.id }) {
+                                                viewModel.toggleMute(conv)
+                                            }
+                                            let impact = UIImpactFeedbackGenerator(style: .light)
+                                            impact.impactOccurred()
+                                        } label: {
+                                            Label(
+                                                item.isMuted ? "Unmute" : "Mute",
+                                                systemImage: item.isMuted ? "bell" : "bell.slash"
+                                            )
+                                        }
+                                        .tint(.purple)
                                     }
-                                    .tint(.purple)
                                 }
                             }
                         }
@@ -198,18 +193,28 @@ struct ChatsListView: View {
                 }
             }
             .navigationTitle("Chats")
-            .alert("Delete Conversation", isPresented: $showDeleteConfirmation) {
+            .alert(itemToDelete?.isGroup == true ? "Delete Group" : "Delete Conversation", isPresented: $showDeleteConfirmation) {
                 Button("Cancel", role: .cancel) {
-                    conversationToDelete = nil
+                    itemToDelete = nil
                 }
                 Button("Delete", role: .destructive) {
-                    if let conversation = conversationToDelete {
-                        viewModel.deleteConversation(conversation)
+                    if let item = itemToDelete {
+                        if item.isGroup {
+                            // Delete group (leave group)
+                            GroupService.shared.leaveGroup(groupId: item.id) { _ in }
+                        } else {
+                            // Delete 1:1 conversation
+                            if let conv = viewModel.conversations.first(where: { $0.peerId == item.id }) {
+                                viewModel.deleteConversation(conv)
+                            }
+                        }
                     }
-                    conversationToDelete = nil
+                    itemToDelete = nil
                 }
             } message: {
-                Text("Are you sure you want to delete this conversation? This action cannot be undone.")
+                Text(itemToDelete?.isGroup == true
+                    ? "Are you sure you want to leave this group? This action cannot be undone."
+                    : "Are you sure you want to delete this conversation? This action cannot be undone.")
             }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -395,6 +400,127 @@ struct NewChatView: View {
             object: nil,
             userInfo: ["peerId": contact.whisperId]
         )
+    }
+}
+
+/// Chat item row that links to either ChatView or GroupChatView
+struct ChatItemRowLink: View {
+    let item: ChatItem
+
+    var body: some View {
+        if item.isGroup {
+            NavigationLink(destination: GroupChatView(groupId: item.id)) {
+                ChatItemRow(item: item)
+            }
+        } else {
+            NavigationLink(destination: ChatView(peerId: item.id)) {
+                ChatItemRow(item: item)
+            }
+        }
+    }
+}
+
+/// Chat item row for display
+struct ChatItemRow: View {
+    let item: ChatItem
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // Avatar
+            if item.isGroup {
+                // Group avatar with purple background
+                ZStack {
+                    Circle()
+                        .fill(Color.purple.opacity(0.3))
+                        .frame(width: 52, height: 52)
+                    Image(systemName: "person.3.fill")
+                        .foregroundColor(.purple)
+                        .font(.title3)
+                }
+            } else {
+                // Contact avatar
+                Circle()
+                    .fill(Color.gray.opacity(0.3))
+                    .frame(width: 52, height: 52)
+                    .overlay(
+                        Text(String(item.name.prefix(1)).uppercased())
+                            .font(.title2)
+                            .foregroundColor(.white)
+                    )
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(item.name)
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+
+                    Spacer()
+
+                    Text(formatTimestamp(item.lastMessageTimestamp))
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+
+                HStack {
+                    if item.isTyping {
+                        Text("typing...")
+                            .font(.subheadline)
+                            .foregroundColor(.blue)
+                    } else if let lastMessage = item.lastMessage {
+                        Text(lastMessage)
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                            .lineLimit(1)
+                    } else if item.isGroup {
+                        Text("\(item.memberCount ?? 0) members")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                    } else {
+                        Text("Start a conversation")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                    }
+
+                    Spacer()
+
+                    if item.unreadCount > 0 {
+                        Text("\(item.unreadCount)")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.white)
+                            .frame(minWidth: 20, minHeight: 20)
+                            .background(Color.blue)
+                            .clipShape(Circle())
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func formatTimestamp(_ date: Date) -> String {
+        let now = Date()
+        let diff = now.timeIntervalSince(date)
+        let seconds = diff
+        let minutes = seconds / 60
+        let hours = minutes / 60
+        let days = hours / 24
+
+        if days > 7 {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "MMM d"
+            return formatter.string(from: date)
+        } else if days >= 1 {
+            return "\(Int(days))d"
+        } else if hours >= 1 {
+            return "\(Int(hours))h"
+        } else if minutes >= 1 {
+            return "\(Int(minutes))m"
+        } else {
+            return "now"
+        }
     }
 }
 

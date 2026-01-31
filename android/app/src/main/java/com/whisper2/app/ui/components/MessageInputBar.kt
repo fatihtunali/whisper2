@@ -61,6 +61,7 @@ fun MessageInputBar(
                     )
                 )
             )
+            .navigationBarsPadding()  // Ensure input bar stays above navigation bar
     ) {
         // Top border line for separation
         Box(

@@ -1,28 +1,97 @@
 import Foundation
 import Combine
 
+/// Unified chat item that can represent either a 1:1 conversation or a group
+struct ChatItem: Identifiable {
+    let id: String
+    let name: String
+    let lastMessage: String?
+    let lastMessageTimestamp: Date
+    let unreadCount: Int
+    let isTyping: Bool
+    let isGroup: Bool
+    let memberCount: Int?
+    let isPinned: Bool
+    let isMuted: Bool
+
+    // For navigation
+    var conversationId: String? { isGroup ? nil : id }
+    var groupId: String? { isGroup ? id : nil }
+}
+
 /// View model for chat list
 @MainActor
 final class ChatsViewModel: ObservableObject {
     @Published var conversations: [Conversation] = []
+    @Published var chatItems: [ChatItem] = []
     @Published var isLoading = false
     @Published var error: String?
-    
+
     private let messagingService = MessagingService.shared
+    private let groupService = GroupService.shared
     private var cancellables = Set<AnyCancellable>()
-    
+
     init() {
         setupBindings()
         loadConversations()
     }
-    
+
     private func setupBindings() {
-        messagingService.$conversations
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] conversations in
-                self?.conversations = conversations
+        // Combine conversations and groups into unified chat items
+        Publishers.CombineLatest(
+            messagingService.$conversations,
+            groupService.$groups.map { Array($0.values) }
+        )
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] conversations, groups in
+            self?.conversations = conversations
+            self?.updateChatItems(conversations: conversations, groups: groups)
+        }
+        .store(in: &cancellables)
+    }
+
+    private func updateChatItems(conversations: [Conversation], groups: [ChatGroup]) {
+        var items: [ChatItem] = []
+
+        // Add 1:1 conversations
+        for conv in conversations {
+            items.append(ChatItem(
+                id: conv.peerId,
+                name: conv.peerNickname ?? String(conv.peerId.suffix(8)),
+                lastMessage: conv.lastMessagePreview,
+                lastMessageTimestamp: conv.lastMessageTimestamp ?? Date.distantPast,
+                unreadCount: conv.unreadCount,
+                isTyping: conv.isTyping,
+                isGroup: false,
+                memberCount: nil,
+                isPinned: conv.isPinned,
+                isMuted: conv.isMuted
+            ))
+        }
+
+        // Add groups
+        for group in groups {
+            items.append(ChatItem(
+                id: group.id,
+                name: group.title,
+                lastMessage: group.lastMessage,
+                lastMessageTimestamp: group.lastMessageTime ?? group.createdAt,
+                unreadCount: group.unreadCount,
+                isTyping: false,
+                isGroup: true,
+                memberCount: group.memberIds.count,
+                isPinned: false,
+                isMuted: false
+            ))
+        }
+
+        // Sort by last message timestamp (most recent first), pinned items on top
+        chatItems = items.sorted { item1, item2 in
+            if item1.isPinned != item2.isPinned {
+                return item1.isPinned
             }
-            .store(in: &cancellables)
+            return item1.lastMessageTimestamp > item2.lastMessageTimestamp
+        }
     }
     
     func loadConversations() {

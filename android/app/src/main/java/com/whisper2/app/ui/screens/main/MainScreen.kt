@@ -80,6 +80,7 @@ fun MainScreen(
             composable(MainTab.Chats.route) {
                 ChatsListScreen(
                     onChatClick = onNavigateToChat,
+                    onGroupChatClick = onNavigateToGroup,
                     onMessageRequestsClick = onNavigateToMessageRequests,
                     connectionState = connectionState
                 )

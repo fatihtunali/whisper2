@@ -15,6 +15,24 @@ struct GroupChatView: View {
         _viewModel = StateObject(wrappedValue: GroupChatViewModel(groupId: group.id))
     }
 
+    /// Initialize with just a group ID - fetches group from service
+    init(groupId: String) {
+        // Get group from service
+        if let existingGroup = GroupService.shared.groups[groupId] {
+            self.group = existingGroup
+        } else {
+            // Create a placeholder group if not found
+            self.group = ChatGroup(
+                id: groupId,
+                title: "Group",
+                ownerId: "",
+                memberIds: [],
+                createdAt: Date()
+            )
+        }
+        _viewModel = StateObject(wrappedValue: GroupChatViewModel(groupId: groupId))
+    }
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()

@@ -469,31 +469,51 @@ class GroupService @Inject constructor(
 
             when (event.event) {
                 "created" -> {
-                    // New group created (we were added or we created it)
+                    // New group created
                     val activeMembers = serverGroup.members.filter { it.removedAt == null }
+                    val isCreator = serverGroup.ownerId == myId
 
-                    val group = GroupEntity(
-                        groupId = serverGroup.groupId,
-                        name = serverGroup.title,
-                        creatorId = serverGroup.ownerId,
-                        memberCount = activeMembers.size,
-                        createdAt = serverGroup.createdAt,
-                        updatedAt = serverGroup.updatedAt
-                    )
-                    groupDao.insert(group)
-
-                    // Clear existing members and add fresh
-                    groupDao.deleteGroupMembers(serverGroup.groupId)
-                    activeMembers.forEach { member ->
-                        groupDao.insertMember(GroupMemberEntity(
+                    if (isCreator) {
+                        // We created the group - add it directly
+                        val group = GroupEntity(
                             groupId = serverGroup.groupId,
-                            memberId = member.whisperId,
-                            joinedAt = member.joinedAt,
-                            role = member.role
-                        ))
-                    }
+                            name = serverGroup.title,
+                            creatorId = serverGroup.ownerId,
+                            memberCount = activeMembers.size,
+                            createdAt = serverGroup.createdAt,
+                            updatedAt = serverGroup.updatedAt
+                        )
+                        groupDao.insert(group)
 
-                    Logger.i("[GroupService] Group created: ${serverGroup.groupId} with ${activeMembers.size} members")
+                        // Clear existing members and add fresh
+                        groupDao.deleteGroupMembers(serverGroup.groupId)
+                        activeMembers.forEach { member ->
+                            groupDao.insertMember(GroupMemberEntity(
+                                groupId = serverGroup.groupId,
+                                memberId = member.whisperId,
+                                joinedAt = member.joinedAt,
+                                role = member.role
+                            ))
+                        }
+
+                        Logger.i("[GroupService] Group created: ${serverGroup.groupId} with ${activeMembers.size} members")
+                    } else {
+                        // We were invited - create a pending invite for user to accept/decline
+                        val inviterName = contactDao.getContactById(serverGroup.ownerId)?.displayName
+                            ?: serverGroup.ownerId.takeLast(8)
+
+                        val invite = GroupInviteEntity(
+                            groupId = serverGroup.groupId,
+                            groupName = serverGroup.title,
+                            inviterId = serverGroup.ownerId,
+                            inviterName = inviterName,
+                            memberCount = activeMembers.size,
+                            createdAt = serverGroup.createdAt
+                        )
+                        groupDao.insertInvite(invite)
+
+                        Logger.i("[GroupService] Received group invite: ${serverGroup.groupId} from ${inviterName}")
+                    }
                 }
 
                 "updated" -> {

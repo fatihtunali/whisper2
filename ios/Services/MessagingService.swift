@@ -1303,4 +1303,29 @@ final class MessagingService: ObservableObject {
         defer { conversationsLock.unlock() }
         return conversations.first { $0.peerId == peerId }
     }
+
+    /// Get or create a conversation for a given peer ID.
+    /// Used when navigating to chat view from chat list.
+    func getOrCreateConversation(peerId: String) -> Conversation {
+        conversationsLock.lock()
+        defer { conversationsLock.unlock() }
+
+        if let existing = conversations.first(where: { $0.peerId == peerId }) {
+            return existing
+        }
+
+        // Get display name from contacts if available
+        let displayName = contactsService.contacts[peerId]?.displayName ?? String(peerId.suffix(8))
+
+        let newConversation = Conversation(
+            peerId: peerId,
+            peerNickname: displayName
+        )
+
+        // Add to conversations list
+        conversations.append(newConversation)
+        saveConversationsToStorage()
+
+        return newConversation
+    }
 }

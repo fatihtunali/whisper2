@@ -26,17 +26,19 @@ import com.whisper2.app.data.network.ws.WsConnectionState
 import com.whisper2.app.ui.components.ConnectionStatusBar
 import com.whisper2.app.ui.components.ContactAvatar
 import com.whisper2.app.ui.theme.*
+import com.whisper2.app.ui.viewmodels.ChatItem
 import com.whisper2.app.ui.viewmodels.ChatsViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatsListScreen(
     onChatClick: (String) -> Unit,
+    onGroupChatClick: (String) -> Unit = {},
     onMessageRequestsClick: () -> Unit = {},
     connectionState: WsConnectionState = WsConnectionState.CONNECTED,
     viewModel: ChatsViewModel = hiltViewModel()
 ) {
-    val conversations by viewModel.conversations.collectAsState()
+    val chatItems by viewModel.chatItems.collectAsState()
     val pendingRequests by viewModel.pendingRequestCount.collectAsState()
     var showNewChat by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
@@ -97,7 +99,7 @@ fun ChatsListScreen(
             }
 
             // Search bar
-            if (conversations.isNotEmpty()) {
+            if (chatItems.isNotEmpty()) {
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
@@ -117,13 +119,11 @@ fun ChatsListScreen(
                 )
             }
 
-            val filteredConversations = if (searchQuery.isEmpty()) conversations else {
-                conversations.filter {
-                    (it.peerNickname ?: it.peerId).contains(searchQuery, ignoreCase = true)
-                }
+            val filteredChatItems = if (searchQuery.isEmpty()) chatItems else {
+                chatItems.filter { it.name.contains(searchQuery, ignoreCase = true) }
             }
 
-            if (conversations.isEmpty()) {
+            if (chatItems.isEmpty()) {
                 // Empty state
                 Box(
                     modifier = Modifier.fillMaxSize(),
@@ -152,15 +152,16 @@ fun ChatsListScreen(
                 }
             } else {
                 LazyColumn {
-                    items(filteredConversations, key = { it.peerId }) { conversation ->
-                        ChatRow(
-                            displayName = conversation.peerNickname ?: conversation.peerId,
-                            avatarPath = conversation.peerAvatarPath,
-                            lastMessage = conversation.lastMessagePreview ?: "",
-                            timestamp = conversation.formattedTime,
-                            unreadCount = conversation.unreadCount,
-                            isTyping = conversation.isTyping,
-                            onClick = { onChatClick(conversation.peerId) }
+                    items(filteredChatItems, key = { it.id }) { chatItem ->
+                        ChatItemRow(
+                            chatItem = chatItem,
+                            onClick = {
+                                if (chatItem.isGroup) {
+                                    onGroupChatClick(chatItem.id)
+                                } else {
+                                    onChatClick(chatItem.id)
+                                }
+                            }
                         )
                         HorizontalDivider(color = Color.Gray.copy(alpha = 0.2f), modifier = Modifier.padding(start = 76.dp))
                     }
@@ -177,6 +178,119 @@ fun ChatsListScreen(
                 onChatClick(peerId)
             }
         )
+    }
+}
+
+/**
+ * Chat item row that handles both 1:1 conversations and groups.
+ */
+@Composable
+fun ChatItemRow(
+    chatItem: ChatItem,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Avatar - different style for groups vs 1:1
+        if (chatItem.isGroup) {
+            // Group avatar with purple background
+            Box(
+                modifier = Modifier
+                    .size(52.dp)
+                    .background(Color(0xFF8B5CF6).copy(alpha = 0.3f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.Groups,
+                    contentDescription = null,
+                    tint = Color(0xFF8B5CF6),
+                    modifier = Modifier.size(28.dp)
+                )
+            }
+        } else {
+            // Contact avatar
+            ContactAvatar(
+                displayName = chatItem.name,
+                avatarPath = chatItem.avatarPath,
+                size = 52.dp,
+                fontSize = 20.sp
+            )
+        }
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    chatItem.name,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    formatTimestamp(chatItem.lastMessageTimestamp),
+                    color = Color.Gray,
+                    fontSize = 12.sp
+                )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    when {
+                        chatItem.isTyping -> "typing..."
+                        chatItem.lastMessage != null -> chatItem.lastMessage
+                        chatItem.isGroup -> "${chatItem.memberCount ?: 0} members"
+                        else -> "Start a conversation"
+                    },
+                    color = if (chatItem.isTyping) Color(0xFF3B82F6) else Color.Gray,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    fontSize = 14.sp,
+                    fontWeight = if (chatItem.isTyping) FontWeight.Medium else FontWeight.Normal,
+                    modifier = Modifier.weight(1f)
+                )
+                if (chatItem.unreadCount > 0) {
+                    Box(
+                        modifier = Modifier
+                            .size(20.dp)
+                            .background(Color(0xFF3B82F6), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("${chatItem.unreadCount}", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Format timestamp to human-readable time.
+ */
+private fun formatTimestamp(timestamp: Long): String {
+    val now = System.currentTimeMillis()
+    val diff = now - timestamp
+    val seconds = diff / 1000
+    val minutes = seconds / 60
+    val hours = minutes / 60
+    val days = hours / 24
+
+    return when {
+        days > 7 -> {
+            val sdf = java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault())
+            sdf.format(java.util.Date(timestamp))
+        }
+        days > 0 -> "${days}d"
+        hours > 0 -> "${hours}h"
+        minutes > 0 -> "${minutes}m"
+        else -> "now"
     }
 }
 

@@ -128,9 +128,12 @@ class MessageHandler @Inject constructor(
             val decryptedContent = decryptMessage(msg, myPrivateKey)
 
             // Create message entity with attachment metadata
+            // For group messages, conversationId should be the groupId
+            // For 1:1 messages, conversationId is the sender
+            val conversationId = msg.groupId ?: msg.from
             val message = MessageEntity(
                 id = msg.messageId,
-                conversationId = msg.from,  // For 1:1, conversation ID is the sender
+                conversationId = conversationId,
                 groupId = msg.groupId,
                 from = msg.from,
                 to = msg.to,
@@ -151,19 +154,21 @@ class MessageHandler @Inject constructor(
             // Store message
             messageDao.insert(message)
 
-            // Update conversation
-            updateConversation(msg.from, decryptedContent, contact?.displayName)
+            // Update conversation (only for 1:1 messages, group messages are handled by GroupService)
+            if (msg.groupId == null) {
+                updateConversation(msg.from, decryptedContent, contact?.displayName)
+
+                // Clear typing indicator when message is received (they finished typing)
+                conversationDao.setTyping(msg.from, false)
+                typingTimeoutJobs[msg.from]?.cancel()
+                _typingNotifications.emit(TypingNotificationPayload(msg.from, false))
+
+                // Show notification if app is in background
+                showMessageNotification(msg.from, decryptedContent, contact?.displayName)
+            }
 
             // Emit for UI
             _newMessages.emit(message)
-
-            // Clear typing indicator when message is received (they finished typing)
-            conversationDao.setTyping(msg.from, false)
-            typingTimeoutJobs[msg.from]?.cancel()
-            _typingNotifications.emit(TypingNotificationPayload(msg.from, false))
-
-            // Show notification if app is in background
-            showMessageNotification(msg.from, decryptedContent, contact?.displayName)
 
             // Send delivery receipt
             sendDeliveryReceipt(msg.messageId, msg.from, "delivered")
