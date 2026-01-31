@@ -136,11 +136,49 @@ final class AudioMessageService: NSObject, ObservableObject {
         // Stop any current playback
         stop()
 
+        // Verify file exists
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            print("[AudioMessageService] ERROR: File does not exist at \(url.path)")
+            self.error = "Audio file not found"
+            return
+        }
+
+        // Check file size
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let size = attrs[.size] as? Int64 {
+            print("[AudioMessageService] File size: \(size) bytes")
+            if size == 0 {
+                print("[AudioMessageService] ERROR: File is empty")
+                self.error = "Audio file is empty"
+                return
+            }
+        }
+
         do {
+            // IMPORTANT: Re-configure audio session for playback through speaker
+            // This is needed because other audio activities (calls, etc.) may have changed the route
+            let session = AVAudioSession.sharedInstance()
+            print("[AudioMessageService] Current audio route: \(session.currentRoute)")
+            print("[AudioMessageService] Setting up playback session...")
+
+            try session.setCategory(.playback, mode: .default, options: [.defaultToSpeaker])
+            try session.setActive(true)
+            try session.overrideOutputAudioPort(.speaker)
+
+            print("[AudioMessageService] Audio session configured. Route: \(session.currentRoute)")
+            print("[AudioMessageService] Creating player for: \(url.lastPathComponent)")
+
             audioPlayer = try AVAudioPlayer(contentsOf: url)
             audioPlayer?.delegate = self
-            audioPlayer?.prepareToPlay()
-            audioPlayer?.play()
+            audioPlayer?.volume = 1.0  // Ensure volume is at max
+
+            print("[AudioMessageService] Player created. Duration: \(audioPlayer?.duration ?? 0)s, channels: \(audioPlayer?.numberOfChannels ?? 0)")
+
+            let prepared = audioPlayer?.prepareToPlay() ?? false
+            print("[AudioMessageService] Prepared: \(prepared)")
+
+            let started = audioPlayer?.play() ?? false
+            print("[AudioMessageService] Play called. Started: \(started), isPlaying: \(audioPlayer?.isPlaying ?? false)")
 
             isPlaying = true
             currentPlayingId = messageId
@@ -154,6 +192,7 @@ final class AudioMessageService: NSObject, ObservableObject {
                 }
             }
         } catch {
+            print("[AudioMessageService] Failed to play audio: \(error)")
             self.error = "Failed to play audio: \(error.localizedDescription)"
         }
     }
@@ -167,6 +206,15 @@ final class AudioMessageService: NSObject, ObservableObject {
         isPlaying = false
         currentPlayingId = nil
         playbackProgress = 0
+
+        // Restore audio session for recording capability
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
+            try session.setActive(true)
+        } catch {
+            print("[AudioMessageService] Failed to restore audio session: \(error)")
+        }
     }
 
     func pause() {
