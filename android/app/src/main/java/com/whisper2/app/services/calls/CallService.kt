@@ -800,17 +800,41 @@ class CallService @Inject constructor(
 
         val iceServers = mutableListOf<PeerConnection.IceServer>()
 
-        // Add TURN servers if available
-        _turnCredentials.value?.let { turn ->
-            turn.urls.forEach { url ->
-                iceServers.add(
-                    PeerConnection.IceServer.builder(url)
-                        .setUsername(turn.username)
-                        .setPassword(turn.credential)
-                        .createIceServer()
-                )
+        // TURN credentials are REQUIRED for relay-only mode
+        val turn = _turnCredentials.value
+        if (turn == null) {
+            Logger.e("[CallService] Cannot create peer connection: TURN credentials not available")
+            // Request TURN credentials and retry
+            scope.launch {
+                fetchTurnCredentials()
+                delay(2000)
+                if (_turnCredentials.value != null) {
+                    createPeerConnection(isVideo)
+                } else {
+                    Logger.e("[CallService] Failed to get TURN credentials, cannot proceed")
+                    _callState.value = CallState.Failed("No TURN server available")
+                }
             }
+            return
         }
+
+        // Add TURN servers
+        turn.urls.forEach { url ->
+            iceServers.add(
+                PeerConnection.IceServer.builder(url)
+                    .setUsername(turn.username)
+                    .setPassword(turn.credential)
+                    .createIceServer()
+            )
+        }
+
+        if (iceServers.isEmpty()) {
+            Logger.e("[CallService] No ICE servers configured, cannot create peer connection")
+            _callState.value = CallState.Failed("No ICE servers available")
+            return
+        }
+
+        Logger.i("[CallService] Creating peer connection with ${iceServers.size} TURN servers")
 
         val config = PeerConnection.RTCConfiguration(iceServers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN

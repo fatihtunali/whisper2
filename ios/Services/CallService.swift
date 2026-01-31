@@ -685,17 +685,29 @@ final class CallService: NSObject, ObservableObject {
         // Setup ICE servers - TURN only (no STUN, no direct)
         var iceServers: [RTCIceServer] = []
 
-        // Use TURN credentials - relay mode only
-        if let turn = turnCredentials {
-            for url in turn.urls {
-                let server = RTCIceServer(
-                    urlStrings: [url],
-                    username: turn.username,
-                    credential: turn.credential
-                )
-                iceServers.append(server)
-            }
+        // TURN credentials are REQUIRED for relay-only mode
+        guard let turn = turnCredentials else {
+            print("[CallService] ERROR: Cannot create peer connection - no TURN credentials")
+            callState = .failed
+            return
         }
+
+        for url in turn.urls {
+            let server = RTCIceServer(
+                urlStrings: [url],
+                username: turn.username,
+                credential: turn.credential
+            )
+            iceServers.append(server)
+        }
+
+        guard !iceServers.isEmpty else {
+            print("[CallService] ERROR: No ICE servers available")
+            callState = .failed
+            return
+        }
+
+        print("[CallService] Creating peer connection with \(iceServers.count) TURN servers")
 
         config.iceServers = iceServers
 
