@@ -161,8 +161,10 @@ final class AudioMessageService: NSObject, ObservableObject {
             print("[AudioMessageService] Current audio route: \(session.currentRoute)")
             print("[AudioMessageService] Setting up playback session...")
 
-            try session.setCategory(.playback, mode: .default, options: [.defaultToSpeaker])
+            // Use .playback category without .defaultToSpeaker (that option is only for .playAndRecord)
+            try session.setCategory(.playback, mode: .default)
             try session.setActive(true)
+            // Force speaker output
             try session.overrideOutputAudioPort(.speaker)
 
             print("[AudioMessageService] Audio session configured. Route: \(session.currentRoute)")
