@@ -742,7 +742,7 @@ final class CallService: NSObject, ObservableObject {
         // TURN credentials are REQUIRED for relay-only mode
         guard let turn = turnCredentials else {
             print("[CallService] ERROR: Cannot create peer connection - no TURN credentials")
-            endCall(reason: .failed)
+            Task { try? await endCall(reason: .failed) }
             return
         }
 
@@ -757,7 +757,7 @@ final class CallService: NSObject, ObservableObject {
 
         guard !iceServers.isEmpty else {
             print("[CallService] ERROR: No ICE servers available")
-            endCall(reason: .failed)
+            Task { try? await endCall(reason: .failed) }
             return
         }
 
