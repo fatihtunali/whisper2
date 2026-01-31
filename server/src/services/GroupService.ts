@@ -783,7 +783,7 @@ export class GroupService {
 
         // Trigger push notification only on 0→1 transition
         if (pendingCountBefore === 0) {
-          await pushService.sendWake(memberId, 'group_invite');
+          await pushService.sendWake(memberId, 'message');
         }
       }
     }
