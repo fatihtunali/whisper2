@@ -96,6 +96,34 @@ class CallForegroundService : Service() {
         fun stopService(context: Context) {
             context.stopService(Intent(context, CallForegroundService::class.java))
         }
+
+        /**
+         * Check if full-screen intent permission is granted.
+         * On Android 14+, this requires explicit user approval in Settings.
+         */
+        fun canUseFullScreenIntent(context: Context): Boolean {
+            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                nm.canUseFullScreenIntent()
+            } else {
+                true
+            }
+        }
+
+        /**
+         * Open system settings to allow user to grant full-screen intent permission.
+         * Only needed on Android 14+.
+         */
+        fun openFullScreenIntentSettings(context: Context) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                val intent = Intent(
+                    android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                    android.net.Uri.parse("package:${context.packageName}")
+                )
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(intent)
+            }
+        }
     }
 
     @Inject
@@ -371,12 +399,45 @@ class CallForegroundService : Service() {
         Logger.d("[CallForegroundService] onDestroy")
     }
 
+    /**
+     * Check if full-screen intent permission is granted.
+     * On Android 14+, this requires explicit user approval in Settings.
+     */
+    private fun canUseFullScreenIntent(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.canUseFullScreenIntent()
+        } else {
+            true // Always allowed on Android 13 and below
+        }
+    }
+
     private fun showIncomingCallNotification(
         callId: String,
         callerId: String,
         callerName: String,
         isVideo: Boolean
     ) {
+        // Check if full-screen intent is allowed (Android 14+ requires user permission)
+        val fullScreenAllowed = canUseFullScreenIntent()
+        Logger.i("[CallForegroundService] Full-screen intent allowed: $fullScreenAllowed (SDK=${Build.VERSION.SDK_INT})")
+
+        // If full-screen intent is NOT allowed, launch activity directly
+        // This is critical on Android 14+ where full-screen intent requires permission
+        if (!fullScreenAllowed) {
+            Logger.i("[CallForegroundService] Launching IncomingCallActivity directly (full-screen not allowed)")
+            val directIntent = Intent(this, IncomingCallActivity::class.java).apply {
+                putExtra(EXTRA_CALL_ID, callId)
+                putExtra(EXTRA_CALLER_ID, callerId)
+                putExtra(EXTRA_CALLER_NAME, callerName)
+                putExtra(EXTRA_IS_VIDEO, isVideo)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            startActivity(directIntent)
+        }
+
         // Full screen intent - opens IncomingCallActivity when notification is tapped
         val fullScreenIntent = Intent(this, IncomingCallActivity::class.java).apply {
             putExtra(EXTRA_CALL_ID, callId)
