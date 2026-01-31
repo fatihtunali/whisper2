@@ -161,11 +161,16 @@ final class AudioMessageService: NSObject, ObservableObject {
             print("[AudioMessageService] Current audio route: \(session.currentRoute)")
             print("[AudioMessageService] Setting up playback session...")
 
-            // Use .playback category without .defaultToSpeaker (that option is only for .playAndRecord)
-            try session.setCategory(.playback, mode: .default)
+            // Use .playAndRecord with defaultToSpeaker - this allows both playback AND the speaker override
+            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
+            print("[AudioMessageService] Category set to playAndRecord")
+
             try session.setActive(true)
-            // Force speaker output
+            print("[AudioMessageService] Session activated")
+
+            // Force speaker output (valid for playAndRecord category)
             try session.overrideOutputAudioPort(.speaker)
+            print("[AudioMessageService] Speaker override applied")
 
             print("[AudioMessageService] Audio session configured. Route: \(session.currentRoute)")
             print("[AudioMessageService] Creating player for: \(url.lastPathComponent)")
