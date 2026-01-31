@@ -99,6 +99,9 @@ final class CallService: NSObject, ObservableObject {
     // Audio session state - tracks if CallKit has activated before tracks are ready
     private var isAudioSessionActivated = false
 
+    // Flag to track if call is in the process of ending (to prevent ICE failed from showing "Call failed")
+    private var isCallEnding = false
+
     // Camera capture state - prevent double startCapture calls
     private var isCameraCapturing = false
     private var currentCameraPosition: AVCaptureDevice.Position = .front
@@ -552,6 +555,9 @@ final class CallService: NSObject, ObservableObject {
     // MARK: - End Call
 
     func endCall(reason: CallEndReason = .ended) async throws {
+        // Mark that we're ending the call (prevents ICE .failed from showing "Call failed")
+        isCallEnding = true
+
         // Set the end reason BEFORE cleanup so history is recorded correctly
         lastCallEndReason = reason
 
@@ -1362,6 +1368,9 @@ final class CallService: NSObject, ObservableObject {
             return
         }
 
+        // Mark that we're ending the call (prevents ICE .failed from showing "Call failed")
+        isCallEnding = true
+
         print("Call ended by remote - callId: \(frame.payload.callId), reason: \(frame.payload.reason)")
         lastCallEndReason = CallEndReason(rawValue: frame.payload.reason) ?? .ended
 
@@ -1479,6 +1488,7 @@ final class CallService: NSObject, ObservableObject {
         isMuted = false
         isSpeakerOn = false
         isAudioSessionActivated = false
+        isCallEnding = false
 
         print("Previous call state cleaned up")
     }
@@ -1546,6 +1556,7 @@ final class CallService: NSObject, ObservableObject {
         isSpeakerOn = false
         lastCallEndReason = .ended
         isAudioSessionActivated = false
+        isCallEnding = false  // Reset the ending flag
 
         // NOTE: Audio session is managed by CallKit
     }
@@ -1760,9 +1771,17 @@ extension CallService: RTCPeerConnectionDelegate {
                 OutgoingCallState.shared.updateStatus("Reconnecting...")
             }
         case .failed:
-            lastCallEndReason = .failed
-            Task { [weak self] in
-                try? await self?.endCall(reason: .failed)
+            // Only treat as failure if we're not already ending the call normally
+            // When one side hangs up, the other side's ICE may briefly show .failed
+            // before the call_end message arrives - this is normal, not a failure
+            if !isCallEnding {
+                print("ICE failed - treating as call failure")
+                lastCallEndReason = .failed
+                Task { [weak self] in
+                    try? await self?.endCall(reason: .failed)
+                }
+            } else {
+                print("ICE failed but call is already ending - ignoring")
             }
         default:
             break
