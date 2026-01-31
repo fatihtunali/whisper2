@@ -221,13 +221,13 @@ export class GroupService {
         ],
       };
 
-      // Emit group_event to all members
+      // Emit group_event to all members (with offline support)
       const eventPayload: GroupEventPayload = {
         event: 'created',
         group,
       };
 
-      this.emitGroupEvent(group.members.map(m => m.whisperId), eventPayload);
+      await this.emitGroupEvent(group.members.map(m => m.whisperId), eventPayload);
 
       logger.info({ groupId, creatorWhisperId, memberCount: group.members.length }, 'Group created');
 
@@ -426,7 +426,7 @@ export class GroupService {
       );
       group.updatedAt = now;
 
-      // Emit group_event to all active members
+      // Emit group_event to all active members (with offline support)
       const activeMembers = group.members.filter(m => !m.removedAt).map(m => m.whisperId);
       const eventPayload: GroupEventPayload = {
         event: 'updated',
@@ -436,7 +436,7 @@ export class GroupService {
 
       // Also notify removed members
       const allNotify = [...new Set([...activeMembers, ...affectedMembers])];
-      this.emitGroupEvent(allNotify, eventPayload);
+      await this.emitGroupEvent(allNotify, eventPayload);
 
       logger.info({ groupId, requesterWhisperId, affectedMembers }, 'Group updated');
 
@@ -752,12 +752,40 @@ export class GroupService {
     await redis.expire(key, TTL.PENDING);
   }
 
-  private emitGroupEvent(memberIds: string[], eventPayload: GroupEventPayload): void {
+  /**
+   * Emit group event to members with offline support.
+   * If member is online, send via WebSocket.
+   * If offline, store in pending queue and send push notification.
+   */
+  private async emitGroupEvent(memberIds: string[], eventPayload: GroupEventPayload): Promise<void> {
     for (const memberId of memberIds) {
-      connectionManager.sendToUser(memberId, {
+      const delivered = connectionManager.sendToUser(memberId, {
         type: 'group_event',
         payload: eventPayload,
       });
+
+      if (!delivered) {
+        // Member is offline - store event in pending queue
+        const key = RedisKeys.pending(memberId);
+        const pendingEvent = {
+          type: 'group_event',
+          ...eventPayload,
+          timestamp: Date.now(),
+        };
+
+        // Check pending count BEFORE storing
+        const pendingCountBefore = await pushService.getPendingCountBefore(memberId);
+
+        await redis.listPush(key, JSON.stringify(pendingEvent));
+        await redis.expire(key, TTL.PENDING);
+
+        logger.info({ memberId, groupId: eventPayload.group.groupId, event: eventPayload.event }, 'Group event stored in pending queue');
+
+        // Trigger push notification only on 0→1 transition
+        if (pendingCountBefore === 0) {
+          await pushService.sendWake(memberId, 'group_invite');
+        }
+      }
     }
   }
 }
