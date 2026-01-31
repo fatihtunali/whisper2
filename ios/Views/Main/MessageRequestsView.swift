@@ -138,7 +138,9 @@ struct MessageRequestRow: View {
 
             // Action buttons - just Accept and Block
             HStack(spacing: 12) {
-                Button(action: onBlock) {
+                Button {
+                    onBlock()
+                } label: {
                     HStack {
                         Image(systemName: "hand.raised.fill")
                         Text("Block")
@@ -150,8 +152,11 @@ struct MessageRequestRow: View {
                     .background(Color.red.opacity(0.15))
                     .cornerRadius(8)
                 }
+                .buttonStyle(.borderless)
 
-                Button(action: onAccept) {
+                Button {
+                    onAccept()
+                } label: {
                     HStack {
                         Image(systemName: "checkmark.circle.fill")
                         Text("Accept")
@@ -170,6 +175,7 @@ struct MessageRequestRow: View {
                     )
                     .cornerRadius(8)
                 }
+                .buttonStyle(.borderless)
             }
         }
         .padding(.vertical, 8)
