@@ -96,6 +96,7 @@ class CallService @Inject constructor(
     val activeCall: StateFlow<ActiveCall?> = _activeCall.asStateFlow()
 
     private val _turnCredentials = MutableStateFlow<TurnCredentialsPayload?>(null)
+    private var turnCredentialsReceivedAt: Long = 0  // Timestamp when credentials were received
 
     // WebRTC components
     private var peerConnectionFactory: PeerConnectionFactory? = null
@@ -320,15 +321,20 @@ class CallService @Inject constructor(
 
     /**
      * Fetch TURN credentials and wait for them to arrive.
+     * Uses cached credentials if still valid (with 60s buffer before expiry).
      * Returns true if credentials are available, false if timeout.
      */
     private suspend fun fetchAndWaitForTurnCredentials(timeout: Long = 5_000): Boolean {
-        // Already have credentials?
-        if (_turnCredentials.value != null) {
+        // Use cached credentials if still valid
+        if (areTurnCredentialsValid()) {
+            Logger.i("[CallService] Using cached TURN credentials")
             return true
         }
 
-        Logger.i("[CallService] Fetching TURN credentials...")
+        // Clear expired credentials
+        _turnCredentials.value = null
+
+        Logger.i("[CallService] Fetching fresh TURN credentials...")
         fetchTurnCredentials()
 
         // Poll until credentials arrive or timeout
@@ -828,14 +834,12 @@ class CallService @Inject constructor(
         val iceServers = mutableListOf<PeerConnection.IceServer>()
 
         // TURN credentials are REQUIRED for relay-only mode
-        val turn = _turnCredentials.value
-        if (turn == null) {
-            Logger.e("[CallService] Cannot create peer connection: TURN credentials not available")
+        // Check if credentials exist AND are still valid
+        if (!areTurnCredentialsValid()) {
+            Logger.e("[CallService] Cannot create peer connection: TURN credentials not available or expired")
             // Request TURN credentials and retry
             scope.launch {
-                fetchTurnCredentials()
-                delay(2000)
-                if (_turnCredentials.value != null) {
+                if (fetchAndWaitForTurnCredentials(5000)) {
                     createPeerConnection(isVideo)
                 } else {
                     Logger.e("[CallService] Failed to get TURN credentials, cannot proceed")
@@ -844,6 +848,8 @@ class CallService @Inject constructor(
             }
             return
         }
+
+        val turn = _turnCredentials.value!!
 
         // Add TURN servers
         turn.urls.forEach { url ->
@@ -1360,9 +1366,25 @@ class CallService @Inject constructor(
         try {
             val payload = gson.fromJson(frame.payload, TurnCredentialsPayload::class.java)
             _turnCredentials.value = payload
+            turnCredentialsReceivedAt = System.currentTimeMillis()
+            Logger.i("[CallService] TURN credentials received, TTL=${payload.ttl}s")
         } catch (e: Exception) {
             Logger.e("Failed to parse TURN credentials", e)
         }
+    }
+
+    /**
+     * Check if cached TURN credentials are still valid.
+     * Returns true if credentials exist and haven't expired (with 60s buffer).
+     */
+    private fun areTurnCredentialsValid(): Boolean {
+        val creds = _turnCredentials.value ?: return false
+        val elapsedSeconds = (System.currentTimeMillis() - turnCredentialsReceivedAt) / 1000
+        val isValid = elapsedSeconds < (creds.ttl - 60)  // 60 second buffer before expiry
+        if (!isValid) {
+            Logger.i("[CallService] TURN credentials expired (elapsed=${elapsedSeconds}s, ttl=${creds.ttl}s)")
+        }
+        return isValid
     }
 
     private fun handleCallIncoming(frame: WsFrame<JsonElement>) {
