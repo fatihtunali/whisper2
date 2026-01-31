@@ -142,7 +142,7 @@ final class SettingsViewModel: ObservableObject {
     /// Send delete_account request to server
     private func deleteAccountOnServer() async throws -> Bool {
         guard let sessionToken = keychain.sessionToken else {
-            throw NetworkError.authenticationRequired
+            throw AuthError.notAuthenticated
         }
 
         let ws = WebSocketService.shared
