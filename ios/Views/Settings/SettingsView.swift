@@ -62,11 +62,9 @@ struct SettingsView: View {
             .alert("Wipe All Data", isPresented: $showWipeDataAlert) {
                 Button("Cancel", role: .cancel) {}
                 Button("Wipe Everything", role: .destructive) {
-                    Task {
+                    Task { @MainActor in
                         _ = await viewModel.wipeAllData()
-                        await MainActor.run {
-                            coordinator.logout()
-                        }
+                        coordinator.logout()
                     }
                 }
             } message: {
