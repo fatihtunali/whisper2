@@ -78,8 +78,9 @@ data class MessageReceivedPayload(
     val replyTo: String? = null,
     val reactions: Map<String, List<String>>? = null,  // emoji -> whisperId[]
     val attachment: AttachmentPointer? = null,
-    // Sender's public key for message requests (allows adding contact without QR scan)
-    val senderEncPublicKey: String? = null
+    // Sender's public keys for message requests (allows adding contact without QR scan)
+    val senderEncPublicKey: String? = null,
+    val senderSignPublicKey: String? = null
 )
 
 // Attachment structure matching server protocol.ts

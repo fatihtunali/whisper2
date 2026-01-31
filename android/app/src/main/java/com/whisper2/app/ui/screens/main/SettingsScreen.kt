@@ -41,6 +41,7 @@ import com.google.zxing.qrcode.QRCodeWriter
 import com.whisper2.app.core.BiometricHelper
 import com.whisper2.app.core.StorageHelper
 import com.whisper2.app.ui.viewmodels.SettingsViewModel
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -52,6 +53,7 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val whisperId by viewModel.whisperId.collectAsState()
     val deviceId by viewModel.deviceId.collectAsState()
     var showSeedPhrase by remember { mutableStateOf(false) }
@@ -496,8 +498,10 @@ fun SettingsScreen(
             confirmButton = {
                 TextButton(onClick = {
                     showWipeDataDialog = false
-                    viewModel.wipeAllData()
-                    onLogout()
+                    scope.launch {
+                        viewModel.wipeAllData()
+                        onLogout()
+                    }
                 }) {
                     Text("Wipe Everything", color = Color(0xFFEF4444))
                 }

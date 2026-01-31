@@ -18,7 +18,7 @@ import com.whisper2.app.data.local.db.entities.*
         OutboxEntity::class,
         CallRecordEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = true
 )
 abstract class WhisperDatabase : RoomDatabase() {
@@ -78,6 +78,15 @@ abstract class WhisperDatabase : RoomDatabase() {
             override fun migrate(database: SupportSQLiteDatabase) {
                 // Add chatThemeId to conversations table with default value 'default'
                 database.execSQL("ALTER TABLE conversations ADD COLUMN chatThemeId TEXT NOT NULL DEFAULT 'default'")
+            }
+        }
+
+        // Migration from version 6 to 7: Add presence columns to contacts
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                // Add isOnline and lastSeen columns to contacts table
+                database.execSQL("ALTER TABLE contacts ADD COLUMN isOnline INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE contacts ADD COLUMN lastSeen INTEGER DEFAULT NULL")
             }
         }
     }

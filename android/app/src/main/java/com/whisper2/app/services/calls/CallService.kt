@@ -862,7 +862,7 @@ class CallService @Inject constructor(
                     createPeerConnection(isVideo)
                 } else {
                     Logger.e("[CallService] Failed to get TURN credentials, cannot proceed")
-                    _callState.value = CallState.Failed("No TURN server available")
+                    _callState.value = CallState.Ended(CallEndReason.FAILED)
                 }
             }
             return
@@ -882,7 +882,7 @@ class CallService @Inject constructor(
 
         if (iceServers.isEmpty()) {
             Logger.e("[CallService] No ICE servers configured, cannot create peer connection")
-            _callState.value = CallState.Failed("No ICE servers available")
+            _callState.value = CallState.Ended(CallEndReason.FAILED)
             return
         }
 

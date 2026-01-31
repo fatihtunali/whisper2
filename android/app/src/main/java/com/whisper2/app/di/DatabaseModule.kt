@@ -22,7 +22,8 @@ object DatabaseModule {
                 WhisperDatabase.MIGRATION_2_3,
                 WhisperDatabase.MIGRATION_3_4,
                 WhisperDatabase.MIGRATION_4_5,
-                WhisperDatabase.MIGRATION_5_6
+                WhisperDatabase.MIGRATION_5_6,
+                WhisperDatabase.MIGRATION_6_7
             )
             .build()
 

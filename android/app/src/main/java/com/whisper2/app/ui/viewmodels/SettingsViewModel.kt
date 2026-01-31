@@ -3,6 +3,7 @@ package com.whisper2.app.ui.viewmodels
 import android.util.Base64
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.whisper2.app.core.Logger
 import com.whisper2.app.core.StorageHelper
 import com.whisper2.app.core.StorageUsage
 import com.whisper2.app.data.local.db.WhisperDatabase

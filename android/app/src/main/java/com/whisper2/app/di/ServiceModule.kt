@@ -29,11 +29,12 @@ object ServiceModule {
     @Provides
     @Singleton
     fun provideAuthService(
+        @ApplicationContext context: Context,
         wsClient: WsClientImpl,
         secureStorage: SecureStorage,
         cryptoService: CryptoService,
         gson: Gson
-    ): AuthService = AuthService(wsClient, secureStorage, cryptoService, gson)
+    ): AuthService = AuthService(context, wsClient, secureStorage, cryptoService, gson)
 
     @Provides
     @Singleton
