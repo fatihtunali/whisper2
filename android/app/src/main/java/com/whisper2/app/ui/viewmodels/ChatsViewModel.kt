@@ -8,7 +8,7 @@ import com.whisper2.app.data.local.db.dao.GroupDao
 import com.whisper2.app.data.local.db.entities.ContactEntity
 import com.whisper2.app.data.local.db.entities.ConversationEntity
 import com.whisper2.app.data.local.db.entities.GroupEntity
-import com.whisper2.app.utils.Logger
+import com.whisper2.app.core.Logger
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -52,7 +52,7 @@ class ChatsViewModel @Inject constructor(
                 id = conv.peerId,
                 name = conv.peerNickname ?: conv.peerId.takeLast(8),
                 lastMessage = conv.lastMessagePreview,
-                lastMessageTimestamp = conv.lastMessageTimestamp,
+                lastMessageTimestamp = conv.lastMessageTimestamp ?: 0L,
                 unreadCount = conv.unreadCount,
                 isTyping = conv.isTyping,
                 isGroup = false,

@@ -191,7 +191,10 @@ fun GroupChatScreen(
             // Input area
             Surface(
                 color = Color(0xFF1A1A1A),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .imePadding()
+                    .navigationBarsPadding()
             ) {
                 Row(
                     modifier = Modifier

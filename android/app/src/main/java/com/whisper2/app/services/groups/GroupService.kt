@@ -333,7 +333,7 @@ class GroupService @Inject constructor(
                     messageType = Constants.MsgType.GROUP_SEND_MESSAGE,
                     messageId = messageId,
                     from = myId,
-                    toOrGroupId = member.memberId,
+                    toOrGroupId = groupId,  // Must be groupId, not member ID - server verifies this
                     timestamp = timestamp,
                     nonce = nonce,
                     ciphertext = ciphertext,
