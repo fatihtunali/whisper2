@@ -25,9 +25,8 @@ struct GroupChatView: View {
             self.group = ChatGroup(
                 id: groupId,
                 title: "Group",
-                ownerId: "",
                 memberIds: [],
-                createdAt: Date()
+                creatorId: ""
             )
         }
         _viewModel = StateObject(wrappedValue: GroupChatViewModel(groupId: groupId))
