@@ -418,10 +418,22 @@ final class CallService: NSObject, ObservableObject {
         }
         print("Got caller's public key")
 
-        // Fetch TURN if needed
+        // Fetch TURN credentials and wait for them
         if turnCredentials == nil {
             try await fetchTurnCredentials()
-            try await Task.sleep(nanoseconds: 500_000_000)
+
+            // Wait for credentials with timeout
+            var attempts = 0
+            while turnCredentials == nil && attempts < 50 {  // 5 seconds max
+                try await Task.sleep(nanoseconds: 100_000_000)  // 100ms
+                attempts += 1
+            }
+
+            guard turnCredentials != nil else {
+                print("[CallService] ERROR: Failed to get TURN credentials after 5 seconds")
+                throw NetworkError.connectionFailed
+            }
+            print("[CallService] TURN credentials received after \(attempts * 100)ms")
         }
 
         // Decrypt SDP offer
@@ -1146,6 +1158,15 @@ final class CallService: NSObject, ObservableObject {
             activeCallPeerId = payload.from
             activeCallIsVideo = payload.isVideo
             activeCallIsOutgoing = false
+
+            // Pre-fetch TURN credentials while user is seeing the incoming call UI
+            // This ensures credentials are ready when user answers
+            if turnCredentials == nil {
+                print("[CallService] Pre-fetching TURN credentials for incoming call")
+                Task {
+                    try? await fetchTurnCredentials()
+                }
+            }
 
             // Report to CallKit - CallKit handles ALL incoming call UI
             let contact = contacts.getContact(whisperId: payload.from)

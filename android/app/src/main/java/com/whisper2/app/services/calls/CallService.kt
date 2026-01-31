@@ -318,6 +318,35 @@ class CallService @Inject constructor(
         wsClient.send(WsFrame(Constants.MsgType.GET_TURN_CREDENTIALS, payload = payload))
     }
 
+    /**
+     * Fetch TURN credentials and wait for them to arrive.
+     * Returns true if credentials are available, false if timeout.
+     */
+    private suspend fun fetchAndWaitForTurnCredentials(timeout: Long = 5_000): Boolean {
+        // Already have credentials?
+        if (_turnCredentials.value != null) {
+            return true
+        }
+
+        Logger.i("[CallService] Fetching TURN credentials...")
+        fetchTurnCredentials()
+
+        // Poll until credentials arrive or timeout
+        val startTime = System.currentTimeMillis()
+        val checkInterval = 100L
+
+        while (System.currentTimeMillis() - startTime < timeout) {
+            if (_turnCredentials.value != null) {
+                Logger.i("[CallService] TURN credentials received after ${System.currentTimeMillis() - startTime}ms")
+                return true
+            }
+            delay(checkInterval)
+        }
+
+        Logger.e("[CallService] TURN credentials timeout after ${timeout}ms")
+        return false
+    }
+
     // MARK: - Wait for Authentication
 
     /**
@@ -365,10 +394,9 @@ class CallService @Inject constructor(
             remoteVideoSinkAdded = false
             localSdpSent = false
 
-            // Fetch TURN credentials
-            if (_turnCredentials.value == null) {
-                fetchTurnCredentials()
-                delay(1000) // Wait for credentials
+            // Fetch TURN credentials and wait for them
+            if (!fetchAndWaitForTurnCredentials(5000)) {
+                return Result.failure(Exception("Failed to get TURN credentials"))
             }
 
             val callId = UUID.randomUUID().toString().lowercase()
@@ -496,10 +524,9 @@ class CallService @Inject constructor(
             remoteVideoSinkAdded = false
             localSdpSent = false
 
-            // Fetch TURN if needed
-            if (_turnCredentials.value == null) {
-                fetchTurnCredentials()
-                delay(1000)
+            // Fetch TURN credentials and wait for them
+            if (!fetchAndWaitForTurnCredentials(5000)) {
+                return Result.failure(Exception("Failed to get TURN credentials"))
             }
 
             // Decrypt SDP offer
@@ -1382,6 +1409,13 @@ class CallService @Inject constructor(
                 )
                 _callState.value = CallState.Ringing
                 Logger.i("[CallService] ActiveCall created with isVideo=${correctedPayload.isVideo}")
+
+                // Pre-fetch TURN credentials while user is seeing the incoming call UI
+                // This ensures credentials are ready when user answers
+                if (_turnCredentials.value == null) {
+                    Logger.i("[CallService] Pre-fetching TURN credentials for incoming call")
+                    fetchTurnCredentials()
+                }
 
                 // Start foreground service to show incoming call notification with ringtone/vibration
                 try {
