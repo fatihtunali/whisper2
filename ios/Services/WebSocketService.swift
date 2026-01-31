@@ -137,12 +137,22 @@ final class WebSocketService: NSObject, ObservableObject {
     /// Called when app enters foreground - force reconnect if disconnected
     func handleAppDidBecomeActive() {
         print("[WebSocket] App became active, checking connection...")
-        if connectionState == .disconnected {
-            reconnectAttempts = 0
+
+        // Reset reconnect attempts when coming to foreground
+        reconnectAttempts = 0
+
+        switch connectionState {
+        case .disconnected:
+            print("[WebSocket] Disconnected - reconnecting...")
             connect()
-        } else if connectionState == .connected {
+        case .connected:
             // Send a ping to verify connection is still alive
+            print("[WebSocket] Connected - verifying with ping...")
             sendPing()
+            // Restart ping timer that was stopped in background
+            startPingTimer()
+        case .connecting, .reconnecting:
+            print("[WebSocket] Already connecting...")
         }
     }
 

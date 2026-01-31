@@ -150,23 +150,83 @@ final class PushNotificationService: NSObject, ObservableObject {
     // MARK: - Handle Incoming Notifications
 
     func handleNotification(_ userInfo: [AnyHashable: Any], completionHandler: @escaping () -> Void) {
-        guard let type = userInfo["type"] as? String else {
-            completionHandler()
+        let type = userInfo["type"] as? String
+        let reason = userInfo["reason"] as? String
+
+        print("[Push] Received notification - type: \(type ?? "nil"), reason: \(reason ?? "nil")")
+
+        // Handle wake type notifications (server wants us to reconnect)
+        if type == "wake" {
+            handleWakeNotification(reason: reason) {
+                completionHandler()
+            }
             return
         }
 
+        // Handle other notification types
         switch type {
         case "message":
             handleMessageNotification(userInfo)
+            // Also trigger reconnect to fetch any pending messages
+            triggerReconnectIfNeeded()
         case "call":
             handleCallNotification(userInfo)
         case "group":
             handleGroupNotification(userInfo)
+            triggerReconnectIfNeeded()
         default:
-            print("Unknown notification type: \(type)")
+            print("Unknown notification type: \(type ?? "nil")")
+            // For any notification, try to reconnect to sync state
+            triggerReconnectIfNeeded()
         }
 
         completionHandler()
+    }
+
+    /// Handle "wake" type push notifications from server
+    /// These are sent when the server has pending data for the client
+    private func handleWakeNotification(reason: String?, completionHandler: @escaping () -> Void) {
+        print("[Push] Wake notification - reason: \(reason ?? "unknown")")
+
+        switch reason {
+        case "message":
+            print("[Push] Waking for pending messages")
+        case "call":
+            print("[Push] Waking for incoming call - VoIP push should handle this")
+        case "system":
+            print("[Push] Waking for system update")
+        default:
+            print("[Push] Waking for unknown reason")
+        }
+
+        // Always trigger reconnect for wake notifications
+        triggerReconnectIfNeeded()
+
+        // Give time for reconnection before completing
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            completionHandler()
+        }
+    }
+
+    /// Trigger WebSocket reconnection if disconnected
+    private func triggerReconnectIfNeeded() {
+        Task {
+            if ws.connectionState == .disconnected {
+                print("[Push] WebSocket disconnected - triggering reconnect")
+                ws.connect()
+
+                // Wait for connection and auth
+                try? await Task.sleep(nanoseconds: 3_000_000_000)  // 3 seconds
+
+                if ws.connectionState == .connected && auth.isAuthenticated {
+                    print("[Push] Reconnected and authenticated")
+                } else {
+                    print("[Push] Reconnection in progress...")
+                }
+            } else if ws.connectionState == .connected {
+                print("[Push] WebSocket already connected")
+            }
+        }
     }
 
     private func handleMessageNotification(_ userInfo: [AnyHashable: Any]) {

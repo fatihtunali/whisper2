@@ -56,7 +56,7 @@ class ConnectionForegroundService : Service() {
 
         // Reconnect intervals
         private const val RECONNECT_CHECK_INTERVAL_MS = 30_000L  // Check every 30 seconds
-        private const val WAKE_LOCK_TIMEOUT_MS = 60_000L  // 1 minute max wake lock
+        private const val WAKE_LOCK_TIMEOUT_MS = 120_000L  // 2 minutes max wake lock (for slow networks)
 
         @Volatile
         private var isServiceRunning = false
