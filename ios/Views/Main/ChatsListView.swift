@@ -88,166 +88,208 @@ struct ChatsListView: View {
         NavigationStack {
             ZStack {
                 Color.black.ignoresSafeArea()
-
-                VStack(spacing: 0) {
-                    // Message requests banner (if any pending)
-                    if pendingRequestCount > 0 {
-                        Button(action: { showMessageRequests = true }) {
-                            HStack(spacing: 12) {
-                                ZStack {
-                                    Circle()
-                                        .fill(Color.orange.opacity(0.2))
-                                        .frame(width: 40, height: 40)
-                                    Image(systemName: "envelope.badge.fill")
-                                        .foregroundColor(.orange)
-                                }
-
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Message Requests")
-                                        .font(.subheadline)
-                                        .fontWeight(.semibold)
-                                        .foregroundColor(.white)
-                                    Text("\(pendingRequestCount) pending request\(pendingRequestCount == 1 ? "" : "s")")
-                                        .font(.caption)
-                                        .foregroundColor(.gray)
-                                }
-
-                                Spacer()
-
-                                Image(systemName: "chevron.right")
-                                    .foregroundColor(.gray)
-                            }
-                            .padding()
-                            .background(Color.orange.opacity(0.1))
-                        }
-                    }
-
-                    if viewModel.chatItems.isEmpty && pendingRequestCount == 0 {
-                        EmptyChatsView(showNewChat: $showNewChat)
-                    } else if viewModel.chatItems.isEmpty {
-                        Spacer()
-                        VStack(spacing: 16) {
-                            Text("No conversations yet")
-                                .font(.headline)
-                                .foregroundColor(.white)
-                            Text("Check your message requests or start a new chat")
-                                .font(.subheadline)
-                                .foregroundColor(.gray)
-                        }
-                        Spacer()
-                    } else {
-                        List {
-                            ForEach(filteredChatItems) { item in
-                                ChatItemRowLink(item: item)
-                                .listRowBackground(Color.black)
-                                .listRowSeparatorTint(Color.gray.opacity(0.3))
-                                // Swipe left actions: Delete
-                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                    Button(role: .destructive) {
-                                        itemToDelete = item
-                                        showDeleteConfirmation = true
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                }
-                                // Swipe right actions: Pin, Mute (only for 1:1 chats)
-                                .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                    if !item.isGroup {
-                                        Button {
-                                            if let conv = viewModel.conversations.first(where: { $0.peerId == item.id }) {
-                                                viewModel.togglePin(conv)
-                                            }
-                                            let impact = UIImpactFeedbackGenerator(style: .medium)
-                                            impact.impactOccurred()
-                                        } label: {
-                                            Label(
-                                                item.isPinned ? "Unpin" : "Pin",
-                                                systemImage: item.isPinned ? "pin.slash" : "pin"
-                                            )
-                                        }
-                                        .tint(.blue)
-
-                                        Button {
-                                            if let conv = viewModel.conversations.first(where: { $0.peerId == item.id }) {
-                                                viewModel.toggleMute(conv)
-                                            }
-                                            let impact = UIImpactFeedbackGenerator(style: .light)
-                                            impact.impactOccurred()
-                                        } label: {
-                                            Label(
-                                                item.isMuted ? "Unmute" : "Mute",
-                                                systemImage: item.isMuted ? "bell" : "bell.slash"
-                                            )
-                                        }
-                                        .tint(.purple)
-                                    }
-                                }
-                            }
-                        }
-                        .listStyle(.plain)
-                        .searchable(text: $searchText, prompt: "Search chats")
-                        .refreshable {
-                            await viewModel.refreshConversations()
-                        }
-                    }
-                }
+                mainContent
             }
             .navigationTitle("Chats")
-            .alert(itemToDelete?.isGroup == true ? "Delete Group" : "Delete Conversation", isPresented: $showDeleteConfirmation) {
-                Button("Cancel", role: .cancel) {
-                    itemToDelete = nil
-                }
-                Button("Delete", role: .destructive) {
-                    if let item = itemToDelete {
-                        if item.isGroup {
-                            // Delete group (leave group)
-                            GroupService.shared.leaveGroup(groupId: item.id) { _ in }
-                        } else {
-                            // Delete 1:1 conversation
-                            if let conv = viewModel.conversations.first(where: { $0.peerId == item.id }) {
-                                viewModel.deleteConversation(conv)
-                            }
-                        }
-                    }
-                    itemToDelete = nil
-                }
+            .alert(deleteAlertTitle, isPresented: $showDeleteConfirmation) {
+                deleteAlertButtons
             } message: {
-                Text(itemToDelete?.isGroup == true
-                    ? "Are you sure you want to leave this group? This action cannot be undone."
-                    : "Are you sure you want to delete this conversation? This action cannot be undone.")
+                Text(deleteAlertMessage)
             }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    HStack(spacing: 12) {
-                        if pendingRequestCount > 0 {
-                            Button(action: { showMessageRequests = true }) {
-                                ZStack(alignment: .topTrailing) {
-                                    Image(systemName: "tray.fill")
-                                    Circle()
-                                        .fill(Color.orange)
-                                        .frame(width: 8, height: 8)
-                                        .offset(x: 2, y: -2)
-                                }
-                            }
-                        }
-
-                        // Connection status (only show when not connected)
-                        if webSocket.connectionState != .connected {
-                            ConnectionStatusBar()
-                        }
-                    }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: { showNewChat = true }) {
-                        Image(systemName: "square.and.pencil")
-                    }
-                }
-            }
+            .toolbar { toolbarContent }
             .sheet(isPresented: $showNewChat) {
                 NewChatView()
             }
             .sheet(isPresented: $showMessageRequests) {
                 MessageRequestsView()
+            }
+        }
+    }
+
+    // MARK: - Extracted Views
+
+    private var deleteAlertTitle: String {
+        itemToDelete?.isGroup == true ? "Delete Group" : "Delete Conversation"
+    }
+
+    private var deleteAlertMessage: String {
+        itemToDelete?.isGroup == true
+            ? "Are you sure you want to leave this group? This action cannot be undone."
+            : "Are you sure you want to delete this conversation? This action cannot be undone."
+    }
+
+    @ViewBuilder
+    private var deleteAlertButtons: some View {
+        Button("Cancel", role: .cancel) {
+            itemToDelete = nil
+        }
+        Button("Delete", role: .destructive) {
+            performDelete()
+        }
+    }
+
+    private func performDelete() {
+        if let item = itemToDelete {
+            if item.isGroup {
+                GroupService.shared.leaveGroup(groupId: item.id) { _ in }
+            } else {
+                if let conv = viewModel.conversations.first(where: { $0.peerId == item.id }) {
+                    viewModel.deleteConversation(conv)
+                }
+            }
+        }
+        itemToDelete = nil
+    }
+
+    @ViewBuilder
+    private var mainContent: some View {
+        VStack(spacing: 0) {
+            messageRequestsBanner
+            chatListContent
+        }
+    }
+
+    @ViewBuilder
+    private var messageRequestsBanner: some View {
+        if pendingRequestCount > 0 {
+            Button(action: { showMessageRequests = true }) {
+                HStack(spacing: 12) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.orange.opacity(0.2))
+                            .frame(width: 40, height: 40)
+                        Image(systemName: "envelope.badge.fill")
+                            .foregroundColor(.orange)
+                    }
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Message Requests")
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white)
+                        Text("\(pendingRequestCount) pending request\(pendingRequestCount == 1 ? "" : "s")")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+
+                    Spacer()
+
+                    Image(systemName: "chevron.right")
+                        .foregroundColor(.gray)
+                }
+                .padding()
+                .background(Color.orange.opacity(0.1))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var chatListContent: some View {
+        if viewModel.chatItems.isEmpty && pendingRequestCount == 0 {
+            EmptyChatsView(showNewChat: $showNewChat)
+        } else if viewModel.chatItems.isEmpty {
+            Spacer()
+            VStack(spacing: 16) {
+                Text("No conversations yet")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                Text("Check your message requests or start a new chat")
+                    .font(.subheadline)
+                    .foregroundColor(.gray)
+            }
+            Spacer()
+        } else {
+            chatsList
+        }
+    }
+
+    private var chatsList: some View {
+        List {
+            ForEach(filteredChatItems) { item in
+                chatRow(for: item)
+            }
+        }
+        .listStyle(.plain)
+        .searchable(text: $searchText, prompt: "Search chats")
+        .refreshable {
+            await viewModel.refreshConversations()
+        }
+    }
+
+    @ViewBuilder
+    private func chatRow(for item: ChatItem) -> some View {
+        ChatItemRowLink(item: item)
+            .listRowBackground(Color.black)
+            .listRowSeparatorTint(Color.gray.opacity(0.3))
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                Button(role: .destructive) {
+                    itemToDelete = item
+                    showDeleteConfirmation = true
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
+            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                if !item.isGroup {
+                    pinButton(for: item)
+                    muteButton(for: item)
+                }
+            }
+    }
+
+    private func pinButton(for item: ChatItem) -> some View {
+        Button {
+            if let conv = viewModel.conversations.first(where: { $0.peerId == item.id }) {
+                viewModel.togglePin(conv)
+            }
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        } label: {
+            Label(item.isPinned ? "Unpin" : "Pin", systemImage: item.isPinned ? "pin.slash" : "pin")
+        }
+        .tint(.blue)
+    }
+
+    private func muteButton(for item: ChatItem) -> some View {
+        Button {
+            if let conv = viewModel.conversations.first(where: { $0.peerId == item.id }) {
+                viewModel.toggleMute(conv)
+            }
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        } label: {
+            Label(item.isMuted ? "Unmute" : "Mute", systemImage: item.isMuted ? "bell" : "bell.slash")
+        }
+        .tint(.purple)
+    }
+
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarLeading) {
+            leadingToolbarContent
+        }
+        ToolbarItem(placement: .navigationBarTrailing) {
+            Button(action: { showNewChat = true }) {
+                Image(systemName: "square.and.pencil")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var leadingToolbarContent: some View {
+        HStack(spacing: 12) {
+            if pendingRequestCount > 0 {
+                Button(action: { showMessageRequests = true }) {
+                    ZStack(alignment: .topTrailing) {
+                        Image(systemName: "tray.fill")
+                        Circle()
+                            .fill(Color.orange)
+                            .frame(width: 8, height: 8)
+                            .offset(x: 2, y: -2)
+                    }
+                }
+            }
+
+            if webSocket.connectionState != .connected {
+                ConnectionStatusBar()
             }
         }
     }
