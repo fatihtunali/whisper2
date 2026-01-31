@@ -58,8 +58,8 @@ final class ChatsViewModel: ObservableObject {
             items.append(ChatItem(
                 id: conv.peerId,
                 name: conv.peerNickname ?? String(conv.peerId.suffix(8)),
-                lastMessage: conv.lastMessagePreview,
-                lastMessageTimestamp: conv.lastMessageTimestamp ?? Date.distantPast,
+                lastMessage: conv.lastMessage,
+                lastMessageTimestamp: conv.lastMessageTime ?? Date.distantPast,
                 unreadCount: conv.unreadCount,
                 isTyping: conv.isTyping,
                 isGroup: false,
