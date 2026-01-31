@@ -155,22 +155,24 @@ final class AudioMessageService: NSObject, ObservableObject {
         }
 
         do {
-            // IMPORTANT: Re-configure audio session for playback through speaker
-            // This is needed because other audio activities (calls, etc.) may have changed the route
+            // Configure audio session for playback
             let session = AVAudioSession.sharedInstance()
             print("[AudioMessageService] Current audio route: \(session.currentRoute)")
             print("[AudioMessageService] Setting up playback session...")
 
-            // Use .playAndRecord with defaultToSpeaker - this allows both playback AND the speaker override
-            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
-            print("[AudioMessageService] Category set to playAndRecord")
+            do {
+                // Simple playback category - audio will go through speaker by default
+                try session.setCategory(.playback, mode: .default)
+                print("[AudioMessageService] Category set to .playback")
+            } catch {
+                print("[AudioMessageService] setCategory failed: \(error), trying .ambient")
+                // Fallback to ambient if playback fails
+                try session.setCategory(.ambient, mode: .default)
+                print("[AudioMessageService] Category set to .ambient")
+            }
 
             try session.setActive(true)
             print("[AudioMessageService] Session activated")
-
-            // Force speaker output (valid for playAndRecord category)
-            try session.overrideOutputAudioPort(.speaker)
-            print("[AudioMessageService] Speaker override applied")
 
             print("[AudioMessageService] Audio session configured. Route: \(session.currentRoute)")
             print("[AudioMessageService] Creating player for: \(url.lastPathComponent)")
@@ -217,8 +219,9 @@ final class AudioMessageService: NSObject, ObservableObject {
         // Restore audio session for recording capability
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
+            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
             try session.setActive(true)
+            print("[AudioMessageService] Audio session restored for recording")
         } catch {
             print("[AudioMessageService] Failed to restore audio session: \(error)")
         }
