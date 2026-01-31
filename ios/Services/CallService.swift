@@ -42,8 +42,23 @@ final class CallService: NSObject, ObservableObject {
     private var activeCallIsVideo: Bool = false
     private var activeCallIsOutgoing: Bool = false
 
-    // TURN credentials
+    // TURN credentials with expiry tracking
     private var turnCredentials: TurnCredentialsPayload?
+    private var turnCredentialsReceivedAt: Date?
+
+    /// Check if cached TURN credentials are still valid (with 60s buffer before expiry)
+    private func areTurnCredentialsValid() -> Bool {
+        guard let creds = turnCredentials,
+              let receivedAt = turnCredentialsReceivedAt else {
+            return false
+        }
+        let elapsedSeconds = Date().timeIntervalSince(receivedAt)
+        let isValid = elapsedSeconds < Double(creds.ttl - 60)  // 60 second buffer
+        if !isValid {
+            print("[CallService] TURN credentials expired (elapsed=\(Int(elapsedSeconds))s, ttl=\(creds.ttl)s)")
+        }
+        return isValid
+    }
 
     // Call history (for records only)
     @Published private(set) var callHistory: [CallRecord] = []
@@ -98,10 +113,32 @@ final class CallService: NSObject, ObservableObject {
         setupWebRTC()
         setupMessageHandler()
         setupCallKit()
+        setupAuthStateMonitor()
 
         // Clean up any stale CallKit state from previous session
         print("CallService init: Cleaning up stale CallKit state")
         callKitManager?.endAllCalls()
+    }
+
+    /// Monitor auth state and pre-fetch TURN credentials when authenticated.
+    /// This ensures credentials are ready before any call.
+    private func setupAuthStateMonitor() {
+        auth.$isAuthenticated
+            .removeDuplicates()
+            .filter { $0 == true }
+            .sink { [weak self] _ in
+                guard let self = self else { return }
+                // Pre-fetch TURN credentials on login if not already valid
+                if !self.areTurnCredentialsValid() {
+                    print("[CallService] User authenticated - pre-fetching TURN credentials")
+                    Task {
+                        try? await self.fetchTurnCredentials()
+                    }
+                } else {
+                    print("[CallService] User authenticated - using cached TURN credentials")
+                }
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: - Setup
@@ -321,21 +358,26 @@ final class CallService: NSObject, ObservableObject {
 
         let callId = pending.callId
 
-        // Fetch TURN credentials
-        print("Fetching TURN credentials...")
-        try await fetchTurnCredentials()
-
-        // Wait for credentials with retry
-        var attempts = 0
-        while turnCredentials == nil && attempts < 10 {
-            try await Task.sleep(nanoseconds: 200_000_000)
-            attempts += 1
-        }
-
-        if turnCredentials == nil {
-            print("Warning: No TURN credentials received, attempting direct connection")
+        // Use cached TURN credentials if valid, otherwise fetch fresh ones
+        if areTurnCredentialsValid() {
+            print("[CallService] Using cached TURN credentials for outgoing call")
         } else {
-            print("Got TURN credentials")
+            print("[CallService] Fetching fresh TURN credentials...")
+            turnCredentials = nil  // Clear expired credentials
+            try await fetchTurnCredentials()
+
+            // Wait for credentials with retry
+            var attempts = 0
+            while turnCredentials == nil && attempts < 50 {  // 5 seconds max
+                try await Task.sleep(nanoseconds: 100_000_000)  // 100ms
+                attempts += 1
+            }
+
+            guard turnCredentials != nil else {
+                print("[CallService] ERROR: Failed to get TURN credentials after 5 seconds")
+                throw NetworkError.connectionFailed
+            }
+            print("[CallService] TURN credentials received after \(attempts * 100)ms")
         }
 
         // Create peer connection and generate offer
@@ -1128,6 +1170,8 @@ final class CallService: NSObject, ObservableObject {
         guard let frame = try? JSONDecoder().decode(WsFrame<TurnCredentialsPayload>.self, from: data) else { return }
         DispatchQueue.main.async {
             self.turnCredentials = frame.payload
+            self.turnCredentialsReceivedAt = Date()
+            print("[CallService] TURN credentials received, TTL=\(frame.payload.ttl)s")
         }
     }
 

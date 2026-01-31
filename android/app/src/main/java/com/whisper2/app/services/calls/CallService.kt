@@ -151,6 +151,25 @@ class CallService @Inject constructor(
         cleanupStaleState()
         setupWebRTC()
         setupMessageHandler()
+        setupAuthStateMonitor()
+    }
+
+    /**
+     * Monitor auth state and pre-fetch TURN credentials when authenticated.
+     * This ensures credentials are ready before any call.
+     */
+    private fun setupAuthStateMonitor() {
+        scope.launch {
+            authService.get().authState.collect { state ->
+                if (state is AuthState.Authenticated) {
+                    // Pre-fetch TURN credentials on login
+                    if (!areTurnCredentialsValid()) {
+                        Logger.i("[CallService] User authenticated - pre-fetching TURN credentials")
+                        fetchTurnCredentials()
+                    }
+                }
+            }
+        }
     }
 
     /**
