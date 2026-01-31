@@ -131,7 +131,9 @@ struct ChatsListView: View {
     private func performDelete() {
         if let item = itemToDelete {
             if item.isGroup {
-                GroupService.shared.leaveGroup(groupId: item.id) { _ in }
+                Task {
+                    try? await GroupService.shared.leaveGroup(item.id)
+                }
             } else {
                 if let conv = viewModel.conversations.first(where: { $0.peerId == item.id }) {
                     viewModel.deleteConversation(conv)
