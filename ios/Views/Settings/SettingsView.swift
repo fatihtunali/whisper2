@@ -62,8 +62,12 @@ struct SettingsView: View {
             .alert("Wipe All Data", isPresented: $showWipeDataAlert) {
                 Button("Cancel", role: .cancel) {}
                 Button("Wipe Everything", role: .destructive) {
-                    viewModel.wipeAllData()
-                    coordinator.logout()
+                    Task {
+                        _ = await viewModel.wipeAllData()
+                        await MainActor.run {
+                            coordinator.logout()
+                        }
+                    }
                 }
             } message: {
                 Text("This will permanently delete ALL local data including messages, contacts, call history, files, and your account keys. This action cannot be undone.")
