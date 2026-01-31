@@ -74,20 +74,5 @@ object ServiceModule {
     ): ContactsService = ContactsService(contactDao, wsClient, secureStorage, whisperApi)
 
     // GroupService is provided via @Inject constructor
-
-    @Provides
-    @Singleton
-    fun provideMessageHandler(
-        @ApplicationContext context: Context,
-        wsClient: WsClientImpl,
-        messageDao: MessageDao,
-        conversationDao: ConversationDao,
-        contactDao: ContactDao,
-        cryptoService: CryptoService,
-        secureStorage: SecureStorage,
-        attachmentService: AttachmentService,
-        gson: Gson
-    ): MessageHandler = MessageHandler(
-        context, wsClient, messageDao, conversationDao, contactDao, cryptoService, secureStorage, attachmentService, gson
-    )
+    // MessageHandler is provided via @Inject constructor
 }

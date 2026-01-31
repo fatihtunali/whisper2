@@ -116,8 +116,10 @@ data class FetchPendingPayload(
     val limit: Int? = null
 )
 
+// Pending messages can contain different types (message_received, group_event, etc.)
+// Parse as JsonElement to check the type field
 data class PendingMessagesPayload(
-    val messages: List<MessageReceivedPayload>,
+    val messages: List<com.google.gson.JsonElement>,
     val nextCursor: String? = null
 )
 

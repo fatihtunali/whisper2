@@ -431,6 +431,14 @@ class GroupService @Inject constructor(
         }
     }
 
+    /**
+     * Handle a group event from pending queue.
+     * Called by MessageHandler when it finds a group_event in pending messages.
+     */
+    suspend fun handlePendingGroupEvent(payload: JsonElement) {
+        handleGroupEvent(payload)
+    }
+
     private suspend fun handleGroupInvite(payload: JsonElement) {
         try {
             val invite = gson.fromJson(payload, GroupInvitePayload::class.java)

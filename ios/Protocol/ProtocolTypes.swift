@@ -288,8 +288,41 @@ struct FetchPendingPayload: Codable {
     }
 }
 
+/// Pending item wrapper that can represent different types (message_received, group_event, etc.)
+struct PendingItem: Codable {
+    let type: String?
+
+    // Keep raw data for re-decoding as specific type
+    private let _rawData: Data?
+
+    enum CodingKeys: String, CodingKey {
+        case type
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.type = try container.decodeIfPresent(String.self, forKey: .type)
+
+        // Store raw JSON for later decoding
+        if let singleContainer = try? decoder.singleValueContainer(),
+           let dict = try? singleContainer.decode([String: AnyCodable].self) {
+            self._rawData = try? JSONEncoder().encode(dict)
+        } else {
+            self._rawData = nil
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(type, forKey: .type)
+    }
+
+    /// Get raw data for re-encoding as a different type
+    var rawData: Data? { _rawData }
+}
+
 struct PendingMessagesPayload: Codable {
-    let messages: [MessageReceivedPayload]
+    let messages: [AnyCodable]
     let nextCursor: String?
 }
 

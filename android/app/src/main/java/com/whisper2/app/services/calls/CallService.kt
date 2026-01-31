@@ -214,6 +214,7 @@ class CallService @Inject constructor(
         remoteAudioTrackReceived = false
         remoteVideoTrackReceived = false
         remoteVideoSinkAdded = false
+        callEndedByRemote = false
 
         // Stop any lingering foreground service
         try {
@@ -676,7 +677,17 @@ class CallService @Inject constructor(
 
     // MARK: - End Call
 
+    // Flag to track if call was ended by remote party (prevents duplicate call_end)
+    private var callEndedByRemote = false
+
     suspend fun endCall(reason: CallEndReason = CallEndReason.ENDED) {
+        // Prevent sending duplicate call_end if already ended by remote
+        if (callEndedByRemote) {
+            Logger.i("[CallService] Call already ended by remote, skipping endCall() to prevent duplicate")
+            callEndedByRemote = false  // Reset for next call
+            return
+        }
+
         val call = _activeCall.value ?: pendingIncomingCall?.let {
             ActiveCall(it.callId, it.from, null, it.isVideo, false)
         } ?: return
@@ -1579,6 +1590,10 @@ class CallService @Inject constructor(
 
             Logger.d("Received call_end: callId=${payload.callId}, from=${payload.from}, reason=${payload.reason}")
 
+            // Mark that call was ended by remote to prevent duplicate call_end messages
+            // This flag will be checked if endCall() is called (e.g., from UI cleanup or notification)
+            callEndedByRemote = true
+
             scope.launch {
                 _activeCall.value?.let { call ->
                     recordCallToHistory(call, reason)
@@ -1877,6 +1892,7 @@ class CallService @Inject constructor(
         remoteAudioTrackReceived = false
         remoteVideoTrackReceived = false
         remoteVideoSinkAdded = false
+        callEndedByRemote = false  // Reset for next call
 
         // Reset audio
         audioManager.mode = AudioManager.MODE_NORMAL

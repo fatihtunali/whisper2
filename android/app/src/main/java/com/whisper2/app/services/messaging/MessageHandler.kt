@@ -21,7 +21,9 @@ import com.whisper2.app.data.local.db.entities.MessageEntity
 import com.whisper2.app.data.local.prefs.SecureStorage
 import com.whisper2.app.data.network.ws.*
 import com.whisper2.app.services.attachments.AttachmentService
+import com.whisper2.app.services.groups.GroupService
 import com.whisper2.app.ui.MainActivity
+import dagger.Lazy
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -44,6 +46,7 @@ class MessageHandler @Inject constructor(
     private val cryptoService: CryptoService,
     private val secureStorage: SecureStorage,
     private val attachmentService: AttachmentService,
+    private val groupService: Lazy<GroupService>,  // Lazy to avoid circular dependency
     private val gson: Gson
 ) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -383,14 +386,33 @@ class MessageHandler @Inject constructor(
 
     /**
      * Handle pending messages fetched from server (offline messages).
+     * Pending queue can contain different types: message_received, group_event, etc.
+     * Route each item to the appropriate handler based on its type.
      */
     private suspend fun handlePendingMessages(payload: JsonElement) {
         try {
             val data = gson.fromJson(payload, PendingMessagesPayload::class.java)
-            Logger.d("[MessageHandler] Received ${data.messages.size} pending messages")
+            Logger.d("[MessageHandler] Received ${data.messages.size} pending items")
 
-            data.messages.forEach { msg ->
-                handleMessageReceived(gson.toJsonTree(msg))
+            data.messages.forEach { item ->
+                try {
+                    // Check the type field to route to the correct handler
+                    val type = item.asJsonObject?.get("type")?.asString
+
+                    when (type) {
+                        Constants.MsgType.GROUP_EVENT, "group_event" -> {
+                            // Route group events to GroupService
+                            Logger.d("[MessageHandler] Routing pending group_event to GroupService")
+                            groupService.get().handlePendingGroupEvent(item)
+                        }
+                        else -> {
+                            // Treat as regular message (message_received is the default)
+                            handleMessageReceived(item)
+                        }
+                    }
+                } catch (e: Exception) {
+                    Logger.e("[MessageHandler] Failed to process pending item", e)
+                }
             }
         } catch (e: Exception) {
             Logger.e("[MessageHandler] Failed to handle pending messages", e)

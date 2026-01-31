@@ -794,10 +794,30 @@ final class MessagingService: ObservableObject {
     
     private func handlePendingMessages(_ data: Data) {
         guard let frame = try? JSONDecoder().decode(WsFrame<PendingMessagesPayload>.self, from: data) else { return }
-        
-        for msg in frame.payload.messages {
-            if let encodedData = try? JSONEncoder().encode(WsFrame(type: Constants.MessageType.messageReceived, payload: msg)) {
-                handleMessageReceived(encodedData)
+
+        print("[MessagingService] Received \(frame.payload.messages.count) pending items")
+
+        for item in frame.payload.messages {
+            guard let dict = item.value as? [String: Any] else { continue }
+
+            // Check the type field to route to the correct handler
+            let type = dict["type"] as? String
+
+            if type == Constants.MessageType.groupEvent || type == "group_event" {
+                // Route group events to GroupService
+                print("[MessagingService] Routing pending group_event to GroupService")
+                GroupService.shared.handlePendingGroupEvent(dict)
+            } else {
+                // Treat as regular message (message_received is the default)
+                do {
+                    let msgData = try JSONSerialization.data(withJSONObject: dict)
+                    let msgPayload = try JSONDecoder().decode(MessageReceivedPayload.self, from: msgData)
+                    if let encodedData = try? JSONEncoder().encode(WsFrame(type: Constants.MessageType.messageReceived, payload: msgPayload)) {
+                        handleMessageReceived(encodedData)
+                    }
+                } catch {
+                    print("[MessagingService] Failed to decode pending message: \(error)")
+                }
             }
         }
     }

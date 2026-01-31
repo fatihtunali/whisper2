@@ -332,6 +332,18 @@ final class GroupService: ObservableObject {
         }
     }
 
+    /// Handle a group event from pending queue.
+    /// Called by MessagingService when it finds a group_event in pending messages.
+    func handlePendingGroupEvent(_ rawPayload: [String: Any]) {
+        do {
+            let jsonData = try JSONSerialization.data(withJSONObject: rawPayload)
+            let payload = try JSONDecoder().decode(GroupEventPayload.self, from: jsonData)
+            processGroupEventPayload(payload)
+        } catch {
+            print("[GroupService] Failed to decode pending group event: \(error)")
+        }
+    }
+
     private func handleGroupEvent(_ data: Data) {
         guard let frame = try? JSONDecoder().decode(WsFrame<GroupEventPayload>.self, from: data) else {
             print("[GroupService] Failed to decode group event")
@@ -339,6 +351,10 @@ final class GroupService: ObservableObject {
         }
 
         let payload = frame.payload
+        processGroupEventPayload(payload)
+    }
+
+    private func processGroupEventPayload(_ payload: GroupEventPayload) {
         let serverGroup = payload.group
         let eventType = GroupEventType(rawValue: payload.event)
 
