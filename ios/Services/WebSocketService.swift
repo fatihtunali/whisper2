@@ -79,6 +79,12 @@ final class WebSocketService: NSObject, ObservableObject {
     // MARK: - Connection Management
 
     func connect() {
+        // Ensure we're on main thread for @Published property access
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { self.connect() }
+            return
+        }
+
         // Only connect if completely disconnected
         guard connectionState == .disconnected else {
             print("[WebSocket] Already connecting or connected, state: \(connectionState)")
@@ -91,9 +97,7 @@ final class WebSocketService: NSObject, ObservableObject {
         }
 
         print("[WebSocket] Connecting to \(Constants.wsURL)...")
-        DispatchQueue.main.async {
-            self.connectionState = .connecting
-        }
+        connectionState = .connecting
 
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 60
@@ -105,9 +109,7 @@ final class WebSocketService: NSObject, ObservableObject {
 
         guard let url = URL(string: Constants.wsURL) else {
             print("[WebSocket] Invalid URL: \(Constants.wsURL)")
-            DispatchQueue.main.async {
-                self.connectionState = .disconnected
-            }
+            connectionState = .disconnected
             return
         }
 
@@ -117,6 +119,12 @@ final class WebSocketService: NSObject, ObservableObject {
     }
 
     func disconnect() {
+        // Ensure we're on main thread for @Published property access
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { self.disconnect() }
+            return
+        }
+
         print("[WebSocket] Disconnecting...")
         stopPingTimer()
         stopPongTimeoutTimer()
@@ -124,14 +132,18 @@ final class WebSocketService: NSObject, ObservableObject {
         webSocket = nil
         session?.invalidateAndCancel()
         session = nil
-        DispatchQueue.main.async {
-            self.connectionState = .disconnected
-        }
+        connectionState = .disconnected
         reconnectAttempts = 0
     }
 
     /// Check if connected and trigger reconnect if needed (called by AuthService only)
     func ensureConnected() {
+        // Ensure we're on main thread for @Published property access
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { self.ensureConnected() }
+            return
+        }
+
         if connectionState == .disconnected {
             reconnectAttempts = 0
             connect()
@@ -140,6 +152,12 @@ final class WebSocketService: NSObject, ObservableObject {
 
     /// Called when app enters foreground - force reconnect if disconnected
     func handleAppDidBecomeActive() {
+        // Ensure we're on main thread for @Published property access
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { self.handleAppDidBecomeActive() }
+            return
+        }
+
         print("[WebSocket] App became active, checking connection...")
 
         // Reset reconnect attempts when coming to foreground
